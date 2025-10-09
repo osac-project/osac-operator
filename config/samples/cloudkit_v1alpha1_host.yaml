@@ -1,0 +1,9 @@
+apiVersion: cloudkit.openshift.io/v1alpha1
+kind: Host
+metadata:
+  labels:
+    app.kubernetes.io/name: cloudkit-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: host-sample
+spec:
+  powerState: On

@@ -23,6 +23,7 @@ rules:
   - clusterorders
   - computeinstances
   - hostpools
+  - hosts
   - tenants
   verbs:
   - create
@@ -38,6 +39,7 @@ rules:
   - clusterorders/finalizers
   - computeinstances/finalizers
   - hostpools/finalizers
+  - hosts/finalizers
   - tenants/finalizers
   verbs:
   - update
@@ -47,6 +49,7 @@ rules:
   - clusterorders/status
   - computeinstances/status
   - hostpools/status
+  - hosts/status
   - tenants/status
   verbs:
   - get
