@@ -34,6 +34,19 @@ type ComputeInstanceSpec struct {
 	// selected compute instance template.
 	// +kubebuilder:validation:Optional
 	TemplateParameters string `json:"templateParameters,omitempty"`
+
+	// NextRebootTime schedules a VM reboot at the specified time (RFC3339 UTC).
+	//
+	// The controller will execute the reboot if it reconciles within 5 minutes
+	// of the scheduled time (grace period). After 5 minutes, the reboot is
+	// considered missed and will be marked as failed with a RebootFailed condition
+	// (reason: RebootWindowMissed).
+	//
+	// This is a single-shot operation - the field is cleared after reboot completes or fails.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	NextRebootTime *metav1.Time `json:"nextRebootTime,omitempty"`
 }
 
 // ComputeInstancePhaseType is a valid value for .status.phase
@@ -68,6 +81,12 @@ const (
 
 	// ComputeInstanceConditionDeleting means the compute instance is being deleted
 	ComputeInstanceConditionDeleting ComputeInstanceConditionType = "Deleting"
+
+	// ComputeInstanceConditionRebootScheduled indicates a reboot is scheduled
+	ComputeInstanceConditionRebootScheduled ComputeInstanceConditionType = "RebootScheduled"
+
+	// ComputeInstanceConditionRebootFailed indicates a scheduled reboot has failed
+	ComputeInstanceConditionRebootFailed ComputeInstanceConditionType = "RebootFailed"
 )
 
 // VirtualMachineReferenceType contains a reference to the KubeVirt VirtualMachine CR created by this ComputeInstance
@@ -114,6 +133,15 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	ReconciledConfigVersion string `json:"reconciledConfigVersion,omitempty"`
+
+	// LastRebootTime records the timestamp of the last successful reboot.
+	//
+	// This field is set by the system when a scheduled reboot completes successfully.
+	// It will be empty if no reboot has been performed yet.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	LastRebootTime *metav1.Time `json:"lastRebootTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
