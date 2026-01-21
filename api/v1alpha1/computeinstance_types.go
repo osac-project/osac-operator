@@ -35,18 +35,22 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Optional
 	TemplateParameters string `json:"templateParameters,omitempty"`
 
-	// NextRebootTime schedules a VM reboot at the specified time (RFC3339 UTC).
+	// RestartRequestedAt is a timestamp signal to request a VM restart.
 	//
-	// The controller will execute the reboot if it reconciles within 5 minutes
-	// of the scheduled time (grace period). After 5 minutes, the reboot is
-	// considered missed and will be marked as failed with a RebootFailed condition
-	// (reason: RebootWindowMissed).
+	// Set this field to the current time (usually NOW) to request a restart.
+	// The controller will execute the restart if this timestamp is greater than
+	// status.lastRestartedAt.
 	//
-	// This is a single-shot operation - the field is cleared after reboot completes or fails.
+	// This is a declarative signal mechanism - the timestamp is a monotonically
+	// increasing value to detect new restart requests, not a scheduled time.
+	// Typically set to the current time for immediate restarts.
+	//
+	// External schedulers can set this field on a schedule to implement
+	// scheduled maintenance windows if needed.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
-	NextRebootTime *metav1.Time `json:"nextRebootTime,omitempty"`
+	RestartRequestedAt *metav1.Time `json:"restartRequestedAt,omitempty"`
 }
 
 // ComputeInstancePhaseType is a valid value for .status.phase
@@ -82,11 +86,11 @@ const (
 	// ComputeInstanceConditionDeleting means the compute instance is being deleted
 	ComputeInstanceConditionDeleting ComputeInstanceConditionType = "Deleting"
 
-	// ComputeInstanceConditionRebootScheduled indicates a reboot is scheduled
-	ComputeInstanceConditionRebootScheduled ComputeInstanceConditionType = "RebootScheduled"
+	// ComputeInstanceConditionRestartInProgress indicates a restart is in progress
+	ComputeInstanceConditionRestartInProgress ComputeInstanceConditionType = "RestartInProgress"
 
-	// ComputeInstanceConditionRebootFailed indicates a scheduled reboot has failed
-	ComputeInstanceConditionRebootFailed ComputeInstanceConditionType = "RebootFailed"
+	// ComputeInstanceConditionRestartFailed indicates a restart request has failed
+	ComputeInstanceConditionRestartFailed ComputeInstanceConditionType = "RestartFailed"
 )
 
 // VirtualMachineReferenceType contains a reference to the KubeVirt VirtualMachine CR created by this ComputeInstance
@@ -134,14 +138,14 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Type=string
 	ReconciledConfigVersion string `json:"reconciledConfigVersion,omitempty"`
 
-	// LastRebootTime records the timestamp of the last successful reboot.
+	// LastRestartedAt records when the last restart was initiated by the controller.
 	//
-	// This field is set by the system when a scheduled reboot completes successfully.
-	// It will be empty if no reboot has been performed yet.
+	// This is set to spec.restartRequestedAt when the controller processes a restart request.
+	// It will be empty if no restart has been performed yet.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
-	LastRebootTime *metav1.Time `json:"lastRebootTime,omitempty"`
+	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

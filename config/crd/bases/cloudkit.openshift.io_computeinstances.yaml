@@ -48,6 +48,22 @@ spec:
           spec:
             description: spec defines the desired state of ComputeInstance
             properties:
+              restartRequestedAt:
+                description: |-
+                  RestartRequestedAt is a timestamp signal to request a VM restart.
+
+                  Set this field to the current time (usually NOW) to request a restart.
+                  The controller will execute the restart if this timestamp is greater than
+                  status.lastRestartedAt.
+
+                  This is a declarative signal mechanism - the timestamp is a monotonically
+                  increasing value to detect new restart requests, not a scheduled time.
+                  Typically set to the current time for immediate restarts.
+
+                  External schedulers can set this field on a schedule to implement
+                  scheduled maintenance windows if needed.
+                format: date-time
+                type: string
               templateID:
                 description: TemplateID is the unique identifier of the compute instance
                   template to use when creating this compute instance
@@ -125,6 +141,14 @@ spec:
               desiredConfigVersion:
                 description: DesiredConfigVersion is the version (hash) of the desired
                   configuration of the ComputeInstance
+                type: string
+              lastRestartedAt:
+                description: |-
+                  LastRestartedAt records when the last restart was initiated by the controller.
+
+                  This is set to spec.restartRequestedAt when the controller processes a restart request.
+                  It will be empty if no restart has been performed yet.
+                format: date-time
                 type: string
               phase:
                 description: Phase provides a single-value overview of the state of

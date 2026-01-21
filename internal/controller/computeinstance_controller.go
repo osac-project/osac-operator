@@ -245,6 +245,11 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 		}
 	}
 
+	// Handle restart request
+	if result, err := r.handleRestartRequest(ctx, instance); err != nil || result.Requeue || result.RequeueAfter > 0 {
+		return result, err
+	}
+
 	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}
