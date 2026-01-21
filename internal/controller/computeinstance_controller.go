@@ -246,7 +246,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	}
 
 	// Handle restart request
-	if result, err := r.handleRestartRequest(ctx, instance); err != nil || result.Requeue || result.RequeueAfter > 0 {
+	if result, err := r.handleRestartRequest(ctx, instance); err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
 
