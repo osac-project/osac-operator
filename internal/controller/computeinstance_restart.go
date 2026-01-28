@@ -170,12 +170,8 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 // clearRestartConditions removes restart-related conditions when no restart is in progress.
 // Returns true if any conditions were removed.
 func (r *ComputeInstanceReconciler) clearRestartConditions(ctx context.Context, ci *v1alpha1.ComputeInstance) bool {
-	changed := false
-
-	if meta.RemoveStatusCondition(&ci.Status.Conditions,
-		string(v1alpha1.ComputeInstanceConditionRestartInProgress)) {
-		changed = true
-	}
+	changed := meta.RemoveStatusCondition(&ci.Status.Conditions,
+		string(v1alpha1.ComputeInstanceConditionRestartInProgress))
 
 	if meta.RemoveStatusCondition(&ci.Status.Conditions,
 		string(v1alpha1.ComputeInstanceConditionRestartFailed)) {
