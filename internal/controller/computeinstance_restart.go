@@ -47,13 +47,26 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 
 	// Check if restart is requested
 	if ci.Spec.RestartRequestedAt == nil {
+		// No restart requested, clear any restart conditions
+		if r.clearRestartConditions(ctx, ci) {
+			if err := r.Status().Update(ctx, ci); err != nil {
+				log.Error(err, "Failed to update status")
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
 	// Check if this is a new restart request
 	if ci.Status.LastRestartedAt != nil &&
 		!ci.Spec.RestartRequestedAt.After(ci.Status.LastRestartedAt.Time) {
-		// Already processed this restart request
+		// Already processed this restart request, clear in-progress condition
+		if r.clearRestartConditions(ctx, ci) {
+			if err := r.Status().Update(ctx, ci); err != nil {
+				log.Error(err, "Failed to update status")
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -152,4 +165,22 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 	log.Info("Restart initiated successfully",
 		"restartRequestedAt", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339))
 	return ctrl.Result{}, nil
+}
+
+// clearRestartConditions removes restart-related conditions when no restart is in progress.
+// Returns true if any conditions were removed.
+func (r *ComputeInstanceReconciler) clearRestartConditions(ctx context.Context, ci *v1alpha1.ComputeInstance) bool {
+	changed := false
+
+	if meta.RemoveStatusCondition(&ci.Status.Conditions,
+		string(v1alpha1.ComputeInstanceConditionRestartInProgress)) {
+		changed = true
+	}
+
+	if meta.RemoveStatusCondition(&ci.Status.Conditions,
+		string(v1alpha1.ComputeInstanceConditionRestartFailed)) {
+		changed = true
+	}
+
+	return changed
 }
