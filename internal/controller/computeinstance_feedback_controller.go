@@ -156,6 +156,7 @@ func (t *computeInstanceFeedbackReconcilerTask) handleUpdate(ctx context.Context
 	t.syncConditions(ctx)
 	t.syncPhase(ctx)
 	t.syncIPAddress()
+	t.syncLastRestartedAt()
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncConditions(ctx context.Context) {
@@ -278,5 +279,11 @@ func (t *computeInstanceFeedbackReconcilerTask) syncIPAddress() {
 	ipAddress, ok := t.object.Annotations[cloudkitVirualMachineFloatingIPAddressAnnotation]
 	if ok && ipAddress != "" {
 		t.ci.GetStatus().SetIpAddress(ipAddress)
+	}
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncLastRestartedAt() {
+	if t.object.Status.LastRestartedAt != nil {
+		t.ci.GetStatus().SetLastRestartedAt(timestamppb.New(t.object.Status.LastRestartedAt.Time))
 	}
 }

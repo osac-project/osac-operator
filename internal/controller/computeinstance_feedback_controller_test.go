@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -371,6 +372,47 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 			// Update count should still be 1, not 2, because only the timestamp changed, not the status
 			Expect(mockClient.updateCount).To(Equal(1))
+		})
+
+		It("should sync lastRestartedAt when set in K8s CR", func() {
+			// Get the ComputeInstance and update its status with lastRestartedAt
+			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+
+			// Use time without nanoseconds to match protobuf precision
+			restartTime := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+			computeInstance.Status.LastRestartedAt = &restartTime
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate).NotTo(BeNil())
+
+			// Verify lastRestartedAt was synced
+			Expect(mockClient.lastUpdate.GetStatus().HasLastRestartedAt()).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetLastRestartedAt().AsTime()).To(Equal(restartTime.Time))
+		})
+
+		It("should not set lastRestartedAt when nil in K8s CR", func() {
+			// Get the ComputeInstance - lastRestartedAt should be nil by default
+			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			Expect(computeInstance.Status.LastRestartedAt).To(BeNil())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate).NotTo(BeNil())
+
+			// Verify lastRestartedAt was NOT set (still using default from mock)
+			Expect(mockClient.lastUpdate.GetStatus().HasLastRestartedAt()).To(BeFalse())
 		})
 	})
 })
