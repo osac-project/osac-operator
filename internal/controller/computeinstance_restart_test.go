@@ -22,7 +22,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -200,6 +202,247 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			// Cleanup
 			err = k8sClient.Delete(ctx, ci)
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should set RestartInProgress but NOT set lastRestartedAt", func() {
+			now := metav1.NewTime(time.Now().UTC())
+			ci := &cloudkitv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ci-restart-initiated",
+					Namespace:  "default",
+					Generation: 1,
+				},
+				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					TemplateID:         "template_1",
+					RestartRequestedAt: &now,
+				},
+			}
+
+			// Create the CI resource
+			err := k8sClient.Create(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, ci)
+			})
+
+			// Set status separately (status is a subresource)
+			ci.Status.VirtualMachineReference = &cloudkitv1alpha1.VirtualMachineReferenceType{
+				KubeVirtVirtualMachineName: "test-vmi",
+				Namespace:                  "default",
+			}
+			err = k8sClient.Status().Update(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Create a VMI
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vmi",
+					Namespace: "default",
+				},
+			}
+			err = k8sClient.Create(ctx, vmi)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			// Perform restart
+			result, err := reconciler.performRestart(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			// Verify lastRestartedAt is NOT set
+			Expect(ci.Status.LastRestartedAt).To(BeNil())
+
+			// Verify RestartInProgress condition is set
+			inProgressCondition := findCondition(ci.Status.Conditions,
+				string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress))
+			Expect(inProgressCondition).NotTo(BeNil())
+			Expect(inProgressCondition.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
+
+	Context("checkRestartCompletion", func() {
+		It("should not complete restart when VMI not found", func() {
+			now := metav1.NewTime(time.Now().UTC())
+			ci := &cloudkitv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ci-vmi-not-found",
+					Namespace:  "default",
+					Generation: 1,
+				},
+				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					TemplateID:         "template_1",
+					RestartRequestedAt: &now,
+				},
+				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &cloudkitv1alpha1.VirtualMachineReferenceType{
+						KubeVirtVirtualMachineName: "non-existent-vmi",
+						Namespace:                  "default",
+					},
+				},
+			}
+
+			err := reconciler.checkRestartCompletion(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+			// lastRestartedAt should still be nil
+			Expect(ci.Status.LastRestartedAt).To(BeNil())
+		})
+
+		It("should not complete restart when VMI created before restart request", func() {
+			now := metav1.NewTime(time.Now().UTC())
+			ci := &cloudkitv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ci-old-vmi",
+					Namespace:  "default",
+					Generation: 1,
+				},
+				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					TemplateID:         "template_1",
+					RestartRequestedAt: &now,
+				},
+				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &cloudkitv1alpha1.VirtualMachineReferenceType{
+						KubeVirtVirtualMachineName: "old-vmi",
+						Namespace:                  "default",
+					},
+				},
+			}
+
+			// Set RestartInProgress condition
+			meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
+				Type:   string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress),
+				Status: metav1.ConditionTrue,
+				Reason: ReasonRestartInProgress,
+			})
+
+			// Create VMI with timestamp before restart request
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "old-vmi",
+					Namespace:         "default",
+					CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
+				},
+			}
+			err := k8sClient.Create(ctx, vmi)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			err = reconciler.checkRestartCompletion(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			// lastRestartedAt should still be nil
+			Expect(ci.Status.LastRestartedAt).To(BeNil())
+			// RestartInProgress should still be true
+			Expect(meta.IsStatusConditionTrue(ci.Status.Conditions,
+				string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress))).To(BeTrue())
+		})
+
+		It("should complete restart when VMI created after restart request", func() {
+			// Set restart request time in the past so any VMI created "now" will be after it
+			restartRequestedAt := metav1.NewTime(time.Now().UTC().Add(-5 * time.Second))
+			ci := &cloudkitv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ci-new-vmi",
+					Namespace:  "default",
+					Generation: 1,
+				},
+				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					TemplateID:         "template_1",
+					RestartRequestedAt: &restartRequestedAt,
+				},
+				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &cloudkitv1alpha1.VirtualMachineReferenceType{
+						KubeVirtVirtualMachineName: "new-vmi",
+						Namespace:                  "default",
+					},
+				},
+			}
+
+			// Set RestartInProgress condition
+			meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
+				Type:   string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress),
+				Status: metav1.ConditionTrue,
+				Reason: ReasonRestartInProgress,
+			})
+
+			// Create VMI - its creationTimestamp will be "now" which is after restartRequestedAt
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "new-vmi",
+					Namespace: "default",
+				},
+			}
+			err := k8sClient.Create(ctx, vmi)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			err = reconciler.checkRestartCompletion(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			// lastRestartedAt should now be set
+			Expect(ci.Status.LastRestartedAt).NotTo(BeNil())
+			Expect(ci.Status.LastRestartedAt.Time).To(Equal(restartRequestedAt.Time))
+			// RestartInProgress should be cleared
+			Expect(meta.FindStatusCondition(ci.Status.Conditions,
+				string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress))).To(BeNil())
+		})
+	})
+
+	Context("handleRestartRequest with restart in progress", func() {
+		It("should check restart completion when RestartInProgress is true", func() {
+			// Set restart request time in the past so any VMI created "now" will be after it
+			restartRequestedAt := metav1.NewTime(time.Now().UTC().Add(-5 * time.Second))
+			ci := &cloudkitv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ci-in-progress",
+					Namespace:  "default",
+					Generation: 1,
+				},
+				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					TemplateID:         "template_1",
+					RestartRequestedAt: &restartRequestedAt,
+				},
+				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &cloudkitv1alpha1.VirtualMachineReferenceType{
+						KubeVirtVirtualMachineName: "vmi-in-progress",
+						Namespace:                  "default",
+					},
+				},
+			}
+
+			// Set RestartInProgress condition
+			meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
+				Type:   string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress),
+				Status: metav1.ConditionTrue,
+				Reason: ReasonRestartInProgress,
+			})
+
+			// Create new VMI - its creationTimestamp will be "now" which is after restartRequestedAt
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "vmi-in-progress",
+					Namespace: "default",
+				},
+			}
+			err := k8sClient.Create(ctx, vmi)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			// Call handleRestartRequest
+			result, err := reconciler.handleRestartRequest(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			// Should have completed the restart
+			Expect(ci.Status.LastRestartedAt).NotTo(BeNil())
+			Expect(ci.Status.LastRestartedAt.Time).To(Equal(restartRequestedAt.Time))
 		})
 	})
 })

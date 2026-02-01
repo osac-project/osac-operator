@@ -53,12 +53,20 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 		return ctrl.Result{}, nil
 	}
 
+	// Check if restart is in progress
+	if meta.IsStatusConditionTrue(ci.Status.Conditions, string(v1alpha1.ComputeInstanceConditionRestartInProgress)) {
+		// Check if restart has completed
+		if err := r.checkRestartCompletion(ctx, ci); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Status will be updated by the main Reconcile loop
+		return ctrl.Result{}, nil
+	}
+
 	// Check if this is a new restart request
 	if ci.Status.LastRestartedAt != nil &&
 		!ci.Spec.RestartRequestedAt.After(ci.Status.LastRestartedAt.Time) {
-		// Already processed this restart request, clear in-progress condition
-		r.clearRestartConditions(ctx, ci)
-		// Status will be updated by the main Reconcile loop
+		// Already processed this restart request
 		return ctrl.Result{}, nil
 	}
 
@@ -124,7 +132,8 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 		}
 	}
 
-	// Update status: mark restart as in progress and record when initiated
+	// Update status: mark restart as in progress
+	// Note: We do NOT set LastRestartedAt here - it will be set when the restart completes
 	meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.ComputeInstanceConditionRestartInProgress),
 		Status:             metav1.ConditionTrue,
@@ -132,9 +141,6 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 		Message:            fmt.Sprintf("Restart initiated at %s", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339)),
 		ObservedGeneration: ci.Generation,
 	})
-
-	// Record when restart was initiated
-	ci.Status.LastRestartedAt = ci.Spec.RestartRequestedAt.DeepCopy()
 
 	// Clear any previous failure conditions
 	meta.RemoveStatusCondition(&ci.Status.Conditions,
@@ -144,6 +150,45 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 	log.Info("Restart initiated successfully",
 		"restartRequestedAt", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339))
 	return ctrl.Result{}, nil
+}
+
+// checkRestartCompletion checks if a restart in progress has completed.
+// A restart is considered complete when the VMI has been recreated (creation timestamp after restart request).
+func (r *ComputeInstanceReconciler) checkRestartCompletion(ctx context.Context, ci *v1alpha1.ComputeInstance) error {
+	log := log.FromContext(ctx)
+
+	// Check if VirtualMachineReference exists
+	if ci.Status.VirtualMachineReference == nil {
+		return nil
+	}
+
+	// Get VirtualMachineInstance
+	vmi := &kubevirtv1.VirtualMachineInstance{}
+	vmiName := types.NamespacedName{
+		Name:      ci.Status.VirtualMachineReference.KubeVirtVirtualMachineName,
+		Namespace: ci.Status.VirtualMachineReference.Namespace,
+	}
+
+	if err := r.Get(ctx, vmiName, vmi); err != nil {
+		if apierrors.IsNotFound(err) {
+			// VMI not found yet, restart still in progress
+			return nil
+		}
+		return err
+	}
+
+	// Check if VMI was created after the restart was requested
+	if vmi.CreationTimestamp.After(ci.Spec.RestartRequestedAt.Time) {
+		// Restart complete! Update lastRestartedAt and clear in-progress condition
+		log.Info("Restart completed successfully",
+			"vmiCreated", vmi.CreationTimestamp.Time.Format(time.RFC3339),
+			"restartRequested", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339))
+
+		ci.Status.LastRestartedAt = ci.Spec.RestartRequestedAt.DeepCopy()
+		r.clearRestartConditions(ctx, ci)
+	}
+
+	return nil
 }
 
 // clearRestartConditions removes restart-related conditions when no restart is in progress.
