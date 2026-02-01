@@ -440,7 +440,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Verify RestartInProgress condition was synced
 			found := false
 			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
-				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_IN_PROGRESS {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS {
 					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
 					Expect(cond.GetMessage()).To(Equal(restartInProgressMessage))
 					found = true
@@ -475,7 +475,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Verify RestartFailed condition was synced
 			found := false
 			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
-				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_FAILED {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED {
 					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
 					Expect(cond.GetMessage()).To(Equal(restartFailedMessage))
 					found = true

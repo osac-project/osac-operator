@@ -206,22 +206,22 @@ func (t *computeInstanceFeedbackReconcilerTask) syncReady(ctx context.Context) {
 	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY, crCondition)
 }
 
-// syncRestartInProgress synchronizes the REBOOT_IN_PROGRESS VM condition from the RestartInProgress CR condition.
+// syncRestartInProgress synchronizes the RESTART_IN_PROGRESS VM condition from the RestartInProgress CR condition.
 func (t *computeInstanceFeedbackReconcilerTask) syncRestartInProgress(ctx context.Context) {
 	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartInProgress)
 	if crCondition == nil {
 		return
 	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_IN_PROGRESS, crCondition)
+	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS, crCondition)
 }
 
-// syncRestartFailed synchronizes the REBOOT_FAILED VM condition from the RestartFailed CR condition.
+// syncRestartFailed synchronizes the RESTART_FAILED VM condition from the RestartFailed CR condition.
 func (t *computeInstanceFeedbackReconcilerTask) syncRestartFailed(ctx context.Context) {
 	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartFailed)
 	if crCondition == nil {
 		return
 	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_FAILED, crCondition)
+	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED, crCondition)
 }
 
 // syncVMConditionFromCR synchronizes a VM condition from a CR condition.
