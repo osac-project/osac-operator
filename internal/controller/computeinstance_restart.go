@@ -48,12 +48,8 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 	// Check if restart is requested
 	if ci.Spec.RestartRequestedAt == nil {
 		// No restart requested, clear any restart conditions
-		if r.clearRestartConditions(ctx, ci) {
-			if err := r.Status().Update(ctx, ci); err != nil {
-				log.Error(err, "Failed to update status")
-				return ctrl.Result{}, err
-			}
-		}
+		r.clearRestartConditions(ctx, ci)
+		// Status will be updated by the main Reconcile loop
 		return ctrl.Result{}, nil
 	}
 
@@ -61,12 +57,8 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 	if ci.Status.LastRestartedAt != nil &&
 		!ci.Spec.RestartRequestedAt.After(ci.Status.LastRestartedAt.Time) {
 		// Already processed this restart request, clear in-progress condition
-		if r.clearRestartConditions(ctx, ci) {
-			if err := r.Status().Update(ctx, ci); err != nil {
-				log.Error(err, "Failed to update status")
-				return ctrl.Result{}, err
-			}
-		}
+		r.clearRestartConditions(ctx, ci)
+		// Status will be updated by the main Reconcile loop
 		return ctrl.Result{}, nil
 	}
 
@@ -92,10 +84,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 			Message:            "No VirtualMachine reference found",
 			ObservedGeneration: ci.Generation,
 		})
-		if err := r.Status().Update(ctx, ci); err != nil {
-			log.Error(err, "Failed to update status")
-			return ctrl.Result{}, err
-		}
+		// Status will be updated by the main Reconcile loop
 		return ctrl.Result{}, nil
 	}
 
@@ -111,10 +100,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 			log.Info("VirtualMachineInstance not found, VM may not be running")
 			// Mark as restarted even though VMI doesn't exist
 			ci.Status.LastRestartedAt = ci.Spec.RestartRequestedAt.DeepCopy()
-			if err := r.Status().Update(ctx, ci); err != nil {
-				log.Error(err, "Failed to update status")
-				return ctrl.Result{}, err
-			}
+			// Status will be updated by the main Reconcile loop
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to get VirtualMachineInstance")
@@ -133,9 +119,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 				Message:            fmt.Sprintf("Failed to delete VMI: %v", err),
 				ObservedGeneration: ci.Generation,
 			})
-			if updateErr := r.Status().Update(ctx, ci); updateErr != nil {
-				log.Error(updateErr, "Failed to update status")
-			}
+			// Status will be updated by the main Reconcile loop before returning error
 			return ctrl.Result{}, err
 		}
 	}
@@ -156,12 +140,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 	meta.RemoveStatusCondition(&ci.Status.Conditions,
 		string(v1alpha1.ComputeInstanceConditionRestartFailed))
 
-	// Update status
-	if err := r.Status().Update(ctx, ci); err != nil {
-		log.Error(err, "Failed to update status")
-		return ctrl.Result{}, err
-	}
-
+	// Status will be updated by the main Reconcile loop
 	log.Info("Restart initiated successfully",
 		"restartRequestedAt", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339))
 	return ctrl.Result{}, nil

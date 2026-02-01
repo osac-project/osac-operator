@@ -182,6 +182,9 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			result, err := reconciler.performRestart(ctx, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
+			// Update status (normally done by main Reconcile loop)
+			err = k8sClient.Status().Update(ctx, ci)
+			Expect(err).NotTo(HaveOccurred())
 
 			// Re-fetch to get updated status
 			err = k8sClient.Get(ctx, client.ObjectKeyFromObject(ci), ci)
