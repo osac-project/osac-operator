@@ -414,5 +414,94 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Verify lastRestartedAt was NOT set (still using default from mock)
 			Expect(mockClient.lastUpdate.GetStatus().HasLastRestartedAt()).To(BeFalse())
 		})
+
+		It("should sync RestartInProgress condition when set to True", func() {
+			// Get the ComputeInstance and add RestartInProgress condition
+			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+
+			restartInProgressMessage := "Restart initiated at 2026-02-01T10:20:58Z"
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress),
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonRestartInProgress,
+				Message:            restartInProgressMessage,
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			// Verify RestartInProgress condition was synced
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_IN_PROGRESS {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
+					Expect(cond.GetMessage()).To(Equal(restartInProgressMessage))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
+		It("should sync RestartFailed condition when set to True", func() {
+			// Get the ComputeInstance and add RestartFailed condition
+			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+
+			restartFailedMessage := "No VirtualMachine reference found"
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed),
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonNoVMReference,
+				Message:            restartFailedMessage,
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			// Verify RestartFailed condition was synced
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_REBOOT_FAILED {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
+					Expect(cond.GetMessage()).To(Equal(restartFailedMessage))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
+		It("should not crash when restart conditions are not present", func() {
+			// RestartInProgress and RestartFailed conditions should not be present by default
+			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+
+			// Verify conditions don't include restart conditions
+			for _, cond := range computeInstance.Status.Conditions {
+				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress)))
+				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed)))
+			}
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+		})
 	})
 })
