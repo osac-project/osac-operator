@@ -246,14 +246,14 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Status:             metav1.ConditionFalse,
 					Reason:             "Accepted",
 					Message:            "VM is accepted",
-					LastTransitionTime: metav1.Now(),
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 				},
 				{
 					Type:               string(cloudkitv1alpha1.ComputeInstanceConditionProgressing),
 					Status:             metav1.ConditionTrue,
 					Reason:             "Progressing",
 					Message:            "VM is progressing",
-					LastTransitionTime: metav1.Now(),
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 				},
 			}
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())

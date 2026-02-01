@@ -59,7 +59,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		})
 
 		It("should process restart when RestartRequestedAt is set and LastRestartedAt is nil", func() {
-			now := metav1.Now()
+			now := metav1.NewTime(time.Now().UTC())
 			ci := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-first-restart",
@@ -88,7 +88,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		})
 
 		It("should skip when RestartRequestedAt equals LastRestartedAt", func() {
-			now := metav1.Now()
+			now := metav1.NewTime(time.Now().UTC())
 			ci := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-equal-timestamps",
@@ -109,8 +109,8 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		})
 
 		It("should skip when RestartRequestedAt is before LastRestartedAt", func() {
-			past := metav1.NewTime(time.Now().Add(-1 * time.Hour))
-			now := metav1.Now()
+			past := metav1.NewTime(time.Now().UTC().Add(-1 * time.Hour))
+			now := metav1.NewTime(time.Now().UTC())
 			ci := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-old-request",
@@ -131,8 +131,8 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		})
 
 		It("should process restart when RestartRequestedAt is after LastRestartedAt", func() {
-			past := metav1.NewTime(time.Now().Add(-1 * time.Hour))
-			now := metav1.Now()
+			past := metav1.NewTime(time.Now().UTC().Add(-1 * time.Hour))
+			now := metav1.NewTime(time.Now().UTC())
 			ci := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-new-request",
@@ -162,7 +162,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 	Context("performRestart", func() {
 		It("should set RestartFailed condition when VirtualMachineReference is nil", func() {
-			now := metav1.Now()
+			now := metav1.NewTime(time.Now().UTC())
 			ci := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-no-vm-ref",
