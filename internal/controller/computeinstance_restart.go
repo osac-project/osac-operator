@@ -105,9 +105,16 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 
 	if err := r.Get(ctx, vmiName, vmi); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Info("VirtualMachineInstance not found, VM may not be running")
-			// Mark as restarted even though VMI doesn't exist
-			ci.Status.LastRestartedAt = ci.Spec.RestartRequestedAt.DeepCopy()
+			log.Info("VirtualMachineInstance not found, marking restart as in progress")
+			// VMI doesn't exist yet, but will be created by VM controller
+			// Mark restart as in progress and wait for VMI to appear
+			meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
+				Type:               string(v1alpha1.ComputeInstanceConditionRestartInProgress),
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonRestartInProgress,
+				Message:            fmt.Sprintf("Waiting for VMI to be created (restart requested at %s)", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339)),
+				ObservedGeneration: ci.Generation,
+			})
 			// Status will be updated by the main Reconcile loop
 			return ctrl.Result{}, nil
 		}
