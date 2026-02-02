@@ -43,10 +43,19 @@ linters:
         path: api/v1alpha1/clusterorder_clusterreference.go
       - linters:
           - dupl
+        path: api/v1alpha1/host_hostreference.go
+      - linters:
+          - dupl
         path: api/v1alpha1/hostpool_hostpoolreference.go
       - linters:
           - dupl
         path: api/v1alpha1/computeinstance_virtualmachinereference.go
+      - linters:
+          - dupl
+        path: api/v1alpha1/host_conditions.go
+      - linters:
+          - dupl
+        path: api/v1alpha1/hostpool_conditions.go
     paths:
       - third_party$
       - builtin$

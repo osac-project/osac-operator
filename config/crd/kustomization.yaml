@@ -4,6 +4,7 @@
 resources:
 - bases/cloudkit.openshift.io_clusterorders.yaml
 - bases/cloudkit.openshift.io_hostpools.yaml
+- bases/cloudkit.openshift.io_hosts.yaml
 - bases/cloudkit.openshift.io_computeinstances.yaml
 - bases/cloudkit.openshift.io_tenants.yaml
 # +kubebuilder:scaffold:crdkustomizeresource

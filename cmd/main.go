@@ -222,7 +222,7 @@ func main() {
 
 		// Create the HostPool feedback reconciler:
 		if err = (controller.NewHostPoolFeedbackReconciler(
-			ctrl.Log.WithName("feedback"),
+			ctrl.Log.WithName("hostpool-feedback"),
 			mgr.GetClient(),
 			grpcConn,
 			os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
@@ -230,7 +230,21 @@ func main() {
 			setupLog.Error(
 				err,
 				"unable to create hostpool feedback controller",
-				"controller", "Feedback",
+				"controller", "HostPoolFeedback",
+			)
+			os.Exit(1)
+		}
+
+		// Create the Host feedback reconciler:
+		if err = (controller.NewHostFeedbackReconciler(
+			mgr.GetClient(),
+			grpcConn,
+			os.Getenv("CLOUDKIT_HOST_ORDER_NAMESPACE"),
+		)).SetupWithManager(mgr); err != nil {
+			setupLog.Error(
+				err,
+				"unable to create host feedback controller",
+				"controller", "HostFeedback",
 			)
 			os.Exit(1)
 		}
@@ -276,6 +290,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (controller.NewHostReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		os.Getenv("CLOUDKIT_HOST_CREATE_WEBHOOK"),
+		os.Getenv("CLOUDKIT_HOST_DELETE_WEBHOOK"),
+		os.Getenv("CLOUDKIT_HOST_ORDER_NAMESPACE"),
+		minimumRequestInterval,
+	)).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Host")
+		os.Exit(1)
+	}
+
 	// Create the ComputeInstance reconciler
 	if err = (controller.NewComputeInstanceReconciler(
 		mgr.GetClient(),
@@ -288,6 +314,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ComputeInstance")
 		os.Exit(1)
 	}
+
 	// Tenant reconciler in ComputeInstance namespace
 	if err := (controller.NewTenantReconciler(
 		mgr.GetClient(),

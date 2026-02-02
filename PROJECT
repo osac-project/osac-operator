@@ -44,6 +44,15 @@ resources:
   controller: true
   domain: openshift.io
   group: cloudkit
+  kind: Host
+  path: github.com/innabox/cloudkit-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: openshift.io
+  group: cloudkit
   kind: Tenant
   path: github.com/innabox/cloudkit-operator/api/v1alpha1
   version: v1alpha1

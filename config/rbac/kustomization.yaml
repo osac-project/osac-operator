@@ -32,6 +32,9 @@ resources:
 - tenant_admin_role.yaml
 - tenant_editor_role.yaml
 - tenant_viewer_role.yaml
+- host_admin_role.yaml
+- host_editor_role.yaml
+- host_viewer_role.yaml
 - hostpool_admin_role.yaml
 - hostpool_editor_role.yaml
 - hostpool_viewer_role.yaml
