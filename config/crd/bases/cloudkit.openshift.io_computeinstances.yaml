@@ -138,6 +138,25 @@ spec:
                   - type
                   type: object
                 type: array
+              deprovisionJobID:
+                description: |-
+                  DeprovisionJobID is the ID of the current or last deprovisioning job.
+                  This is used to track job status via the provisioning provider.
+                type: string
+              deprovisionJobMessage:
+                description: DeprovisionJobMessage provides human-readable status
+                  or error information for the deprovisioning job.
+                type: string
+              deprovisionJobState:
+                description: |-
+                  DeprovisionJobState is the current state of the deprovisioning job.
+                  Valid values: Pending, Running, Succeeded, Failed
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
               desiredConfigVersion:
                 description: DesiredConfigVersion is the version (hash) of the desired
                   configuration of the ComputeInstance
@@ -158,6 +177,25 @@ spec:
                 - Failed
                 - Ready
                 - Deleting
+                type: string
+              provisionJobID:
+                description: |-
+                  ProvisionJobID is the ID of the current or last provisioning job.
+                  This is used to track job status via the provisioning provider.
+                type: string
+              provisionJobMessage:
+                description: ProvisionJobMessage provides human-readable status or
+                  error information for the provisioning job.
+                type: string
+              provisionJobState:
+                description: |-
+                  ProvisionJobState is the current state of the provisioning job.
+                  Valid values: Pending, Running, Succeeded, Failed
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
                 type: string
               reconciledConfigVersion:
                 description: ReconciledConfigVersion is the version (hash) of the
