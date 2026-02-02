@@ -15,8 +15,29 @@ cloudkit-operator is part of the [AI-in-a-Box][innabox] project. It accepts `Clu
 
 cloudkit-operator makes use of the following environment variables:
 
+### Cluster Provisioning
 - `CLOUDKIT_CLUSTER_CREATE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL after creating the target namespace, service account, and rolebinding.
 - `CLOUDKIT_CLUSTER_DELETE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL before deleting the target namespace.
+
+### ComputeInstance Provisioning
+
+The operator supports two provisioning providers for ComputeInstance resources:
+
+**Provider Selection:**
+- `CLOUDKIT_PROVISIONING_PROVIDER` -- selects the provider: `"eda"` (default) or `"aap"`
+
+**EDA Provider (default):**
+- `CLOUDKIT_COMPUTE_INSTANCE_CREATE_WEBHOOK` -- webhook URL for provisioning
+- `CLOUDKIT_COMPUTE_INSTANCE_DELETE_WEBHOOK` -- webhook URL for deprovisioning
+
+**AAP Provider:**
+- `CLOUDKIT_AAP_URL` -- AAP server URL (required)
+- `CLOUDKIT_AAP_TOKEN` -- AAP authentication token (required)
+- `CLOUDKIT_AAP_PROVISION_TEMPLATE` -- template name for provisioning (optional)
+- `CLOUDKIT_AAP_DEPROVISION_TEMPLATE` -- template name for deprovisioning (optional)
+- `CLOUDKIT_AAP_STATUS_POLL_INTERVAL` -- job status polling interval (optional, default: 30s)
+
+See `config/samples/cloudkit-config-secret.yaml` for a complete configuration example.
 
 ## Getting Started
 
