@@ -12,7 +12,7 @@ import (
 
 // AAPClient is the interface for AAP operations used by the provider.
 type AAPClient interface {
-	DetectTemplateType(ctx context.Context, templateName string) (aap.TemplateType, error)
+	GetTemplate(ctx context.Context, templateName string) (*aap.Template, error)
 	LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	LaunchWorkflowTemplate(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	GetJob(ctx context.Context, jobID int) (*aap.Job, error)
@@ -41,10 +41,9 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 		return "", fmt.Errorf("provision template not configured")
 	}
 
-	// Detect template type
-	templateType, err := p.client.DetectTemplateType(ctx, p.provisionTemplate)
+	template, err := p.client.GetTemplate(ctx, p.provisionTemplate)
 	if err != nil {
-		return "", fmt.Errorf("failed to detect template type: %w", err)
+		return "", fmt.Errorf("failed to get template: %w", err)
 	}
 
 	// Extract extra vars from resource
@@ -55,7 +54,7 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 
 	// Launch appropriate template type
 	var jobID int
-	switch templateType {
+	switch template.Type {
 	case aap.TemplateTypeJob:
 		resp, err := p.client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
 			TemplateName: p.provisionTemplate,
@@ -75,7 +74,7 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 		}
 		jobID = resp.JobID
 	default:
-		return "", fmt.Errorf("unknown template type: %s", templateType)
+		return "", fmt.Errorf("unknown template type: %s", template.Type)
 	}
 
 	return strconv.Itoa(jobID), nil
@@ -93,10 +92,9 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		return "", fmt.Errorf("deprovision template not configured")
 	}
 
-	// Detect template type
-	templateType, err := p.client.DetectTemplateType(ctx, p.deprovisionTemplate)
+	template, err := p.client.GetTemplate(ctx, p.deprovisionTemplate)
 	if err != nil {
-		return "", fmt.Errorf("failed to detect template type: %w", err)
+		return "", fmt.Errorf("failed to get template: %w", err)
 	}
 
 	// Extract extra vars from resource
@@ -107,7 +105,7 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 
 	// Launch appropriate template type
 	var jobID int
-	switch templateType {
+	switch template.Type {
 	case aap.TemplateTypeJob:
 		resp, err := p.client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
 			TemplateName: p.deprovisionTemplate,
@@ -127,7 +125,7 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		}
 		jobID = resp.JobID
 	default:
-		return "", fmt.Errorf("unknown template type: %s", templateType)
+		return "", fmt.Errorf("unknown template type: %s", template.Type)
 	}
 
 	return strconv.Itoa(jobID), nil

@@ -15,17 +15,17 @@ import (
 
 // mockAAPClient is a test double for aap.Client
 type mockAAPClient struct {
-	detectTemplateTypeFunc     func(ctx context.Context, templateName string) (aap.TemplateType, error)
+	getTemplateFunc            func(ctx context.Context, templateName string) (*aap.Template, error)
 	launchJobTemplateFunc      func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	launchWorkflowTemplateFunc func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	getJobFunc                 func(ctx context.Context, jobID int) (*aap.Job, error)
 }
 
-func (m *mockAAPClient) DetectTemplateType(ctx context.Context, templateName string) (aap.TemplateType, error) {
-	if m.detectTemplateTypeFunc != nil {
-		return m.detectTemplateTypeFunc(ctx, templateName)
+func (m *mockAAPClient) GetTemplate(ctx context.Context, templateName string) (*aap.Template, error) {
+	if m.getTemplateFunc != nil {
+		return m.getTemplateFunc(ctx, templateName)
 	}
-	return aap.TemplateTypeJob, nil
+	return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 }
 
 func (m *mockAAPClient) LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
@@ -77,8 +77,8 @@ var _ = Describe("AAPProvider", func() {
 		Context("with job template", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
-				aapClient.detectTemplateTypeFunc = func(ctx context.Context, templateName string) (aap.TemplateType, error) {
-					return aap.TemplateTypeJob, nil
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-job"))
@@ -97,8 +97,8 @@ var _ = Describe("AAPProvider", func() {
 		Context("with workflow template", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-workflow", "deprovision-workflow")
-				aapClient.detectTemplateTypeFunc = func(ctx context.Context, templateName string) (aap.TemplateType, error) {
-					return aap.TemplateTypeWorkflow, nil
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 2, Name: templateName, Type: aap.TemplateTypeWorkflow}, nil
 				}
 				aapClient.launchWorkflowTemplateFunc = func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-workflow"))
@@ -129,23 +129,23 @@ var _ = Describe("AAPProvider", func() {
 		Context("when template detection fails", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
-				aapClient.detectTemplateTypeFunc = func(ctx context.Context, templateName string) (aap.TemplateType, error) {
-					return "", errors.New("template not found")
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return nil, errors.New("template not found")
 				}
 			})
 
 			It("should return error", func() {
 				_, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("failed to detect template type"))
+				Expect(err.Error()).To(ContainSubstring("failed to get template"))
 			})
 		})
 
 		Context("when job launch fails", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
-				aapClient.detectTemplateTypeFunc = func(ctx context.Context, templateName string) (aap.TemplateType, error) {
-					return aap.TemplateTypeJob, nil
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 					return nil, errors.New("AAP API error")
@@ -252,8 +252,8 @@ var _ = Describe("AAPProvider", func() {
 		Context("with job template", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
-				aapClient.detectTemplateTypeFunc = func(ctx context.Context, templateName string) (aap.TemplateType, error) {
-					return aap.TemplateTypeJob, nil
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("deprovision-job"))

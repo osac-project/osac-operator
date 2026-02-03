@@ -14,6 +14,10 @@ import (
 const (
 	// apiVersion is the AAP API version path
 	apiVersion = "api/v2"
+
+	// AAP template endpoint paths
+	jobTemplatesEndpoint         = "job_templates"
+	workflowJobTemplatesEndpoint = "workflow_job_templates"
 )
 
 // Client provides an HTTP client for interacting with AAP (Ansible Automation Platform) REST API.
@@ -21,7 +25,7 @@ type Client struct {
 	baseURL       string
 	httpClient    *http.Client
 	token         string
-	templateCache sync.Map // map[string]TemplateType - caches template name → type
+	templateCache sync.Map // map[string]*Template - caches template name → template (with ID, name, type)
 }
 
 // NewClient creates a new AAP API client.
@@ -74,6 +78,13 @@ const (
 	TemplateTypeJob      TemplateType = "job_template"
 	TemplateTypeWorkflow TemplateType = "workflow_job_template"
 )
+
+// Template represents an AAP job template or workflow job template.
+type Template struct {
+	ID   int          `json:"id"`
+	Name string       `json:"name"`
+	Type TemplateType `json:"-"` // Type is determined by which endpoint returned the template
+}
 
 // LaunchJobTemplate launches a job template and returns the job ID.
 func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateRequest) (*LaunchJobTemplateResponse, error) {
@@ -134,43 +145,69 @@ func (c *Client) GetJob(ctx context.Context, jobID int) (*Job, error) {
 	return &job, nil
 }
 
-// GetTemplateType queries AAP to determine if a template is a job_template or workflow_job_template.
+// getTemplateFromEndpoint queries a specific AAP template endpoint by name.
+// Returns the template if found, or an error if not found or request failed.
+func (c *Client) getTemplateFromEndpoint(ctx context.Context, templateEndpoint, templateName string, templateType TemplateType) (*Template, error) {
+	url := fmt.Sprintf("%s/%s/%s/?name=%s", c.baseURL, apiVersion, templateEndpoint, templateName)
+	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Count   int        `json:"count"`
+		Results []Template `json:"results"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse template lookup response: %w", err)
+	}
+
+	if result.Count == 0 {
+		return nil, fmt.Errorf("template %s not found", templateName)
+	}
+
+	template := result.Results[0]
+	template.Type = templateType
+	return &template, nil
+}
+
+// GetTemplateByName queries AAP to find a template by name.
+// Returns the template with its ID, name, and type.
 // This method does not use caching.
-func (c *Client) GetTemplateType(ctx context.Context, templateName string) (TemplateType, error) {
+func (c *Client) GetTemplateByName(ctx context.Context, templateName string) (*Template, error) {
 	// Try job template first
-	jobURL := fmt.Sprintf("%s/%s/job_templates/%s/", c.baseURL, apiVersion, templateName)
-	_, err := c.doRequest(ctx, http.MethodGet, jobURL, nil)
-	if err == nil {
-		return TemplateTypeJob, nil
+	template, lookupErr := c.getTemplateFromEndpoint(ctx, jobTemplatesEndpoint, templateName, TemplateTypeJob)
+	if lookupErr == nil {
+		return template, nil
 	}
 
 	// Try workflow template
-	workflowURL := fmt.Sprintf("%s/%s/workflow_job_templates/%s/", c.baseURL, apiVersion, templateName)
-	_, err = c.doRequest(ctx, http.MethodGet, workflowURL, nil)
-	if err == nil {
-		return TemplateTypeWorkflow, nil
+	template, lookupErr = c.getTemplateFromEndpoint(ctx, workflowJobTemplatesEndpoint, templateName, TemplateTypeWorkflow)
+	if lookupErr == nil {
+		return template, nil
 	}
 
-	return "", fmt.Errorf("template %s not found as job_template or workflow_job_template", templateName)
+	return nil, fmt.Errorf("template %s not found as %s or %s", templateName, jobTemplatesEndpoint, workflowJobTemplatesEndpoint)
 }
 
-// DetectTemplateType determines the template type with caching.
+// GetTemplate retrieves a template by name with caching.
 // Checks cache first, then queries AAP if not cached.
-func (c *Client) DetectTemplateType(ctx context.Context, templateName string) (TemplateType, error) {
+// Returns the template with ID, name, and type.
+func (c *Client) GetTemplate(ctx context.Context, templateName string) (*Template, error) {
 	// Check cache first
 	if cached, ok := c.templateCache.Load(templateName); ok {
-		return cached.(TemplateType), nil
+		return cached.(*Template), nil
 	}
 
 	// Not in cache, query AAP
-	templateType, err := c.GetTemplateType(ctx, templateName)
+	template, err := c.GetTemplateByName(ctx, templateName)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	// Store in cache
-	c.templateCache.Store(templateName, templateType)
-	return templateType, nil
+	// Store template in cache
+	c.templateCache.Store(templateName, template)
+	return template, nil
 }
 
 // InvalidateTemplateCache removes a template from the cache.

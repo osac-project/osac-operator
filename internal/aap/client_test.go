@@ -151,64 +151,81 @@ var _ = Describe("Client", func() {
 		})
 	})
 
-	Describe("GetTemplateType", func() {
+	Describe("GetTemplateByName", func() {
 		Context("when template is a job_template", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/api/v2/job_templates/my-job/" {
+					if r.URL.Path == "/api/v2/job_templates/" && r.URL.Query().Get("name") == "my-job" {
 						w.WriteHeader(http.StatusOK)
-						json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"count": 1,
+							"results": []map[string]interface{}{
+								{"id": 19, "name": "my-job"},
+							},
+						})
 					} else {
-						w.WriteHeader(http.StatusNotFound)
+						w.WriteHeader(http.StatusOK)
+						json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 					}
 				}))
 				client = aap.NewClient(server.URL, "test-token")
 			})
 
-			It("should return job template type", func() {
-				templateType, err := client.GetTemplateType(ctx, "my-job")
+			It("should return job template", func() {
+				template, err := client.GetTemplateByName(ctx, "my-job")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(templateType).To(Equal(aap.TemplateTypeJob))
+				Expect(template.Type).To(Equal(aap.TemplateTypeJob))
+				Expect(template.Name).To(Equal("my-job"))
+				Expect(template.ID).To(Equal(19))
 			})
 		})
 
 		Context("when template is a workflow_job_template", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/api/v2/workflow_job_templates/my-workflow/" {
+					if r.URL.Path == "/api/v2/workflow_job_templates/" && r.URL.Query().Get("name") == "my-workflow" {
 						w.WriteHeader(http.StatusOK)
-						json.NewEncoder(w).Encode(map[string]interface{}{"id": 2})
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"count": 1,
+							"results": []map[string]interface{}{
+								{"id": 20, "name": "my-workflow"},
+							},
+						})
 					} else {
-						w.WriteHeader(http.StatusNotFound)
+						w.WriteHeader(http.StatusOK)
+						json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 					}
 				}))
 				client = aap.NewClient(server.URL, "test-token")
 			})
 
-			It("should return workflow template type", func() {
-				templateType, err := client.GetTemplateType(ctx, "my-workflow")
+			It("should return workflow template", func() {
+				template, err := client.GetTemplateByName(ctx, "my-workflow")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(templateType).To(Equal(aap.TemplateTypeWorkflow))
+				Expect(template.Type).To(Equal(aap.TemplateTypeWorkflow))
+				Expect(template.Name).To(Equal("my-workflow"))
+				Expect(template.ID).To(Equal(20))
 			})
 		})
 
 		Context("when template does not exist", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusNotFound)
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 				}))
 				client = aap.NewClient(server.URL, "test-token")
 			})
 
 			It("should return error", func() {
-				_, err := client.GetTemplateType(ctx, "nonexistent")
+				_, err := client.GetTemplateByName(ctx, "nonexistent")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("not found"))
 			})
 		})
 	})
 
-	Describe("DetectTemplateType", func() {
+	Describe("GetTemplate", func() {
 		Context("with caching", func() {
 			var requestCount int
 
@@ -216,11 +233,17 @@ var _ = Describe("Client", func() {
 				requestCount = 0
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					requestCount++
-					if r.URL.Path == "/api/v2/job_templates/cached-job/" {
+					if r.URL.Path == "/api/v2/job_templates/" && r.URL.Query().Get("name") == "cached-job" {
 						w.WriteHeader(http.StatusOK)
-						json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"count": 1,
+							"results": []map[string]interface{}{
+								{"id": 1, "name": "cached-job"},
+							},
+						})
 					} else {
-						w.WriteHeader(http.StatusNotFound)
+						w.WriteHeader(http.StatusOK)
+						json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 					}
 				}))
 				client = aap.NewClient(server.URL, "test-token")
@@ -228,15 +251,15 @@ var _ = Describe("Client", func() {
 
 			It("should cache result and avoid repeated AAP queries", func() {
 				// First call queries AAP and caches
-				templateType, err := client.DetectTemplateType(ctx, "cached-job")
+				template, err := client.GetTemplate(ctx, "cached-job")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(templateType).To(Equal(aap.TemplateTypeJob))
+				Expect(template.Type).To(Equal(aap.TemplateTypeJob))
 				Expect(requestCount).To(Equal(1))
 
 				// Second call uses cache without querying AAP
-				templateType, err = client.DetectTemplateType(ctx, "cached-job")
+				template, err = client.GetTemplate(ctx, "cached-job")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(templateType).To(Equal(aap.TemplateTypeJob))
+				Expect(template.Type).To(Equal(aap.TemplateTypeJob))
 				Expect(requestCount).To(Equal(1)) // No additional requests
 			})
 		})
@@ -249,11 +272,17 @@ var _ = Describe("Client", func() {
 			requestCount = 0
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requestCount++
-				if r.URL.Path == "/api/v2/job_templates/my-job/" {
+				if r.URL.Path == "/api/v2/job_templates/" && r.URL.Query().Get("name") == "my-job" {
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"count": 1,
+						"results": []map[string]interface{}{
+							{"id": 1, "name": "my-job"},
+						},
+					})
 				} else {
-					w.WriteHeader(http.StatusNotFound)
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 				}
 			}))
 			client = aap.NewClient(server.URL, "test-token")
@@ -261,7 +290,7 @@ var _ = Describe("Client", func() {
 
 		It("should remove template from cache", func() {
 			// Populate cache
-			_, err := client.DetectTemplateType(ctx, "my-job")
+			_, err := client.GetTemplate(ctx, "my-job")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(requestCount).To(Equal(1))
 
@@ -269,7 +298,7 @@ var _ = Describe("Client", func() {
 			client.InvalidateTemplateCache("my-job")
 
 			// Should query AAP again
-			_, err = client.DetectTemplateType(ctx, "my-job")
+			_, err = client.GetTemplate(ctx, "my-job")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(requestCount).To(Equal(2))
 		})
@@ -282,11 +311,25 @@ var _ = Describe("Client", func() {
 			requestCount = 0
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requestCount++
-				if r.URL.Path == "/api/v2/job_templates/job1/" || r.URL.Path == "/api/v2/workflow_job_templates/workflow1/" {
+				if r.URL.Path == "/api/v2/job_templates/" && r.URL.Query().Get("name") == "job1" {
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"count": 1,
+						"results": []map[string]interface{}{
+							{"id": 1, "name": "job1"},
+						},
+					})
+				} else if r.URL.Path == "/api/v2/workflow_job_templates/" && r.URL.Query().Get("name") == "workflow1" {
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"count": 1,
+						"results": []map[string]interface{}{
+							{"id": 2, "name": "workflow1"},
+						},
+					})
 				} else {
-					w.WriteHeader(http.StatusNotFound)
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(map[string]interface{}{"count": 0, "results": []interface{}{}})
 				}
 			}))
 			client = aap.NewClient(server.URL, "test-token")
@@ -294,9 +337,9 @@ var _ = Describe("Client", func() {
 
 		It("should clear all cached templates", func() {
 			// Populate cache with multiple entries
-			_, err := client.DetectTemplateType(ctx, "job1")
+			_, err := client.GetTemplate(ctx, "job1")
 			Expect(err).NotTo(HaveOccurred())
-			_, err = client.DetectTemplateType(ctx, "workflow1")
+			_, err = client.GetTemplate(ctx, "workflow1")
 			Expect(err).NotTo(HaveOccurred())
 			initialCount := requestCount
 
@@ -304,9 +347,9 @@ var _ = Describe("Client", func() {
 			client.ClearTemplateCache()
 
 			// Both should query AAP again
-			_, err = client.DetectTemplateType(ctx, "job1")
+			_, err = client.GetTemplate(ctx, "job1")
 			Expect(err).NotTo(HaveOccurred())
-			_, err = client.DetectTemplateType(ctx, "workflow1")
+			_, err = client.GetTemplate(ctx, "workflow1")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(requestCount).To(Equal(initialCount * 2))
 		})
