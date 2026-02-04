@@ -186,11 +186,24 @@ func mapAAPStatusToJobState(aapStatus string) JobState {
 
 // extractExtraVars extracts extra variables from a resource to pass to AAP.
 // This is a placeholder implementation that will be enhanced when integrating with actual CRDs.
+//
+// NOTE: The current AAP templates (innabox-create-compute-instance, innabox-delete-compute-instance)
+// were designed to be triggered by EDA (Event-Driven Ansible) and expect parameters wrapped in
+// an EDA event structure. To maintain compatibility with existing templates, we wrap the parameters
+// in the ansible_eda.event.payload structure.
+//
+// Future improvement: When/if we migrate away from EDA-triggered templates, this wrapper can be
+// removed and parameters can be passed directly as flat key-value pairs.
 func extractExtraVars(resource client.Object) (map[string]interface{}, error) {
-	// For now, return basic metadata
-	// This will be replaced with actual resource field extraction
+	// Wrap parameters in EDA event structure for compatibility with EDA-designed templates
 	return map[string]interface{}{
-		"resource_name":      resource.GetName(),
-		"resource_namespace": resource.GetNamespace(),
+		"ansible_eda": map[string]interface{}{
+			"event": map[string]interface{}{
+				"payload": map[string]interface{}{
+					"resource_name":      resource.GetName(),
+					"resource_namespace": resource.GetNamespace(),
+				},
+			},
+		},
 	}, nil
 }

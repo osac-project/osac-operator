@@ -54,6 +54,13 @@ func (m *mockAAPClient) GetJob(ctx context.Context, jobID int) (*aap.Job, error)
 	}, nil
 }
 
+// extractEDAPayload extracts the payload from EDA event structure in extra_vars.
+// This helper function is used to verify the EDA compatibility wrapper.
+func extractEDAPayload(extraVars map[string]interface{}) map[string]interface{} {
+	edaEvent := extraVars["ansible_eda"].(map[string]interface{})
+	return edaEvent["event"].(map[string]interface{})["payload"].(map[string]interface{})
+}
+
 var _ = Describe("AAPProvider", func() {
 	var (
 		provider  *provisioning.AAPProvider
@@ -82,7 +89,10 @@ var _ = Describe("AAPProvider", func() {
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-job"))
-					Expect(req.ExtraVars).To(HaveKeyWithValue("resource_name", "test-resource"))
+					// Verify EDA event structure for compatibility with EDA-designed templates
+					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
+					payload := extractEDAPayload(req.ExtraVars)
+					Expect(payload).To(HaveKeyWithValue("resource_name", "test-resource"))
 					return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
 				}
 			})
@@ -102,7 +112,10 @@ var _ = Describe("AAPProvider", func() {
 				}
 				aapClient.launchWorkflowTemplateFunc = func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-workflow"))
-					Expect(req.ExtraVars).To(HaveKeyWithValue("resource_namespace", "default"))
+					// Verify EDA event structure for compatibility with EDA-designed templates
+					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
+					payload := extractEDAPayload(req.ExtraVars)
+					Expect(payload).To(HaveKeyWithValue("resource_namespace", "default"))
 					return &aap.LaunchWorkflowTemplateResponse{JobID: 456}, nil
 				}
 			})
