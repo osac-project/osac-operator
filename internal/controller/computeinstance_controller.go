@@ -365,7 +365,16 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// Job is complete - remove AAP finalizer regardless of success/failure (modifies metadata)
+	// Job is complete - persist final job status before removing finalizer
+	// We must call Status().Update() explicitly here because r.Update() below
+	// will refresh the instance from API server, and we want to ensure job status
+	// is persisted before that happens
+	if err := r.Status().Update(ctx, instance); err != nil {
+		log.Error(err, "failed to update deprovision job status")
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, err
+	}
+
+	// Remove AAP finalizer regardless of success/failure (modifies metadata)
 	if controllerutil.RemoveFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
@@ -440,6 +449,17 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
 		instance.Status.Phase = v1alpha1.ComputeInstancePhaseReady
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+
+		// If we're tracking a provision job that hasn't reached terminal state, continue polling
+		// This ensures job status fields are accurate and reflect the final job outcome
+		if r.ProvisioningProvider != nil && instance.Status.ProvisionJobID != "" {
+			jobState := provisioning.JobState(instance.Status.ProvisionJobState)
+			if !jobState.IsTerminal() {
+				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", instance.Status.ProvisionJobID, "state", jobState)
+				return r.handleProvisioning(ctx, instance)
+			}
+		}
+
 		return ctrl.Result{}, nil
 	}
 
