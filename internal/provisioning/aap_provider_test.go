@@ -92,7 +92,10 @@ var _ = Describe("AAPProvider", func() {
 					// Verify EDA event structure for compatibility with EDA-designed templates
 					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
 					payload := extractEDAPayload(req.ExtraVars)
-					Expect(payload).To(HaveKeyWithValue("resource_name", "test-resource"))
+					// Verify serialized resource contains the ObjectMeta fields
+					// Note: mockResource embeds ObjectMeta, so fields are at top level
+					Expect(payload).To(HaveKeyWithValue("name", "test-resource"))
+					Expect(payload).To(HaveKeyWithValue("namespace", "default"))
 					return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
 				}
 			})
@@ -115,7 +118,9 @@ var _ = Describe("AAPProvider", func() {
 					// Verify EDA event structure for compatibility with EDA-designed templates
 					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
 					payload := extractEDAPayload(req.ExtraVars)
-					Expect(payload).To(HaveKeyWithValue("resource_namespace", "default"))
+					// Verify serialized resource contains the ObjectMeta fields
+					// Note: mockResource embeds ObjectMeta, so fields are at top level
+					Expect(payload).To(HaveKeyWithValue("namespace", "default"))
 					return &aap.LaunchWorkflowTemplateResponse{JobID: 456}, nil
 				}
 			})

@@ -2,6 +2,7 @@ package provisioning
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -185,25 +186,52 @@ func mapAAPStatusToJobState(aapStatus string) JobState {
 }
 
 // extractExtraVars extracts extra variables from a resource to pass to AAP.
-// This is a placeholder implementation that will be enhanced when integrating with actual CRDs.
 //
 // NOTE: The current AAP templates (innabox-create-compute-instance, innabox-delete-compute-instance)
-// were designed to be triggered by EDA (Event-Driven Ansible) and expect parameters wrapped in
-// an EDA event structure. To maintain compatibility with existing templates, we wrap the parameters
-// in the ansible_eda.event.payload structure.
+// were designed to be triggered by EDA (Event-Driven Ansible) and expect the full Kubernetes resource
+// object wrapped in an EDA event structure. To maintain compatibility with existing templates, we
+// serialize the entire resource object and wrap it in the ansible_eda.event.payload structure.
+//
+// EDA sends the complete resource object which allows playbooks to access fields like:
+//
+//	ansible_eda.event.payload.spec.templateID
+//	ansible_eda.event.payload.spec.templateParameters
+//	ansible_eda.event.payload.metadata.name
+//	ansible_eda.event.payload.metadata.namespace
 //
 // Future improvement: When/if we migrate away from EDA-triggered templates, this wrapper can be
 // removed and parameters can be passed directly as flat key-value pairs.
 func extractExtraVars(resource client.Object) (map[string]interface{}, error) {
-	// Wrap parameters in EDA event structure for compatibility with EDA-designed templates
+	// Convert the resource to map using JSON marshaling (respects JSON tags)
+	resourceMap, err := serializeResource(resource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize resource: %w", err)
+	}
+
+	// Wrap the full resource in EDA event structure for compatibility with EDA-designed templates
 	return map[string]interface{}{
 		"ansible_eda": map[string]interface{}{
 			"event": map[string]interface{}{
-				"payload": map[string]interface{}{
-					"resource_name":      resource.GetName(),
-					"resource_namespace": resource.GetNamespace(),
-				},
+				"payload": resourceMap,
 			},
 		},
 	}, nil
+}
+
+// serializeResource converts a Kubernetes resource to a map using JSON marshaling.
+// This respects the struct's JSON tags and provides the same structure as EDA events.
+func serializeResource(resource client.Object) (map[string]interface{}, error) {
+	// Marshal to JSON
+	jsonBytes, err := json.Marshal(resource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource to JSON: %w", err)
+	}
+
+	// Unmarshal back to map[string]interface{}
+	var resourceMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &resourceMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON to map: %w", err)
+	}
+
+	return resourceMap, nil
 }
