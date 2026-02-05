@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/innabox/cloudkit-operator/internal/provisioning"
 )
 
 var _ = Describe("ComputeInstance Controller", func() {
@@ -77,8 +79,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 			By("Reconciling the deleted resource")
 			Eventually(func() error {
 				controllerReconciler := &ComputeInstanceReconciler{
-					Client: k8sClient,
-					Scheme: k8sClient.Scheme(),
+					Client:               k8sClient,
+					Scheme:               k8sClient.Scheme(),
+					ProvisioningProvider: &mockProvisioningProvider{name: provisioning.ProviderTypeAAP},
+					StatusPollInterval:   100 * time.Millisecond,
 				}
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: typeNamespacedName,
@@ -89,8 +93,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ComputeInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{name: provisioning.ProviderTypeAAP},
+				StatusPollInterval:   100 * time.Millisecond,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

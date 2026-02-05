@@ -292,7 +292,9 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for a ComputeInstance.
 // It triggers deprovisioning if needed and polls job status until completion.
-// Status updates are handled by the main reconcile loop.
+// For EDA provider: This is called only when AAP finalizer exists (set by playbook).
+// For AAP Direct provider: This is always called to handle cancellation and deprovision.
+// Note: Finalizer management is handled by handleDelete(), not here.
 func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -300,20 +302,8 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
 	if exists && val == ManagementStateManual {
 		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
-		// Remove AAP finalizer (this modifies metadata so we call Update)
-		if controllerutil.RemoveFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-			return ctrl.Result{}, r.Update(ctx, instance)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// If no provider configured, skip deprovisioning
-	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping deprovisioning")
-		// Remove AAP finalizer (this modifies metadata so we call Update)
-		if controllerutil.RemoveFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-			return ctrl.Result{}, r.Update(ctx, instance)
-		}
+		// For EDA: AAP playbook handles finalizer removal
+		// For AAP Direct: handleDelete() removes base finalizer
 		return ctrl.Result{}, nil
 	}
 
@@ -375,30 +365,43 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// Job is complete - persist final job status before removing finalizer
-	// We must call Status().Update() explicitly here because r.Update() below
-	// will refresh the instance from API server, and we want to ensure job status
-	// is persisted before that happens
-	if err := r.Status().Update(ctx, instance); err != nil {
-		log.Error(err, "failed to update deprovision job status")
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, err
-	}
-
-	// Remove AAP finalizer regardless of success/failure (modifies metadata)
-	if controllerutil.RemoveFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-		if err := r.Update(ctx, instance); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
+	// Job reached terminal state (Succeeded, Failed, or Canceled)
 	if status.State.IsSuccessful() {
 		log.Info("deprovision job succeeded", "jobID", instance.Status.DeprovisionJobID)
+		// For EDA: AAP playbook removes AAP finalizer on success
+		// For AAP Direct: handleDelete() removes base finalizer
 		return ctrl.Result{}, nil
 	}
 
-	// Job failed - log but continue with deletion
-	log.Info("deprovision job failed but allowing deletion to proceed", "jobID", instance.Status.DeprovisionJobID, "message", instance.Status.DeprovisionJobMessage)
-	return ctrl.Result{}, nil
+	// Job failed or was canceled
+	// Behavior depends on provider type
+	switch r.ProvisioningProvider.Name() {
+	case provisioning.ProviderTypeAAP:
+		// AAP Direct: We have full visibility and control
+		// Block deletion to prevent orphaned cloud resources
+		// Operator admin must manually intervene to clean up and remove finalizer
+		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
+			"jobID", instance.Status.DeprovisionJobID,
+			"state", status.State,
+			"message", instance.Status.DeprovisionJobMessage)
+		// Keep requeueing - admin must manually fix and remove finalizer to allow deletion
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+	case provisioning.ProviderTypeEDA:
+		// EDA: Webhook-based, we can't control the outcome
+		// AAP playbook handles finalizer removal, allow process to continue
+		log.Info("deprovision job did not succeed (EDA flow), allowing webhook process to continue",
+			"jobID", instance.Status.DeprovisionJobID,
+			"state", status.State,
+			"message", instance.Status.DeprovisionJobMessage)
+		return ctrl.Result{}, nil
+
+	default:
+		// Unknown provider, log and requeue for safety
+		log.Error(nil, "unknown provider type, blocking deletion",
+			"provider", r.ProvisioningProvider.Name())
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
 }
 
 // ensureProvisionJobTerminated ensures any running provision job is canceled before deprovisioning.
@@ -522,17 +525,39 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Req
 
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
 
-	// Finalizer has already been removed, return
+	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
-	// AAP Finalizer is here, trigger deprovisioning via provider
-	if controllerutil.ContainsFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-		return r.handleDeprovisioning(ctx, instance)
+	// Handle deletion flow based on provider type
+	switch r.ProvisioningProvider.Name() {
+	case provisioning.ProviderTypeEDA:
+		// EDA flow: Only deprovision if AAP finalizer exists (set by AAP playbook during provision)
+		// The AAP playbook triggered via EDA webhook handles deprovision and finalizer removal
+		if controllerutil.ContainsFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
+			log.Info("AAP finalizer present, handling deprovisioning via EDA")
+			return r.handleDeprovisioning(ctx, instance)
+		}
+		// No AAP finalizer - nothing to deprovision, proceed to remove base finalizer
+		log.Info("no AAP finalizer, skipping deprovisioning")
+
+	case provisioning.ProviderTypeAAP:
+		// AAP Direct flow: Controller manages entire lifecycle via REST API
+		// Cancel running provision job (if any) and trigger deprovision
+		log.Info("handling deprovisioning via AAP Direct provider")
+		result, err := r.handleDeprovisioning(ctx, instance)
+		if err != nil {
+			return result, err
+		}
+		// If we need to requeue (jobs still running), do so
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
+		// Deprovision complete, proceed to remove base finalizer
 	}
 
-	// Let this CR be deleted
+	// Remove base finalizer to allow Kubernetes to delete the resource
 	if controllerutil.RemoveFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err

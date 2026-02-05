@@ -8,6 +8,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	// ProviderTypeEDA identifies the EDA webhook-based provider
+	ProviderTypeEDA = "eda"
+
+	// ProviderTypeAAP identifies the AAP REST API direct provider
+	ProviderTypeAAP = "aap"
+)
+
 // ProvisioningProvider abstracts the mechanism for triggering infrastructure automation
 // and retrieving job status. This interface allows multiple implementations (e.g., EDA webhooks,
 // direct AAP API integration) to coexist and be selected via configuration.

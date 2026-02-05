@@ -348,32 +348,20 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(instance.Status.DeprovisionJobMessage).To(ContainSubstring("Failed to get job status"))
 		})
 
-		It("should skip deprovisioning when provider is nil", func() {
-			reconciler.ProvisioningProvider = nil
-
-			// This will call Update() which requires the resource to exist in k8s
-			// Expecting an error since instance doesn't exist
-			_, err := reconciler.handleDeprovisioning(ctx, instance)
-			Expect(err).To(HaveOccurred())
-			Expect(instance.Status.DeprovisionJobID).To(BeEmpty())
-			// Finalizer was removed from in-memory object before Update was attempted
-			Expect(instance.Finalizers).NotTo(ContainElement(cloudkitAAPComputeInstanceFinalizer))
-		})
-
 		It("should skip deprovisioning when ManagementStateManual annotation is set", func() {
 			instance.Annotations = map[string]string{
 				cloudkitComputeInstanceManagementStateAnnotation: ManagementStateManual,
 			}
-			provider := &mockProvisioningProvider{}
+			provider := &mockProvisioningProvider{
+				name: provisioning.ProviderTypeAAP,
+			}
 			reconciler.ProvisioningProvider = provider
 
-			// This will call Update() which requires the resource to exist in k8s
-			// Expecting an error since instance doesn't exist
-			_, err := reconciler.handleDeprovisioning(ctx, instance)
-			Expect(err).To(HaveOccurred())
+			result, err := reconciler.handleDeprovisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			// Should return immediately without triggering deprovision
+			Expect(result.RequeueAfter).To(BeZero())
 			Expect(instance.Status.DeprovisionJobID).To(BeEmpty())
-			// Finalizer was removed from in-memory object before Update was attempted
-			Expect(instance.Finalizers).NotTo(ContainElement(cloudkitAAPComputeInstanceFinalizer))
 		})
 	})
 })

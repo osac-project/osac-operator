@@ -114,7 +114,7 @@ func (p *controllableProvider) GetDeprovisionStatus(ctx context.Context, jobID s
 }
 
 func (p *controllableProvider) Name() string {
-	return "controllable-test-provider"
+	return provisioning.ProviderTypeAAP
 }
 
 // setProvisionJobState updates the provision job state (thread-safe)
@@ -255,13 +255,14 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 	})
 
 	Context("Deprovisioning workflow", func() {
-		It("should deprovision a ComputeInstance successfully", func() {
+		It("should deprovision a ComputeInstance successfully (AAP Direct)", func() {
 			instanceName := "test-deprovision-success"
 			instance := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:       instanceName,
-					Namespace:  testNamespace,
-					Finalizers: []string{cloudkitAAPComputeInstanceFinalizer},
+					Name:      instanceName,
+					Namespace: testNamespace,
+					// AAP Direct uses base finalizer, not AAP-specific finalizer
+					Finalizers: []string{cloudkitComputeInstanceFinalizer},
 					Annotations: map[string]string{
 						cloudkitTenantAnnotation: "test-tenant",
 					},
@@ -289,18 +290,18 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 
-			// Verify finalizer was removed
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Finalizers).NotTo(ContainElement(cloudkitAAPComputeInstanceFinalizer))
+			// For AAP Direct: handleDeprovisioning() doesn't remove finalizers
+			// Finalizer removal is handled by handleDelete()
+			// Verify job succeeded
+			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateSucceeded)))
 		})
 
-		It("should allow deletion even when deprovision job fails", func() {
+		It("should block deletion when deprovision job fails (AAP Direct)", func() {
 			instanceName := "test-deprovision-failure"
 			instance := &cloudkitv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:       instanceName,
-					Namespace:  testNamespace,
-					Finalizers: []string{cloudkitAAPComputeInstanceFinalizer},
+					Name:      instanceName,
+					Namespace: testNamespace,
 					Annotations: map[string]string{
 						cloudkitTenantAnnotation: "test-tenant",
 					},
@@ -313,18 +314,23 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
 			// Trigger deprovisioning
-			_, err := reconciler.handleDeprovisioning(ctx, instance)
+			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
+			// Should requeue to poll job status
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			// Simulate job failing
 			provider.setDeprovisionJobState(provisioning.JobStateFailed, "Resource not found")
 
-			_, err = reconciler.handleDeprovisioning(ctx, instance)
+			// Call again with failed job
+			result, err = reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify finalizer was removed despite failure (allowing deletion)
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Finalizers).NotTo(ContainElement(cloudkitAAPComputeInstanceFinalizer))
+			// For AAP Direct: Should requeue (block deletion) when deprovision fails
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			// Verify deletion is blocked - status shows failed deprovision
+			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateFailed)))
 		})
 	})
 
