@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -114,13 +115,29 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, instance); err != nil {
+		if err := r.updateStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
 			return res, err
 		}
 	}
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+// updateStatusWithRetry updates the instance status with retry on conflict.
+// This prevents duplicate job triggers when status updates fail due to optimistic concurrency conflicts.
+func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ComputeInstanceStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Fetch latest version to get current resourceVersion
+		latest := &v1alpha1.ComputeInstance{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		// Copy status updates to the latest version
+		latest.Status = newStatus
+		// Attempt to update with fresh resourceVersion
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
