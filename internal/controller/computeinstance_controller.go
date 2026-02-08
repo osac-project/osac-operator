@@ -244,7 +244,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	// Check if we already have a job ID
-	if instance.Status.ProvisionJobID == "" {
+	if instance.Status.ProvisionJob == nil || instance.Status.ProvisionJob.ID == "" {
 		// No job yet, trigger provisioning
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		jobID, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
@@ -258,42 +258,46 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 
 			// Actual error - mark as failed
 			log.Error(err, "failed to trigger provisioning")
-			instance.Status.ProvisionJobState = string(provisioning.JobStateFailed)
-			instance.Status.ProvisionJobMessage = fmt.Sprintf("Failed to trigger provisioning: %v", err)
+			instance.Status.ProvisionJob = &v1alpha1.JobStatus{
+				State:   string(provisioning.JobStateFailed),
+				Message: fmt.Sprintf("Failed to trigger provisioning: %v", err),
+			}
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
-		instance.Status.ProvisionJobID = jobID
-		instance.Status.ProvisionJobState = string(provisioning.JobStatePending)
-		instance.Status.ProvisionJobMessage = "Provisioning job triggered"
+		instance.Status.ProvisionJob = &v1alpha1.JobStatus{
+			ID:      jobID,
+			State:   string(provisioning.JobStatePending),
+			Message: "Provisioning job triggered",
+		}
 		log.Info("provisioning job triggered", "jobID", jobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance.Status.ProvisionJobID)
+	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance.Status.ProvisionJob.ID)
 	if err != nil {
-		log.Error(err, "failed to get provision job status", "jobID", instance.Status.ProvisionJobID)
-		instance.Status.ProvisionJobMessage = fmt.Sprintf("Failed to get job status: %v", err)
+		log.Error(err, "failed to get provision job status", "jobID", instance.Status.ProvisionJob.ID)
+		instance.Status.ProvisionJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update status fields (main reconcile loop will persist these)
-	instance.Status.ProvisionJobState = string(status.State)
-	instance.Status.ProvisionJobMessage = status.Message
+	instance.Status.ProvisionJob.State = string(status.State)
+	instance.Status.ProvisionJob.Message = status.Message
 	if status.ErrorDetails != "" {
-		instance.Status.ProvisionJobMessage = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+		instance.Status.ProvisionJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
-		log.Info("provision job still running", "jobID", instance.Status.ProvisionJobID, "state", status.State)
+		log.Info("provision job still running", "jobID", instance.Status.ProvisionJob.ID, "state", status.State)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Job is complete
 	if status.State.IsSuccessful() {
-		log.Info("provision job succeeded", "jobID", instance.Status.ProvisionJobID)
+		log.Info("provision job succeeded", "jobID", instance.Status.ProvisionJob.ID)
 		// Update reconciled version if provided
 		if status.ReconciledVersion != "" {
 			instance.Status.ReconciledConfigVersion = status.ReconciledVersion
@@ -302,7 +306,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	// Job failed
-	log.Error(nil, "provision job failed", "jobID", instance.Status.ProvisionJobID, "message", instance.Status.ProvisionJobMessage)
+	log.Error(nil, "provision job failed", "jobID", instance.Status.ProvisionJob.ID, "message", instance.Status.ProvisionJob.Message)
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
 	return ctrl.Result{}, nil
 }
@@ -335,7 +339,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 
 	// Check if we already have a job ID
-	if instance.Status.DeprovisionJobID == "" {
+	if instance.Status.DeprovisionJob == nil || instance.Status.DeprovisionJob.ID == "" {
 		// No job yet, trigger deprovisioning
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
 		jobID, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
@@ -349,42 +353,46 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 
 			// Actual error - mark as failed
 			log.Error(err, "failed to trigger deprovisioning")
-			instance.Status.DeprovisionJobState = string(provisioning.JobStateFailed)
-			instance.Status.DeprovisionJobMessage = fmt.Sprintf("Failed to trigger deprovisioning: %v", err)
+			instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
+				State:   string(provisioning.JobStateFailed),
+				Message: fmt.Sprintf("Failed to trigger deprovisioning: %v", err),
+			}
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
-		instance.Status.DeprovisionJobID = jobID
-		instance.Status.DeprovisionJobState = string(provisioning.JobStatePending)
-		instance.Status.DeprovisionJobMessage = "Deprovisioning job triggered"
+		instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
+			ID:      jobID,
+			State:   string(provisioning.JobStatePending),
+			Message: "Deprovisioning job triggered",
+		}
 		log.Info("deprovisioning job triggered", "jobID", jobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance.Status.DeprovisionJobID)
+	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance.Status.DeprovisionJob.ID)
 	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", instance.Status.DeprovisionJobID)
-		instance.Status.DeprovisionJobMessage = fmt.Sprintf("Failed to get job status: %v", err)
+		log.Error(err, "failed to get deprovision job status", "jobID", instance.Status.DeprovisionJob.ID)
+		instance.Status.DeprovisionJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update status fields (main reconcile loop will persist these)
-	instance.Status.DeprovisionJobState = string(status.State)
-	instance.Status.DeprovisionJobMessage = status.Message
+	instance.Status.DeprovisionJob.State = string(status.State)
+	instance.Status.DeprovisionJob.Message = status.Message
 	if status.ErrorDetails != "" {
-		instance.Status.DeprovisionJobMessage = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+		instance.Status.DeprovisionJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", instance.Status.DeprovisionJobID, "state", status.State)
+		log.Info("deprovision job still running", "jobID", instance.Status.DeprovisionJob.ID, "state", status.State)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Job reached terminal state (Succeeded, Failed, or Canceled)
 	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", instance.Status.DeprovisionJobID)
+		log.Info("deprovision job succeeded", "jobID", instance.Status.DeprovisionJob.ID)
 		// For EDA: AAP playbook removes AAP finalizer on success
 		// For AAP Direct: handleDelete() removes base finalizer
 		return ctrl.Result{}, nil
@@ -398,9 +406,9 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		// Block deletion to prevent orphaned cloud resources
 		// Operator admin must manually intervene to clean up and remove finalizer
 		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", instance.Status.DeprovisionJobID,
+			"jobID", instance.Status.DeprovisionJob.ID,
 			"state", status.State,
-			"message", instance.Status.DeprovisionJobMessage)
+			"message", instance.Status.DeprovisionJob.Message)
 		// Keep requeueing - admin must manually fix and remove finalizer to allow deletion
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 
@@ -408,9 +416,9 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		// EDA: Webhook-based, we can't control the outcome
 		// AAP playbook handles finalizer removal, allow process to continue
 		log.Info("deprovision job did not succeed (EDA flow), allowing webhook process to continue",
-			"jobID", instance.Status.DeprovisionJobID,
+			"jobID", instance.Status.DeprovisionJob.ID,
 			"state", status.State,
-			"message", instance.Status.DeprovisionJobMessage)
+			"message", instance.Status.DeprovisionJob.Message)
 		return ctrl.Result{}, nil
 
 	default:
@@ -427,47 +435,47 @@ func (r *ComputeInstanceReconciler) ensureProvisionJobTerminated(ctx context.Con
 	log := ctrllog.FromContext(ctx)
 
 	// No provision job, safe to proceed
-	if instance.Status.ProvisionJobID == "" {
+	if instance.Status.ProvisionJob == nil || instance.Status.ProvisionJob.ID == "" {
 		return true, ctrl.Result{}, nil
 	}
 
 	// Poll current job status from AAP (don't trust cached status during deletion)
-	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance.Status.ProvisionJobID)
+	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance.Status.ProvisionJob.ID)
 	if err != nil {
 		log.Error(err, "failed to get provision job status, will retry",
-			"jobID", instance.Status.ProvisionJobID)
+			"jobID", instance.Status.ProvisionJob.ID)
 		// Requeue to retry status check
 		return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update status fields with current state
-	instance.Status.ProvisionJobState = string(status.State)
-	instance.Status.ProvisionJobMessage = status.Message
+	instance.Status.ProvisionJob.State = string(status.State)
+	instance.Status.ProvisionJob.Message = status.Message
 	if status.ErrorDetails != "" {
-		instance.Status.ProvisionJobMessage = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+		instance.Status.ProvisionJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
 
 	// Provision job already in terminal state, safe to proceed
 	if status.State.IsTerminal() {
 		log.Info("provision job in terminal state, proceeding with deprovision",
-			"jobID", instance.Status.ProvisionJobID, "state", status.State)
+			"jobID", instance.Status.ProvisionJob.ID, "state", status.State)
 		return true, ctrl.Result{}, nil
 	}
 
 	// Provision job is still running - cancel it
 	log.Info("provision job still running, canceling before deprovision",
-		"jobID", instance.Status.ProvisionJobID, "state", status.State)
+		"jobID", instance.Status.ProvisionJob.ID, "state", status.State)
 
-	if err := r.ProvisioningProvider.CancelProvision(ctx, instance.Status.ProvisionJobID); err != nil {
+	if err := r.ProvisioningProvider.CancelProvision(ctx, instance.Status.ProvisionJob.ID); err != nil {
 		log.Error(err, "failed to cancel provision job, will retry",
-			"jobID", instance.Status.ProvisionJobID)
+			"jobID", instance.Status.ProvisionJob.ID)
 		// Requeue to retry cancellation
 		return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Cancellation initiated - requeue to poll status on next reconcile
 	log.Info("provision job cancellation initiated, requeueing to check status",
-		"jobID", instance.Status.ProvisionJobID)
+		"jobID", instance.Status.ProvisionJob.ID)
 	return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 }
 
@@ -532,10 +540,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 
 		// If we're tracking a provision job that hasn't reached terminal state, continue polling
 		// This ensures job status fields are accurate and reflect the final job outcome
-		if r.ProvisioningProvider != nil && instance.Status.ProvisionJobID != "" {
-			jobState := provisioning.JobState(instance.Status.ProvisionJobState)
+		if r.ProvisioningProvider != nil && instance.Status.ProvisionJob != nil && instance.Status.ProvisionJob.ID != "" {
+			jobState := provisioning.JobState(instance.Status.ProvisionJob.State)
 			if !jobState.IsTerminal() {
-				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", instance.Status.ProvisionJobID, "state", jobState)
+				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", instance.Status.ProvisionJob.ID, "state", jobState)
 				return r.handleProvisioning(ctx, instance)
 			}
 		}

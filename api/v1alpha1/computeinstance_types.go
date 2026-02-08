@@ -108,6 +108,26 @@ type TenantReferenceType struct {
 	Namespace string `json:"namespace"`
 }
 
+// JobStatus represents the status of a provisioning or deprovisioning job
+type JobStatus struct {
+	// ID is the job identifier from the provisioning provider
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	ID string `json:"id,omitempty"`
+
+	// State is the current state of the job
+	// Valid values: Pending, Running, Succeeded, Failed, Canceled
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled
+	State string `json:"state,omitempty"`
+
+	// Message provides human-readable status or error information
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	Message string `json:"message,omitempty"`
+}
+
 // ComputeInstanceStatus defines the observed state of ComputeInstance.
 type ComputeInstanceStatus struct {
 	// Phase provides a single-value overview of the state of the ComputeInstance
@@ -147,41 +167,13 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Format=date-time
 	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
 
-	// ProvisionJobID is the ID of the current or last provisioning job.
-	// This is used to track job status via the provisioning provider.
+	// ProvisionJob tracks the current or last provisioning job status
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	ProvisionJobID string `json:"provisionJobID,omitempty"`
+	ProvisionJob *JobStatus `json:"provisionJob,omitempty"`
 
-	// ProvisionJobState is the current state of the provisioning job.
-	// Valid values: Pending, Running, Succeeded, Failed, Canceled
+	// DeprovisionJob tracks the current or last deprovisioning job status
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled
-	ProvisionJobState string `json:"provisionJobState,omitempty"`
-
-	// ProvisionJobMessage provides human-readable status or error information for the provisioning job.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	ProvisionJobMessage string `json:"provisionJobMessage,omitempty"`
-
-	// DeprovisionJobID is the ID of the current or last deprovisioning job.
-	// This is used to track job status via the provisioning provider.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	DeprovisionJobID string `json:"deprovisionJobID,omitempty"`
-
-	// DeprovisionJobState is the current state of the deprovisioning job.
-	// Valid values: Pending, Running, Succeeded, Failed, Canceled
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled
-	DeprovisionJobState string `json:"deprovisionJobState,omitempty"`
-
-	// DeprovisionJobMessage provides human-readable status or error information for the deprovisioning job.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	DeprovisionJobMessage string `json:"deprovisionJobMessage,omitempty"`
+	DeprovisionJob *JobStatus `json:"deprovisionJob,omitempty"`
 }
 
 // +kubebuilder:object:root=true

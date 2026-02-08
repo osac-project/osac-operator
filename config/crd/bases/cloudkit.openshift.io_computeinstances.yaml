@@ -138,26 +138,28 @@ spec:
                   - type
                   type: object
                 type: array
-              deprovisionJobID:
-                description: |-
-                  DeprovisionJobID is the ID of the current or last deprovisioning job.
-                  This is used to track job status via the provisioning provider.
-                type: string
-              deprovisionJobMessage:
-                description: DeprovisionJobMessage provides human-readable status
-                  or error information for the deprovisioning job.
-                type: string
-              deprovisionJobState:
-                description: |-
-                  DeprovisionJobState is the current state of the deprovisioning job.
-                  Valid values: Pending, Running, Succeeded, Failed, Canceled
-                enum:
-                - Pending
-                - Running
-                - Succeeded
-                - Failed
-                - Canceled
-                type: string
+              deprovisionJob:
+                description: DeprovisionJob tracks the current or last deprovisioning
+                  job status
+                properties:
+                  id:
+                    description: ID is the job identifier from the provisioning provider
+                    type: string
+                  message:
+                    description: Message provides human-readable status or error information
+                    type: string
+                  state:
+                    description: |-
+                      State is the current state of the job
+                      Valid values: Pending, Running, Succeeded, Failed, Canceled
+                    enum:
+                    - Pending
+                    - Running
+                    - Succeeded
+                    - Failed
+                    - Canceled
+                    type: string
+                type: object
               desiredConfigVersion:
                 description: DesiredConfigVersion is the version (hash) of the desired
                   configuration of the ComputeInstance
@@ -179,26 +181,28 @@ spec:
                 - Ready
                 - Deleting
                 type: string
-              provisionJobID:
-                description: |-
-                  ProvisionJobID is the ID of the current or last provisioning job.
-                  This is used to track job status via the provisioning provider.
-                type: string
-              provisionJobMessage:
-                description: ProvisionJobMessage provides human-readable status or
-                  error information for the provisioning job.
-                type: string
-              provisionJobState:
-                description: |-
-                  ProvisionJobState is the current state of the provisioning job.
-                  Valid values: Pending, Running, Succeeded, Failed, Canceled
-                enum:
-                - Pending
-                - Running
-                - Succeeded
-                - Failed
-                - Canceled
-                type: string
+              provisionJob:
+                description: ProvisionJob tracks the current or last provisioning
+                  job status
+                properties:
+                  id:
+                    description: ID is the job identifier from the provisioning provider
+                    type: string
+                  message:
+                    description: Message provides human-readable status or error information
+                    type: string
+                  state:
+                    description: |-
+                      State is the current state of the job
+                      Valid values: Pending, Running, Succeeded, Failed, Canceled
+                    enum:
+                    - Pending
+                    - Running
+                    - Succeeded
+                    - Failed
+                    - Canceled
+                    type: string
+                type: object
               reconciledConfigVersion:
                 description: ReconciledConfigVersion is the version (hash) of the
                   reconciled configuration of the ComputeInstance

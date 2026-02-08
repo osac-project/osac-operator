@@ -121,9 +121,10 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.ProvisionJobID).To(Equal("new-job-123"))
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStatePending)))
-			Expect(instance.Status.ProvisionJobMessage).To(Equal("Provisioning job triggered"))
+			Expect(instance.Status.ProvisionJob).NotTo(BeNil())
+			Expect(instance.Status.ProvisionJob.ID).To(Equal("new-job-123"))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStatePending)))
+			Expect(instance.Status.ProvisionJob.Message).To(Equal("Provisioning job triggered"))
 		})
 
 		It("should handle rate limit error on trigger", func() {
@@ -137,7 +138,9 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
-			Expect(instance.Status.ProvisionJobID).To(BeEmpty())
+			if instance.Status.ProvisionJob != nil {
+				Expect(instance.Status.ProvisionJob.ID).To(BeEmpty())
+			}
 		})
 
 		It("should handle trigger error", func() {
@@ -151,12 +154,15 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateFailed)))
-			Expect(instance.Status.ProvisionJobMessage).To(ContainSubstring("Failed to trigger provisioning"))
+			Expect(instance.Status.ProvisionJob).NotTo(BeNil())
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
+			Expect(instance.Status.ProvisionJob.Message).To(ContainSubstring("Failed to trigger provisioning"))
 		})
 
 		It("should poll for status when job ID exists and job is running", func() {
-			instance.Status.ProvisionJobID = "existing-job-456"
+			instance.Status.ProvisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "existing-job-456",
+			}
 			provider := &mockProvisioningProvider{
 				getProvisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					Expect(jobID).To(Equal("existing-job-456"))
@@ -172,12 +178,14 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateRunning)))
-			Expect(instance.Status.ProvisionJobMessage).To(Equal("Job is running"))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
+			Expect(instance.Status.ProvisionJob.Message).To(Equal("Job is running"))
 		})
 
 		It("should complete when job succeeds", func() {
-			instance.Status.ProvisionJobID = "successful-job-789"
+			instance.Status.ProvisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "successful-job-789",
+			}
 			provider := &mockProvisioningProvider{
 				getProvisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					return provisioning.ProvisionStatus{
@@ -194,12 +202,14 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 			Expect(result.RequeueAfter).To(BeZero())
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateSucceeded)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
 			Expect(instance.Status.ReconciledConfigVersion).To(Equal("v1.2.3"))
 		})
 
 		It("should mark as failed when job fails", func() {
-			instance.Status.ProvisionJobID = "failed-job-999"
+			instance.Status.ProvisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "failed-job-999",
+			}
 			provider := &mockProvisioningProvider{
 				getProvisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					return provisioning.ProvisionStatus{
@@ -215,14 +225,16 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateFailed)))
-			Expect(instance.Status.ProvisionJobMessage).To(ContainSubstring("Job failed"))
-			Expect(instance.Status.ProvisionJobMessage).To(ContainSubstring("Playbook execution failed"))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
+			Expect(instance.Status.ProvisionJob.Message).To(ContainSubstring("Job failed"))
+			Expect(instance.Status.ProvisionJob.Message).To(ContainSubstring("Playbook execution failed"))
 			Expect(instance.Status.Phase).To(Equal(cloudkitv1alpha1.ComputeInstancePhaseFailed))
 		})
 
 		It("should handle status check error", func() {
-			instance.Status.ProvisionJobID = "error-job-111"
+			instance.Status.ProvisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "error-job-111",
+			}
 			provider := &mockProvisioningProvider{
 				getProvisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					return provisioning.ProvisionStatus{}, errors.New("API unavailable")
@@ -233,7 +245,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.ProvisionJobMessage).To(ContainSubstring("Failed to get job status"))
+			Expect(instance.Status.ProvisionJob.Message).To(ContainSubstring("Failed to get job status"))
 		})
 
 		It("should skip provisioning when provider is nil", func() {
@@ -242,7 +254,9 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
-			Expect(instance.Status.ProvisionJobID).To(BeEmpty())
+			if instance.Status.ProvisionJob != nil {
+				Expect(instance.Status.ProvisionJob.ID).To(BeEmpty())
+			}
 		})
 
 		It("should skip provisioning when ManagementStateManual annotation is set", func() {
@@ -255,7 +269,9 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
-			Expect(instance.Status.ProvisionJobID).To(BeEmpty())
+			if instance.Status.ProvisionJob != nil {
+				Expect(instance.Status.ProvisionJob.ID).To(BeEmpty())
+			}
 		})
 	})
 
@@ -276,9 +292,10 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.DeprovisionJobID).To(Equal("deprovision-job-123"))
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStatePending)))
-			Expect(instance.Status.DeprovisionJobMessage).To(Equal("Deprovisioning job triggered"))
+			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
+			Expect(instance.Status.DeprovisionJob.ID).To(Equal("deprovision-job-123"))
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStatePending)))
+			Expect(instance.Status.DeprovisionJob.Message).To(Equal("Deprovisioning job triggered"))
 		})
 
 		It("should handle rate limit error on deprovision trigger", func() {
@@ -292,7 +309,9 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(10 * time.Second))
-			Expect(instance.Status.DeprovisionJobID).To(BeEmpty())
+			if instance.Status.DeprovisionJob != nil {
+				Expect(instance.Status.DeprovisionJob.ID).To(BeEmpty())
+			}
 		})
 
 		It("should handle deprovision trigger error", func() {
@@ -306,12 +325,15 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateFailed)))
-			Expect(instance.Status.DeprovisionJobMessage).To(ContainSubstring("Failed to trigger deprovisioning"))
+			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
+			Expect(instance.Status.DeprovisionJob.Message).To(ContainSubstring("Failed to trigger deprovisioning"))
 		})
 
 		It("should poll for status when deprovision job is running", func() {
-			instance.Status.DeprovisionJobID = "deprovision-running-456"
+			instance.Status.DeprovisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "deprovision-running-456",
+			}
 			provider := &mockProvisioningProvider{
 				getDeprovisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					Expect(jobID).To(Equal("deprovision-running-456"))
@@ -327,14 +349,16 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateRunning)))
-			Expect(instance.Status.DeprovisionJobMessage).To(Equal("Deprovisioning in progress"))
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
+			Expect(instance.Status.DeprovisionJob.Message).To(Equal("Deprovisioning in progress"))
 			// Finalizer should still be present while job is running
 			Expect(instance.Finalizers).To(ContainElement(cloudkitAAPComputeInstanceFinalizer))
 		})
 
 		It("should handle deprovision status check error", func() {
-			instance.Status.DeprovisionJobID = "deprovision-error-222"
+			instance.Status.DeprovisionJob = &cloudkitv1alpha1.JobStatus{
+				ID: "deprovision-error-222",
+			}
 			provider := &mockProvisioningProvider{
 				getDeprovisionStatusFunc: func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
 					return provisioning.ProvisionStatus{}, errors.New("status check failed")
@@ -345,7 +369,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.DeprovisionJobMessage).To(ContainSubstring("Failed to get job status"))
+			Expect(instance.Status.DeprovisionJob.Message).To(ContainSubstring("Failed to get job status"))
 		})
 
 		It("should skip deprovisioning when ManagementStateManual annotation is set", func() {
@@ -361,7 +385,9 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// Should return immediately without triggering deprovision
 			Expect(result.RequeueAfter).To(BeZero())
-			Expect(instance.Status.DeprovisionJobID).To(BeEmpty())
+			if instance.Status.DeprovisionJob != nil {
+				Expect(instance.Status.DeprovisionJob.ID).To(BeEmpty())
+			}
 		})
 	})
 })

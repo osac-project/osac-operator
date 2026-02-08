@@ -185,8 +185,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify job was triggered
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJobID).To(Equal("prov-job-" + instanceName))
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStatePending)))
+			Expect(instance.Status.ProvisionJob).NotTo(BeNil())
+			Expect(instance.Status.ProvisionJob.ID).To(Equal("prov-job-" + instanceName))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStatePending)))
 
 			// Simulate job transitioning to running
 			provider.setProvisionJobState(provisioning.JobStateRunning, "Job is running")
@@ -200,7 +201,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status updated to running
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateRunning)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
 
 			// Simulate job completing successfully
 			provider.setProvisionJobState(provisioning.JobStateSucceeded, "Job completed")
@@ -214,7 +215,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify final status
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateSucceeded)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
 		})
 
 		It("should handle provision job failure", func() {
@@ -249,7 +250,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status shows failure
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateFailed)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
 			Expect(instance.Status.Phase).To(Equal(cloudkitv1alpha1.ComputeInstancePhaseFailed))
 		})
 	})
@@ -280,8 +281,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
 			// Verify deprovision job was triggered (in-memory state)
-			Expect(instance.Status.DeprovisionJobID).To(Equal("deprov-job-" + instanceName))
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStatePending)))
+			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
+			Expect(instance.Status.DeprovisionJob.ID).To(Equal("deprov-job-" + instanceName))
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStatePending)))
 
 			// Simulate job completing
 			provider.setDeprovisionJobState(provisioning.JobStateSucceeded, "Deprovision completed")
@@ -293,7 +295,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			// For AAP Direct: handleDeprovisioning() doesn't remove finalizers
 			// Finalizer removal is handled by handleDelete()
 			// Verify job succeeded
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateSucceeded)))
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
 		})
 
 		It("should block deletion when deprovision job fails (AAP Direct)", func() {
@@ -330,7 +332,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			// Verify deletion is blocked - status shows failed deprovision
-			Expect(instance.Status.DeprovisionJobState).To(Equal(string(provisioning.JobStateFailed)))
+			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
 		})
 	})
 
@@ -358,7 +360,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify job is pending (in-memory)
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStatePending)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStatePending)))
 
 			// Set to running and poll multiple times
 			provider.setProvisionJobState(provisioning.JobStateRunning, "Job running - step 1")
@@ -367,7 +369,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
-				Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateRunning)))
+				Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
 			}
 
 			// Finally complete
@@ -376,7 +378,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 
-			Expect(instance.Status.ProvisionJobState).To(Equal(string(provisioning.JobStateSucceeded)))
+			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
 		})
 	})
 })
