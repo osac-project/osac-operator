@@ -100,7 +100,7 @@ type Template struct {
 
 // LaunchJobTemplate launches a job template and returns the job ID.
 func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateRequest) (*LaunchJobTemplateResponse, error) {
-	url := fmt.Sprintf("%s/%s/job_templates/%s/launch/", c.baseURL, APIVersion, req.TemplateName)
+	url := fmt.Sprintf("%s/%s/%s/%s/launch/", c.baseURL, APIVersion, JobTemplatesEndpoint, req.TemplateName)
 
 	payload := map[string]any{
 		"extra_vars": req.ExtraVars,
@@ -121,7 +121,7 @@ func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateReq
 
 // LaunchWorkflowTemplate launches a workflow template and returns the job ID.
 func (c *Client) LaunchWorkflowTemplate(ctx context.Context, req LaunchWorkflowTemplateRequest) (*LaunchWorkflowTemplateResponse, error) {
-	url := fmt.Sprintf("%s/%s/workflow_job_templates/%s/launch/", c.baseURL, APIVersion, req.TemplateName)
+	url := fmt.Sprintf("%s/%s/%s/%s/launch/", c.baseURL, APIVersion, WorkflowJobTemplatesEndpoint, req.TemplateName)
 
 	payload := map[string]any{
 		"extra_vars": req.ExtraVars,
