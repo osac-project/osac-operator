@@ -33,17 +33,21 @@ import (
 // mockProvisioningProvider implements the ProvisioningProvider interface for testing
 type mockProvisioningProvider struct {
 	name                     string
-	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (string, error)
+	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
 	getProvisionStatusFunc   func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (string, error)
+	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error)
 }
 
-func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (string, error) {
+func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
 	if m.triggerProvisionFunc != nil {
 		return m.triggerProvisionFunc(ctx, resource)
 	}
-	return "mock-job-id", nil
+	return &provisioning.ProvisionResult{
+		JobID:        "mock-job-id",
+		InitialState: provisioning.JobStatePending,
+		Message:      "Provisioning job triggered",
+	}, nil
 }
 
 func (m *mockProvisioningProvider) GetProvisionStatus(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
@@ -57,16 +61,15 @@ func (m *mockProvisioningProvider) GetProvisionStatus(ctx context.Context, jobID
 	}, nil
 }
 
-func (m *mockProvisioningProvider) CancelProvision(ctx context.Context, jobID string) error {
-	// Mock implementation - always succeeds
-	return nil
-}
-
-func (m *mockProvisioningProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (string, error) {
+func (m *mockProvisioningProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
 	if m.triggerDeprovisionFunc != nil {
 		return m.triggerDeprovisionFunc(ctx, resource)
 	}
-	return "mock-deprovision-job-id", nil
+	return &provisioning.DeprovisionResult{
+		Action:                 provisioning.DeprovisionTriggered,
+		JobID:                  "mock-deprovision-job-id",
+		BlockDeletionOnFailure: true,
+	}, nil
 }
 
 func (m *mockProvisioningProvider) GetDeprovisionStatus(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
@@ -85,11 +88,6 @@ func (m *mockProvisioningProvider) Name() string {
 		return m.name
 	}
 	return "mock"
-}
-
-func (m *mockProvisioningProvider) ShouldProceedWithDeprovision(ctx context.Context, resource client.Object, provisionJob *provisioning.ProvisionStatus) (bool, *provisioning.ProvisionStatus, error) {
-	// Mock implementation - always proceed (like EDA)
-	return true, nil, nil
 }
 
 var _ = Describe("ComputeInstance Provisioning", func() {
@@ -117,8 +115,12 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 	Context("handleProvisioning", func() {
 		It("should trigger provision when no job ID exists", func() {
 			provider := &mockProvisioningProvider{
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "new-job-123", nil
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					return &provisioning.ProvisionResult{
+						JobID:        "new-job-123",
+						InitialState: provisioning.JobStatePending,
+						Message:      "Provisioning job triggered",
+					}, nil
 				},
 			}
 			reconciler.ProvisioningProvider = provider
@@ -134,8 +136,8 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should handle rate limit error on trigger", func() {
 			provider := &mockProvisioningProvider{
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "", &provisioning.RateLimitError{RetryAfter: 5 * time.Second}
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					return nil, &provisioning.RateLimitError{RetryAfter: 5 * time.Second}
 				},
 			}
 			reconciler.ProvisioningProvider = provider
@@ -150,8 +152,8 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should handle trigger error", func() {
 			provider := &mockProvisioningProvider{
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "", errors.New("trigger failed")
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					return nil, errors.New("trigger failed")
 				},
 			}
 			reconciler.ProvisioningProvider = provider
@@ -288,25 +290,29 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should trigger deprovision when no job ID exists", func() {
 			provider := &mockProvisioningProvider{
-				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "deprovision-job-123", nil
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+					return &provisioning.DeprovisionResult{
+						Action:                 provisioning.DeprovisionTriggered,
+						JobID:                  "deprovision-job-123",
+						BlockDeletionOnFailure: true,
+					}, nil
 				},
 			}
 			reconciler.ProvisioningProvider = provider
 
-			result, err := reconciler.handleDeprovisioning(ctx, instance)
+			_, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
 			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
 			Expect(instance.Status.DeprovisionJob.ID).To(Equal("deprovision-job-123"))
 			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStatePending)))
 			Expect(instance.Status.DeprovisionJob.Message).To(Equal("Deprovisioning job triggered"))
+			Expect(instance.Status.DeprovisionJob.BlockDeletionOnFailure).To(BeTrue())
 		})
 
 		It("should handle rate limit error on deprovision trigger", func() {
 			provider := &mockProvisioningProvider{
-				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "", &provisioning.RateLimitError{RetryAfter: 10 * time.Second}
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+					return nil, &provisioning.RateLimitError{RetryAfter: 10 * time.Second}
 				},
 			}
 			reconciler.ProvisioningProvider = provider
@@ -321,8 +327,8 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should handle deprovision trigger error", func() {
 			provider := &mockProvisioningProvider{
-				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (string, error) {
-					return "", errors.New("deprovision trigger failed")
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+					return nil, errors.New("deprovision trigger failed")
 				},
 			}
 			reconciler.ProvisioningProvider = provider
@@ -330,9 +336,6 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
-			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
-			Expect(instance.Status.DeprovisionJob.Message).To(ContainSubstring("Failed to trigger deprovisioning"))
 		})
 
 		It("should poll for status when deprovision job is running", func() {

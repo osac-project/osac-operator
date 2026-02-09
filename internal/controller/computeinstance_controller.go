@@ -247,7 +247,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	if instance.Status.ProvisionJob == nil || instance.Status.ProvisionJob.ID == "" {
 		// No job yet, trigger provisioning
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
-		jobID, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
+		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
 		if err != nil {
 			// Check if this is a rate limit error
 			var rateLimitErr *provisioning.RateLimitError
@@ -266,11 +266,11 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		}
 
 		instance.Status.ProvisionJob = &v1alpha1.JobStatus{
-			ID:      jobID,
-			State:   string(provisioning.JobStatePending),
-			Message: "Provisioning job triggered",
+			ID:      result.JobID,
+			State:   string(result.InitialState),
+			Message: result.Message,
 		}
-		log.Info("provisioning job triggered", "jobID", jobID)
+		log.Info("provisioning job triggered", "jobID", result.JobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
@@ -328,44 +328,11 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		return ctrl.Result{}, nil
 	}
 
-	// Check with provider if we should proceed with deprovisioning
-	// AAP Direct: polls and cancels running provision jobs
-	// EDA: always proceeds (phase is source of truth)
-	var provisionJobStatus *provisioning.ProvisionStatus
-	if instance.Status.ProvisionJob != nil && instance.Status.ProvisionJob.ID != "" {
-		provisionJobStatus = &provisioning.ProvisionStatus{
-			JobID:   instance.Status.ProvisionJob.ID,
-			State:   provisioning.JobState(instance.Status.ProvisionJob.State),
-			Message: instance.Status.ProvisionJob.Message,
-		}
-	}
-
-	shouldProceed, updatedStatus, err := r.ProvisioningProvider.ShouldProceedWithDeprovision(ctx, instance, provisionJobStatus)
-	if err != nil {
-		log.Error(err, "failed to check if deprovisioning should proceed")
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update provision job status if provider returned updated status
-	if updatedStatus != nil {
-		instance.Status.ProvisionJob.State = string(updatedStatus.State)
-		instance.Status.ProvisionJob.Message = updatedStatus.Message
-		if updatedStatus.ErrorDetails != "" {
-			instance.Status.ProvisionJob.Message = fmt.Sprintf("%s: %s", updatedStatus.Message, updatedStatus.ErrorDetails)
-		}
-	}
-
-	if !shouldProceed {
-		// Provider says we need to wait (e.g., AAP canceling provision job)
-		log.Info("waiting for provision job to terminate before deprovisioning")
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Check if we already have a job ID
+	// Trigger deprovisioning - provider decides internally if ready
 	if instance.Status.DeprovisionJob == nil || instance.Status.DeprovisionJob.ID == "" {
-		// No job yet, trigger deprovisioning
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-		jobID, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
+
+		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
 		if err != nil {
 			// Check if this is a rate limit error
 			var rateLimitErr *provisioning.RateLimitError
@@ -374,22 +341,34 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
 			}
 
-			// Actual error - mark as failed
+			// Actual error
 			log.Error(err, "failed to trigger deprovisioning")
-			instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
-				State:   string(provisioning.JobStateFailed),
-				Message: fmt.Sprintf("Failed to trigger deprovisioning: %v", err),
-			}
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
-		instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
-			ID:      jobID,
-			State:   string(provisioning.JobStatePending),
-			Message: "Deprovisioning job triggered",
+		// Handle provider action
+		switch result.Action {
+		case provisioning.DeprovisionWaiting:
+			// Provider not ready yet (e.g., canceling provision job)
+			log.Info("deprovisioning not ready, requeueing")
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+		case provisioning.DeprovisionSkipped:
+			// Provider determined deprovisioning not needed (e.g., EDA without finalizer)
+			log.Info("provider skipped deprovisioning")
+			return ctrl.Result{}, nil
+
+		case provisioning.DeprovisionTriggered:
+			// Deprovision started successfully
+			instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
+				ID:                     result.JobID,
+				State:                  string(provisioning.JobStatePending),
+				Message:                "Deprovisioning job triggered",
+				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
+			}
+			log.Info("deprovisioning job triggered", "jobID", result.JobID)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
-		log.Info("deprovisioning job triggered", "jobID", jobID)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// We have a job ID, check its status
@@ -422,33 +401,21 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 
 	// Job failed or was canceled
-	// Behavior depends on provider type
-	switch r.ProvisioningProvider.Name() {
-	case provisioning.ProviderTypeAAP:
-		// AAP Direct: We have full visibility and control
-		// Block deletion to prevent orphaned cloud resources
-		// Operator admin must manually intervene to clean up and remove finalizer
+	// Check policy stored in job status
+	if instance.Status.DeprovisionJob.BlockDeletionOnFailure {
+		// Block deletion to prevent orphaned resources
 		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
 			"jobID", instance.Status.DeprovisionJob.ID,
 			"state", status.State,
 			"message", instance.Status.DeprovisionJob.Message)
-		// Keep requeueing - admin must manually fix and remove finalizer to allow deletion
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-	case provisioning.ProviderTypeEDA:
-		// EDA: Webhook-based, we can't control the outcome
-		// AAP playbook handles finalizer removal, allow process to continue
-		log.Info("deprovision job did not succeed (EDA flow), allowing webhook process to continue",
+	} else {
+		// Allow process to continue (webhook handles cleanup)
+		log.Info("deprovision job did not succeed, allowing process to continue",
 			"jobID", instance.Status.DeprovisionJob.ID,
 			"state", status.State,
 			"message", instance.Status.DeprovisionJob.Message)
 		return ctrl.Result{}, nil
-
-	default:
-		// Unknown provider, log and requeue for safety
-		log.Error(nil, "unknown provider type, blocking deletion",
-			"provider", r.ProvisioningProvider.Name())
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 }
 
@@ -542,34 +509,19 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	// Handle deletion flow based on provider type
-	switch r.ProvisioningProvider.Name() {
-	case provisioning.ProviderTypeEDA:
-		// EDA flow: Only deprovision if AAP finalizer exists (set by AAP playbook during provision)
-		// The AAP playbook triggered via EDA webhook handles deprovision and finalizer removal
-		if controllerutil.ContainsFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-			log.Info("AAP finalizer present, handling deprovisioning via EDA")
-			return r.handleDeprovisioning(ctx, instance)
-		}
-		// No AAP finalizer - nothing to deprovision, proceed to remove base finalizer
-		log.Info("no AAP finalizer, skipping deprovisioning")
-
-	case provisioning.ProviderTypeAAP:
-		// AAP Direct flow: Controller manages entire lifecycle via REST API
-		// Cancel running provision job (if any) and trigger deprovision
-		log.Info("handling deprovisioning via AAP Direct provider")
-		result, err := r.handleDeprovisioning(ctx, instance)
-		if err != nil {
-			return result, err
-		}
-		// If we need to requeue (jobs still running), do so
-		if result.RequeueAfter > 0 {
-			return result, nil
-		}
-		// Deprovision complete, proceed to remove base finalizer
+	// Handle deprovisioning - provider decides internally if needed
+	log.Info("handling deletion")
+	result, err := r.handleDeprovisioning(ctx, instance)
+	if err != nil {
+		return result, err
 	}
 
-	// Remove base finalizer to allow Kubernetes to delete the resource
+	// If we need to requeue (jobs still running or provider needs time), do so
+	if result.RequeueAfter > 0 {
+		return result, nil
+	}
+
+	// Deprovisioning complete or skipped, remove base finalizer
 	if controllerutil.RemoveFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err

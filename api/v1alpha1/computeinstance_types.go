@@ -126,6 +126,12 @@ type JobStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	Message string `json:"message,omitempty"`
+
+	// BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails
+	// AAP Direct sets this to true to prevent orphaned cloud resources
+	// EDA sets this to false as webhook handles cleanup
+	// +kubebuilder:validation:Optional
+	BlockDeletionOnFailure bool `json:"blockDeletionOnFailure,omitempty"`
 }
 
 // ComputeInstanceStatus defines the observed state of ComputeInstance.

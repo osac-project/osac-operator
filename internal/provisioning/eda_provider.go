@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/innabox/cloudkit-operator/internal/webhook"
 )
@@ -45,27 +47,32 @@ func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *E
 // TriggerProvision triggers provisioning via EDA webhook.
 // Returns the resource name as job ID since EDA doesn't provide a real job ID.
 // Returns RateLimitError if the request is rate-limited.
-func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (string, error) {
+func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
 	if p.createURL == "" {
-		return "", fmt.Errorf("create webhook URL not configured")
+		return nil, fmt.Errorf("create webhook URL not configured")
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
 	if !ok {
-		return "", fmt.Errorf("resource does not implement webhook.Resource interface")
+		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
 	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.createURL, webhookResource)
 	if err != nil {
-		return "", fmt.Errorf("failed to trigger create webhook: %w", err)
+		return nil, fmt.Errorf("failed to trigger create webhook: %w", err)
 	}
 
 	// If we're within the rate limit window, return rate limit error
 	if remainingTime > 0 {
-		return "", &RateLimitError{RetryAfter: remainingTime}
+		return nil, &RateLimitError{RetryAfter: remainingTime}
 	}
 
-	return resource.GetName(), nil
+	resourceName := resource.GetName()
+	return &ProvisionResult{
+		JobID:        resourceName,
+		InitialState: JobStateRunning,
+		Message:      "Webhook sent to EDA, provisioning in progress",
+	}, nil
 }
 
 // GetProvisionStatus checks provisioning status.
@@ -79,37 +86,47 @@ func (p *EDAProvider) GetProvisionStatus(ctx context.Context, jobID string) (Pro
 	}, nil
 }
 
-// CancelProvision is a no-op for EDA provider as it doesn't support job cancellation.
-// EDA workflows are fire-and-forget and cannot be canceled through the provider.
-func (p *EDAProvider) CancelProvision(ctx context.Context, jobID string) error {
-	// EDA provider does not support cancellation
-	return nil
-}
-
 // TriggerDeprovision triggers deprovisioning via EDA webhook.
 // Returns the resource name as job ID since EDA doesn't provide a real job ID.
 // Returns RateLimitError if the request is rate-limited.
-func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (string, error) {
+func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// EDA only deprovisions if AAP finalizer exists (set by playbook during provision)
+	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
+		log.Info("no AAP finalizer, skipping EDA deprovisioning")
+		return &DeprovisionResult{
+			Action:                 DeprovisionSkipped,
+			BlockDeletionOnFailure: false,
+		}, nil
+	}
+
+	// Trigger webhook
 	if p.deleteURL == "" {
-		return "", fmt.Errorf("delete webhook URL not configured")
+		return nil, fmt.Errorf("delete webhook URL not configured")
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
 	if !ok {
-		return "", fmt.Errorf("resource does not implement webhook.Resource interface")
+		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
 	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.deleteURL, webhookResource)
 	if err != nil {
-		return "", fmt.Errorf("failed to trigger delete webhook: %w", err)
+		return nil, fmt.Errorf("failed to trigger delete webhook: %w", err)
 	}
 
 	// If we're within the rate limit window, return rate limit error
 	if remainingTime > 0 {
-		return "", &RateLimitError{RetryAfter: remainingTime}
+		return nil, &RateLimitError{RetryAfter: remainingTime}
 	}
 
-	return resource.GetName(), nil
+	resourceName := resource.GetName()
+	return &DeprovisionResult{
+		Action:                 DeprovisionTriggered,
+		JobID:                  resourceName,
+		BlockDeletionOnFailure: false,
+	}, nil
 }
 
 // GetDeprovisionStatus checks deprovisioning status.
@@ -126,13 +143,4 @@ func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, jobID string) (P
 // Name returns the provider name for logging.
 func (p *EDAProvider) Name() string {
 	return "eda"
-}
-
-// ShouldProceedWithDeprovision determines if deprovisioning should proceed for EDA.
-// EDA is fire-and-forget and doesn't support job status polling, so always proceed.
-// The ComputeInstance phase (Ready/Failed) indicates if provisioning completed.
-func (p *EDAProvider) ShouldProceedWithDeprovision(ctx context.Context, resource client.Object, provisionJob *ProvisionStatus) (shouldProceed bool, updatedStatus *ProvisionStatus, err error) {
-	// EDA provider: always proceed with deprovisioning
-	// Phase field is the source of truth for completion status
-	return true, nil, nil
 }

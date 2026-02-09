@@ -73,9 +73,11 @@ var _ = Describe("EDAProvider", func() {
 			})
 
 			It("should return resource name as job ID", func() {
-				jobID, err := provider.TriggerProvision(ctx, resource)
+				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(jobID).To(Equal("test-resource"))
+				Expect(result.JobID).To(Equal("test-resource"))
+				Expect(result.InitialState).To(Equal(provisioning.JobStateRunning))
+				Expect(result.Message).To(Equal("Webhook sent to EDA, provisioning in progress"))
 			})
 		})
 
@@ -134,8 +136,9 @@ var _ = Describe("EDAProvider", func() {
 	})
 
 	Describe("TriggerDeprovision", func() {
-		Context("when webhook succeeds", func() {
+		Context("when webhook succeeds and AAP finalizer exists", func() {
 			BeforeEach(func() {
+				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					Expect(url).To(Equal("http://delete-url"))
 					return 0, nil
@@ -143,14 +146,31 @@ var _ = Describe("EDAProvider", func() {
 			})
 
 			It("should return resource name as job ID", func() {
-				jobID, err := provider.TriggerDeprovision(ctx, resource)
+				result, err := provider.TriggerDeprovision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(jobID).To(Equal("test-resource"))
+				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+				Expect(result.JobID).To(Equal("test-resource"))
+				Expect(result.BlockDeletionOnFailure).To(BeFalse())
+			})
+		})
+
+		Context("when AAP finalizer does not exist", func() {
+			BeforeEach(func() {
+				resource.Finalizers = []string{}
+			})
+
+			It("should skip deprovisioning", func() {
+				result, err := provider.TriggerDeprovision(ctx, resource)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Action).To(Equal(provisioning.DeprovisionSkipped))
+				Expect(result.JobID).To(BeEmpty())
+				Expect(result.BlockDeletionOnFailure).To(BeFalse())
 			})
 		})
 
 		Context("when webhook fails", func() {
 			BeforeEach(func() {
+				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 0, errors.New("webhook error")
 				}
@@ -165,6 +185,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when delete URL is empty", func() {
 			BeforeEach(func() {
+				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "")
 			})
 
@@ -177,6 +198,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when webhook is rate-limited", func() {
 			BeforeEach(func() {
+				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 3 * time.Second, nil

@@ -53,18 +53,22 @@ func newControllableProvider() *controllableProvider {
 	}
 }
 
-func (p *controllableProvider) TriggerProvision(ctx context.Context, resource client.Object) (string, error) {
+func (p *controllableProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.provisionTriggerErr != nil {
-		return "", p.provisionTriggerErr
+		return nil, p.provisionTriggerErr
 	}
 
 	p.provisionJobID = "prov-job-" + resource.GetName()
 	p.provisionJobState = provisioning.JobStatePending
 	p.provisionJobMsg = "Job triggered"
-	return p.provisionJobID, nil
+	return &provisioning.ProvisionResult{
+		JobID:        p.provisionJobID,
+		InitialState: provisioning.JobStatePending,
+		Message:      "Job triggered",
+	}, nil
 }
 
 func (p *controllableProvider) GetProvisionStatus(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
@@ -78,28 +82,38 @@ func (p *controllableProvider) GetProvisionStatus(ctx context.Context, jobID str
 	}, nil
 }
 
-func (p *controllableProvider) CancelProvision(ctx context.Context, jobID string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// In tests, immediately transition to canceled state
-	p.provisionJobState = provisioning.JobStateCanceled
-	p.provisionJobMsg = "Job canceled"
-	return nil
-}
-
-func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (string, error) {
+func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.deprovisionTriggerErr != nil {
-		return "", p.deprovisionTriggerErr
+		return nil, p.deprovisionTriggerErr
+	}
+
+	instance := resource.(*cloudkitv1alpha1.ComputeInstance)
+
+	// Check if provision job needs to be terminated first (AAP behavior)
+	if instance.Status.ProvisionJob != nil && instance.Status.ProvisionJob.ID != "" {
+		if !p.provisionJobState.IsTerminal() {
+			// Cancel the provision job
+			p.provisionJobState = provisioning.JobStateCanceled
+			p.provisionJobMsg = "Job canceled"
+			// Return waiting - need to poll again
+			return &provisioning.DeprovisionResult{
+				Action:                 provisioning.DeprovisionWaiting,
+				BlockDeletionOnFailure: true,
+			}, nil
+		}
 	}
 
 	p.deprovisionJobID = "deprov-job-" + resource.GetName()
 	p.deprovisionJobState = provisioning.JobStatePending
 	p.deprovisionJobMsg = "Deprovision job triggered"
-	return p.deprovisionJobID, nil
+	return &provisioning.DeprovisionResult{
+		Action:                 provisioning.DeprovisionTriggered,
+		JobID:                  p.deprovisionJobID,
+		BlockDeletionOnFailure: true,
+	}, nil
 }
 
 func (p *controllableProvider) GetDeprovisionStatus(ctx context.Context, jobID string) (provisioning.ProvisionStatus, error) {
@@ -115,33 +129,6 @@ func (p *controllableProvider) GetDeprovisionStatus(ctx context.Context, jobID s
 
 func (p *controllableProvider) Name() string {
 	return provisioning.ProviderTypeAAP
-}
-
-func (p *controllableProvider) ShouldProceedWithDeprovision(ctx context.Context, resource client.Object, provisionJob *provisioning.ProvisionStatus) (bool, *provisioning.ProvisionStatus, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// No provision job, safe to proceed
-	if provisionJob == nil || provisionJob.JobID == "" {
-		return true, nil, nil
-	}
-
-	// Get current status
-	status := provisioning.ProvisionStatus{
-		JobID:   provisionJob.JobID,
-		State:   p.provisionJobState,
-		Message: p.provisionJobMsg,
-	}
-
-	// If terminal, proceed
-	if status.State.IsTerminal() {
-		return true, &status, nil
-	}
-
-	// Still running - cancel it
-	p.provisionJobState = provisioning.JobStateCanceled
-	p.provisionJobMsg = "Job canceled"
-	return false, &status, nil
 }
 
 // setProvisionJobState updates the provision job state (thread-safe)

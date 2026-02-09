@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
 )
 
@@ -40,7 +41,21 @@ func NewAAPProvider(client AAPClient, provisionTemplate, deprovisionTemplate str
 
 // TriggerProvision triggers provisioning via AAP API.
 // Autodetects whether the template is a job_template or workflow_job_template.
-func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Object) (string, error) {
+func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
+	jobID, err := p.launchProvisionJob(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ProvisionResult{
+		JobID:        jobID,
+		InitialState: JobStatePending,
+		Message:      "Provisioning job triggered",
+	}, nil
+}
+
+// launchProvisionJob launches the provision template and returns the job ID.
+func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Object) (string, error) {
 	if p.provisionTemplate == "" {
 		return "", fmt.Errorf("provision template not configured")
 	}
@@ -89,10 +104,78 @@ func (p *AAPProvider) GetProvisionStatus(ctx context.Context, jobID string) (Pro
 	return p.getJobStatus(ctx, jobID)
 }
 
-// CancelProvision attempts to cancel a running provision job via AAP API.
+// TriggerDeprovision attempts to start deprovisioning for a resource.
+func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
+	instance := resource.(*v1alpha1.ComputeInstance)
+
+	// Check if provision job needs to be terminated first
+	if ready, err := p.isReadyForDeprovision(ctx, instance); err != nil {
+		return nil, err
+	} else if !ready {
+		return &DeprovisionResult{
+			Action:                 DeprovisionWaiting,
+			BlockDeletionOnFailure: true,
+		}, nil
+	}
+
+	// Launch deprovision job
+	jobID, err := p.launchDeprovisionJob(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DeprovisionResult{
+		Action:                 DeprovisionTriggered,
+		JobID:                  jobID,
+		BlockDeletionOnFailure: true,
+	}, nil
+}
+
+// isReadyForDeprovision checks if provision job is terminal before deprovisioning.
+// Returns true if ready to deprovision, false if need to wait for provision job cancellation.
+func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alpha1.ComputeInstance) (bool, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// No provision job or job ID missing - ready to proceed
+	if instance.Status.ProvisionJob == nil || instance.Status.ProvisionJob.ID == "" {
+		return true, nil
+	}
+
+	// Check provision job status
+	status, err := p.GetProvisionStatus(ctx, instance.Status.ProvisionJob.ID)
+	if err != nil {
+		var notFoundErr *aap.NotFoundError
+		if errors.As(err, &notFoundErr) {
+			log.Info("AAP job not found (purged), treating as terminal", "jobID", instance.Status.ProvisionJob.ID)
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to get provision job status: %w", err)
+	}
+
+	// Job already terminal - ready to proceed
+	if status.State.IsTerminal() {
+		return true, nil
+	}
+
+	// Job still running - cancel it
+	if err := p.cancelProvisionJob(ctx, instance.Status.ProvisionJob.ID); err != nil {
+		var methodNotAllowedErr *aap.MethodNotAllowedError
+		if !errors.As(err, &methodNotAllowedErr) {
+			return false, fmt.Errorf("failed to cancel provision job: %w", err)
+		}
+		// 405 means already terminal, proceed
+		return true, nil
+	}
+
+	// Cancellation initiated - need to wait
+	log.Info("provision job cancellation initiated, waiting for termination", "jobID", instance.Status.ProvisionJob.ID)
+	return false, nil
+}
+
+// cancelProvisionJob attempts to cancel a running provision job via AAP API.
 // Returns nil if cancellation was initiated successfully or if the job is already in a terminal state (HTTP 405).
 // Note: Cancellation is asynchronous. The job status should be polled to confirm termination.
-func (p *AAPProvider) CancelProvision(ctx context.Context, jobID string) error {
+func (p *AAPProvider) cancelProvisionJob(ctx context.Context, jobID string) error {
 	// Attempt to cancel the job
 	// HTTP 202 → cancellation initiated
 	// HTTP 405 → job already terminal (not an error)
@@ -110,9 +193,8 @@ func (p *AAPProvider) CancelProvision(ctx context.Context, jobID string) error {
 	return nil
 }
 
-// TriggerDeprovision triggers deprovisioning via AAP API.
-// Autodetects whether the template is a job_template or workflow_job_template.
-func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (string, error) {
+// launchDeprovisionJob launches the deprovision template and returns the job ID.
+func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.Object) (string, error) {
 	if p.deprovisionTemplate == "" {
 		return "", fmt.Errorf("deprovision template not configured")
 	}
@@ -164,43 +246,6 @@ func (p *AAPProvider) GetDeprovisionStatus(ctx context.Context, jobID string) (P
 // Name returns the provider name for logging.
 func (p *AAPProvider) Name() string {
 	return "aap"
-}
-
-// ShouldProceedWithDeprovision determines if deprovisioning should proceed for AAP Direct.
-// AAP Direct needs to check if any provision job is running and cancel it before deprovisioning.
-func (p *AAPProvider) ShouldProceedWithDeprovision(ctx context.Context, resource client.Object, provisionJob *ProvisionStatus) (shouldProceed bool, updatedStatus *ProvisionStatus, err error) {
-	log := ctrllog.FromContext(ctx)
-
-	// No provision job - unexpected for AAP Direct but safe to proceed
-	if provisionJob == nil || provisionJob.JobID == "" {
-		log.Info("AAP Direct: no provision job found during deprovision (unexpected but safe to proceed)")
-		return true, nil, nil
-	}
-
-	// Poll current job status from AAP (don't trust cached status during deletion)
-	status, err := p.GetProvisionStatus(ctx, provisionJob.JobID)
-	if err != nil {
-		// If job not found (404), treat as terminal - AAP may have purged old jobs
-		var notFoundErr *aap.NotFoundError
-		if errors.As(err, &notFoundErr) {
-			log.Info("AAP job not found, treating as terminal and proceeding with deprovision", "jobID", provisionJob.JobID)
-			return true, nil, nil
-		}
-		return false, nil, fmt.Errorf("failed to get provision job status: %w", err)
-	}
-
-	// Provision job already in terminal state, safe to proceed
-	if status.State.IsTerminal() {
-		return true, &status, nil
-	}
-
-	// Provision job is still running - cancel it
-	if err := p.CancelProvision(ctx, provisionJob.JobID); err != nil {
-		return false, nil, fmt.Errorf("failed to cancel provision job: %w", err)
-	}
-
-	// Cancellation initiated - need to requeue and wait for terminal state
-	return false, &status, nil
 }
 
 // getJobStatus retrieves job status from AAP and converts it to ProvisionStatus.

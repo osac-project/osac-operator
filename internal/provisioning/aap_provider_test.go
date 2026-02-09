@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
 	"github.com/innabox/cloudkit-operator/internal/provisioning"
 )
@@ -115,9 +116,11 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should launch job template and return job ID", func() {
-				jobID, err := provider.TriggerProvision(ctx, resource)
+				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(jobID).To(Equal("123"))
+				Expect(result.JobID).To(Equal("123"))
+				Expect(result.InitialState).To(Equal(provisioning.JobStatePending))
+				Expect(result.Message).To(Equal("Provisioning job triggered"))
 			})
 		})
 
@@ -140,9 +143,11 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should launch workflow template and return job ID", func() {
-				jobID, err := provider.TriggerProvision(ctx, resource)
+				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(jobID).To(Equal("456"))
+				Expect(result.JobID).To(Equal("456"))
+				Expect(result.InitialState).To(Equal(provisioning.JobStatePending))
+				Expect(result.Message).To(Equal("Provisioning job triggered"))
 			})
 		})
 
@@ -299,6 +304,17 @@ var _ = Describe("AAPProvider", func() {
 	})
 
 	Describe("TriggerDeprovision", func() {
+		var instance *v1alpha1.ComputeInstance
+
+		BeforeEach(func() {
+			instance = &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-instance",
+					Namespace: "default",
+				},
+			}
+		})
+
 		Context("with job template", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
@@ -312,9 +328,11 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should launch job template and return job ID", func() {
-				jobID, err := provider.TriggerDeprovision(ctx, resource)
+				result, err := provider.TriggerDeprovision(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(jobID).To(Equal("999"))
+				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+				Expect(result.JobID).To(Equal("999"))
+				Expect(result.BlockDeletionOnFailure).To(BeTrue())
 			})
 		})
 
@@ -324,7 +342,7 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.TriggerDeprovision(ctx, resource)
+				_, err := provider.TriggerDeprovision(ctx, instance)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("deprovision template not configured"))
 			})
@@ -353,34 +371,6 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("888"))
 			Expect(status.State).To(Equal(provisioning.JobStateSucceeded))
-		})
-	})
-
-	Describe("CancelProvision", func() {
-		Context("when cancellation succeeds", func() {
-			BeforeEach(func() {
-				aapClient.cancelJobFunc = func(ctx context.Context, jobID string) error {
-					return nil
-				}
-			})
-
-			It("should return no error", func() {
-				err := provider.CancelProvision(ctx, "123")
-				Expect(err).NotTo(HaveOccurred())
-			})
-		})
-
-		Context("when job is already terminal (method not allowed)", func() {
-			BeforeEach(func() {
-				aapClient.cancelJobFunc = func(ctx context.Context, jobID string) error {
-					return fmt.Errorf("received non-success status code 405: Method not allowed")
-				}
-			})
-
-			It("should return no error (job already terminal)", func() {
-				err := provider.CancelProvision(ctx, "456")
-				Expect(err).NotTo(HaveOccurred())
-			})
 		})
 	})
 
