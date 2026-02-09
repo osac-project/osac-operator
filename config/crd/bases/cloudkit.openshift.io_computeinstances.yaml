@@ -157,13 +157,15 @@ spec:
                   state:
                     description: |-
                       State is the current state of the job
-                      Valid values: Pending, Running, Succeeded, Failed, Canceled
+                      Valid values: Pending, Waiting, Running, Succeeded, Failed, Canceled, Unknown
                     enum:
                     - Pending
+                    - Waiting
                     - Running
                     - Succeeded
                     - Failed
                     - Canceled
+                    - Unknown
                     type: string
                 type: object
               desiredConfigVersion:
@@ -206,13 +208,15 @@ spec:
                   state:
                     description: |-
                       State is the current state of the job
-                      Valid values: Pending, Running, Succeeded, Failed, Canceled
+                      Valid values: Pending, Waiting, Running, Succeeded, Failed, Canceled, Unknown
                     enum:
                     - Pending
+                    - Waiting
                     - Running
                     - Succeeded
                     - Failed
                     - Canceled
+                    - Unknown
                     type: string
                 type: object
               reconciledConfigVersion:

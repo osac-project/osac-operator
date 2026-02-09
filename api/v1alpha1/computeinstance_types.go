@@ -116,10 +116,10 @@ type JobStatus struct {
 	ID string `json:"id,omitempty"`
 
 	// State is the current state of the job
-	// Valid values: Pending, Running, Succeeded, Failed, Canceled
+	// Valid values: Pending, Waiting, Running, Succeeded, Failed, Canceled, Unknown
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled
+	// +kubebuilder:validation:Enum=Pending;Waiting;Running;Succeeded;Failed;Canceled;Unknown
 	State string `json:"state,omitempty"`
 
 	// Message provides human-readable status or error information
