@@ -350,6 +350,11 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		switch result.Action {
 		case provisioning.DeprovisionWaiting:
 			// Provider not ready yet (e.g., canceling provision job)
+			// Update provision job state if provider returned one (e.g., cancellation in progress)
+			if result.ProvisionJobState != "" && instance.Status.ProvisionJob != nil {
+				instance.Status.ProvisionJob.State = string(result.ProvisionJobState)
+				log.Info("updated provision job state while waiting for deprovision", "state", result.ProvisionJobState)
+			}
 			log.Info("deprovisioning not ready, requeueing")
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 

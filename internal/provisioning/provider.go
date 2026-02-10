@@ -56,6 +56,11 @@ type DeprovisionResult struct {
 	// Stored in CR status for crash recovery (controller restart)
 	// Providers set based on their cleanup guarantees
 	BlockDeletionOnFailure bool
+
+	// ProvisionJobState is the current state of the provision job when Action==DeprovisionWaiting
+	// This allows the controller to update the CR status to reflect job cancellation
+	// Empty for other actions
+	ProvisionJobState JobState
 }
 
 // ProvisioningProvider abstracts the mechanism for triggering infrastructure automation
