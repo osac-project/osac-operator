@@ -27,8 +27,8 @@ The operator supports two provisioning providers for ComputeInstance resources:
 - `CLOUDKIT_PROVISIONING_PROVIDER` -- selects the provider: `"eda"` (default) or `"aap"`
 
 **EDA Provider (default):**
-- `CLOUDKIT_COMPUTE_INSTANCE_CREATE_WEBHOOK` -- webhook URL for provisioning
-- `CLOUDKIT_COMPUTE_INSTANCE_DELETE_WEBHOOK` -- webhook URL for deprovisioning
+- `CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK` -- webhook URL for provisioning
+- `CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` -- webhook URL for deprovisioning
 
 **AAP Provider:**
 - `CLOUDKIT_AAP_URL` -- AAP server URL (required)
