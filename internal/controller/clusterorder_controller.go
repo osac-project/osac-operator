@@ -30,13 +30,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
@@ -104,7 +106,7 @@ func NewClusterOrderReconciler(
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	instance := &v1alpha1.ClusterOrder{}
@@ -125,9 +127,9 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		res, err = r.handleUpdate(ctx, req.Request, instance)
 	} else {
-		res, err = r.handleDelete(ctx, req, instance)
+		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if err == nil {
@@ -152,7 +154,7 @@ func NamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -165,32 +167,32 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace))).
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.ClusterOrder{}, mcbuilder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace))).
 		Watches(
 			&corev1.Namespace{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&corev1.ServiceAccount{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&rbacv1.RoleBinding{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.HostedCluster{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.NodePool{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Complete(r)
 }
@@ -238,7 +240,7 @@ func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj cli
 	}
 }
 
-func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
@@ -452,7 +454,7 @@ func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1
 	return &namespaceList.Items[0], nil
 }
 
-func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 

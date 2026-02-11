@@ -25,8 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	ckv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
@@ -61,15 +63,15 @@ func NewFeedbackReconciler(logger logr.Logger, hubClient clnt.Client, grpcConn *
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *FeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *FeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	return mcbuilder.ControllerManagedBy(mgr).
 		Named("clusterorder-feedback").
-		For(&ckv1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.clusterOrderNamespace))).
+		For(&ckv1alpha1.ClusterOrder{}, mcbuilder.WithPredicates(NamespacePredicate(r.clusterOrderNamespace))).
 		Complete(r)
 }
 
 // Reconcile is the implementation of the reconciler interface.
-func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
+func (r *FeedbackReconciler) Reconcile(ctx context.Context, request mcreconcile.Request) (result ctrl.Result, err error) {
 	// Fetch the object to reconcile, and do nothing if it no longer exists:
 	object := &ckv1alpha1.ClusterOrder{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)

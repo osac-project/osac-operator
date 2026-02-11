@@ -31,13 +31,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/provisioning"
@@ -134,7 +136,7 @@ func updateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	instance := &v1alpha1.ComputeInstance{}
@@ -155,9 +157,9 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		res, err = r.handleUpdate(ctx, req.Request, instance)
 	} else {
-		res, err = r.handleDelete(ctx, req, instance)
+		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
@@ -196,7 +198,7 @@ func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -209,21 +211,17 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.ComputeInstance{}, builder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace))).
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.ComputeInstance{}, mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace))).
 		Watches(
 			&kubevirtv1.VirtualMachine{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToComputeInstance),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToComputeInstance),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&v1alpha1.Tenant{},
-			handler.EnqueueRequestForOwner(
-				mgr.GetScheme(),
-				mgr.GetRESTMapper(),
-				&v1alpha1.ComputeInstance{},
-			),
-			builder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+			mchandler.EnqueueRequestForOwner(&v1alpha1.ComputeInstance{}),
+			mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
 		).
 		Complete(r)
 }
@@ -512,7 +510,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 }
 
-func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
@@ -591,7 +589,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	return r.handleProvisioning(ctx, instance)
 }
 
-func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting compute instance")
 

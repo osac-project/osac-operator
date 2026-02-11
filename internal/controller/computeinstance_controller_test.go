@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/provisioning"
@@ -84,8 +85,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
 					StatusPollInterval:   100 * time.Millisecond,
 				}
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
+				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+					Request: reconcile.Request{NamespacedName: typeNamespacedName},
 				})
 				return err
 			}).Should(Succeed())
@@ -99,8 +100,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 				StatusPollInterval:   100 * time.Millisecond,
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			})
 			Expect(err).NotTo(HaveOccurred())
 

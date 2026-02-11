@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
@@ -121,10 +122,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 	Context("When reconciling a resource that doesn't exist", func() {
 		It("should return without error", func() {
-			request := reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      "non-existent",
-					Namespace: computeInstanceNS,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      "non-existent",
+						Namespace: computeInstanceNS,
+					},
 				},
 			}
 			result, err := reconciler.Reconcile(ctx, request)
@@ -157,8 +160,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should skip reconciliation", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -207,8 +210,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should skip feedback reconciliation", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -280,8 +283,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should successfully sync conditions and phase", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -292,8 +295,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should sync Progressing condition to Progressing condition", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -319,8 +322,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseStarting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -334,8 +337,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseFailed
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -348,8 +351,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			mockClient.updateCount = 0
 			mockClient.updateCalled = false
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 
 			// First reconciliation - should trigger an update
@@ -384,8 +387,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			computeInstance.Status.LastRestartedAt = &restartTime
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -403,8 +406,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 			Expect(computeInstance.Status.LastRestartedAt).To(BeNil())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -430,8 +433,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			})
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -465,8 +468,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			})
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
@@ -496,8 +499,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed)))
 			}
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			request := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())

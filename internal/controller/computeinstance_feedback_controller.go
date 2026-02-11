@@ -20,9 +20,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	ckv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
@@ -54,15 +56,15 @@ func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *ComputeInstanceFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *ComputeInstanceFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	return mcbuilder.ControllerManagedBy(mgr).
 		Named("computeinstance-feedback").
-		For(&ckv1alpha1.ComputeInstance{}, builder.WithPredicates(ComputeInstanceNamespacePredicate(r.computeInstanceNamespace))).
+		For(&ckv1alpha1.ComputeInstance{}, mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.computeInstanceNamespace))).
 		Complete(r)
 }
 
 // Reconcile is the implementation of the reconciler interface.
-func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
+func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request mcreconcile.Request) (result ctrl.Result, err error) {
 	log := ctrllog.FromContext(ctx)
 
 	// Fetch the object to reconcile, and do nothing if it no longer exists:

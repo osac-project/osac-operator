@@ -26,13 +26,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
@@ -91,7 +93,7 @@ func NewHostPoolReconciler(
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *HostPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *HostPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	instance := &v1alpha1.HostPool{}
@@ -112,9 +114,9 @@ func (r *HostPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		res, err = r.handleUpdate(ctx, req.Request, instance)
 	} else {
-		res, err = r.handleDelete(ctx, req, instance)
+		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if err == nil {
@@ -139,7 +141,7 @@ func HostPoolNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *HostPoolReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -152,12 +154,12 @@ func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.HostPool{}, builder.WithPredicates(HostPoolNamespacePredicate(r.HostPoolNamespace))).
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.HostPool{}, mcbuilder.WithPredicates(HostPoolNamespacePredicate(r.HostPoolNamespace))).
 		Watches(
 			&corev1.Namespace{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToHostPool),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToHostPool),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Complete(r)
 }
@@ -193,7 +195,7 @@ func (r *HostPoolReconciler) mapObjectToHostPool(ctx context.Context, obj client
 }
 
 // handleUpdate handles creation and update operations for HostPool
-func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req ctrl.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
+func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req reconcile.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	log.Info("handling update for HostPool", "name", instance.Name)
@@ -275,7 +277,7 @@ func (r *HostPoolReconciler) findNamespace(ctx context.Context, instance *v1alph
 }
 
 // handleDelete handles deletion operations for HostPool
-func (r *HostPoolReconciler) handleDelete(ctx context.Context, req ctrl.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
+func (r *HostPoolReconciler) handleDelete(ctx context.Context, req reconcile.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("handling delete for HostPool", "name", instance.Name)
 
