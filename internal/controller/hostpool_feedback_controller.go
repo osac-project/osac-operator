@@ -15,6 +15,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
@@ -23,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	ckv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
@@ -55,8 +57,13 @@ func NewHostPoolFeedbackReconciler(logger logr.Logger, hubClient clnt.Client, gr
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *HostPoolFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *HostPoolFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		Named("hostpool-feedback").
 		For(&ckv1alpha1.HostPool{}, builder.WithPredicates(HostPoolNamespacePredicate(r.hostPoolNamespace))).
 		Complete(r)

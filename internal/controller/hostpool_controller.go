@@ -33,6 +33,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
@@ -139,7 +140,7 @@ func HostPoolNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *HostPoolReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -152,7 +153,12 @@ func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		For(&v1alpha1.HostPool{}, builder.WithPredicates(HostPoolNamespacePredicate(r.HostPoolNamespace))).
 		Watches(
 			&corev1.Namespace{},
@@ -193,7 +199,7 @@ func (r *HostPoolReconciler) mapObjectToHostPool(ctx context.Context, obj client
 }
 
 // handleUpdate handles creation and update operations for HostPool
-func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req ctrl.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
+func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req reconcile.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	log.Info("handling update for HostPool", "name", instance.Name)
@@ -275,7 +281,7 @@ func (r *HostPoolReconciler) findNamespace(ctx context.Context, instance *v1alph
 }
 
 // handleDelete handles deletion operations for HostPool
-func (r *HostPoolReconciler) handleDelete(ctx context.Context, req ctrl.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
+func (r *HostPoolReconciler) handleDelete(ctx context.Context, req reconcile.Request, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("handling delete for HostPool", "name", instance.Name)
 

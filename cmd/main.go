@@ -45,9 +45,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	v1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
@@ -304,7 +306,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), nil, manager.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -329,6 +331,7 @@ func main() {
 	}
 
 	computeInstanceNamespace := os.Getenv("CLOUDKIT_COMPUTE_INSTANCE_NAMESPACE")
+	localMgr := mgr.GetLocalManager()
 
 	// Create the gRPC connection:
 	var grpcConn *grpc.ClientConn
@@ -342,7 +345,7 @@ func main() {
 		defer grpcConn.Close() //nolint:errcheck
 		if err = (controller.NewFeedbackReconciler(
 			ctrl.Log.WithName("feedback"),
-			mgr.GetClient(),
+			localMgr.GetClient(),
 			grpcConn,
 			os.Getenv("CLOUDKIT_CLUSTER_ORDER_NAMESPACE"),
 		)).SetupWithManager(mgr); err != nil {
@@ -357,7 +360,7 @@ func main() {
 		// Create the HostPool feedback reconciler:
 		if err = (controller.NewHostPoolFeedbackReconciler(
 			ctrl.Log.WithName("feedback"),
-			mgr.GetClient(),
+			localMgr.GetClient(),
 			grpcConn,
 			os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
 		)).SetupWithManager(mgr); err != nil {
@@ -371,7 +374,7 @@ func main() {
 
 		// Create the ComputeInstance feedback reconciler:
 		if err = (controller.NewComputeInstanceFeedbackReconciler(
-			mgr.GetClient(),
+			localMgr.GetClient(),
 			grpcConn,
 			computeInstanceNamespace,
 		)).SetupWithManager(mgr); err != nil {
@@ -387,8 +390,8 @@ func main() {
 	}
 
 	if err = (controller.NewClusterOrderReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
+		localMgr.GetClient(),
+		localMgr.GetScheme(),
 		os.Getenv("CLOUDKIT_CLUSTER_CREATE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_CLUSTER_DELETE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_CLUSTER_ORDER_NAMESPACE"),
@@ -399,8 +402,8 @@ func main() {
 	}
 
 	if err = (controller.NewHostPoolReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
+		localMgr.GetClient(),
+		localMgr.GetScheme(),
 		os.Getenv("CLOUDKIT_HOSTPOOL_CREATE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_HOSTPOOL_DELETE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
@@ -442,8 +445,8 @@ func main() {
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if err = (controller.NewComputeInstanceReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
+		localMgr.GetClient(),
+		localMgr.GetScheme(),
 		computeInstanceNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
@@ -454,8 +457,8 @@ func main() {
 	}
 	// Tenant reconciler in ComputeInstance namespace
 	if err := (controller.NewTenantReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
+		localMgr.GetClient(),
+		localMgr.GetScheme(),
 		computeInstanceNamespace,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant", "namespace", computeInstanceNamespace)

@@ -157,9 +157,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should skip reconciliation", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
@@ -207,9 +205,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should skip feedback reconciliation", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
@@ -280,9 +276,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should successfully sync conditions and phase", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
@@ -292,9 +286,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should sync Progressing condition to Progressing condition", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -319,9 +311,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseStarting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -334,9 +324,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseFailed
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -348,9 +336,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			mockClient.updateCount = 0
 			mockClient.updateCalled = false
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 
 			// First reconciliation - should trigger an update
 			result, err := reconciler.Reconcile(ctx, request)
@@ -384,9 +370,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			computeInstance.Status.LastRestartedAt = &restartTime
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -403,9 +387,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 			Expect(computeInstance.Status.LastRestartedAt).To(BeNil())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -430,9 +412,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			})
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -465,9 +445,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			})
 			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -496,9 +474,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed)))
 			}
 
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())

@@ -27,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	ckv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
@@ -61,8 +62,13 @@ func NewFeedbackReconciler(logger logr.Logger, hubClient clnt.Client, grpcConn *
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *FeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *FeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		Named("clusterorder-feedback").
 		For(&ckv1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.clusterOrderNamespace))).
 		Complete(r)

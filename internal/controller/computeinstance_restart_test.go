@@ -435,6 +435,12 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				_ = k8sClient.Delete(ctx, vmi)
 			})
 
+			// Wait for the manager's cache to see the VMI (getClusterClient uses manager's client)
+			clusterClient := testMcManager.GetLocalManager().GetClient()
+			Eventually(func() error {
+				return clusterClient.Get(ctx, client.ObjectKeyFromObject(vmi), &kubevirtv1.VirtualMachineInstance{})
+			}).Should(Succeed())
+
 			// Call handleRestartRequest
 			result, err := reconciler.handleRestartRequest(ctx, ci)
 			Expect(err).NotTo(HaveOccurred())

@@ -25,13 +25,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
@@ -59,7 +61,7 @@ func NewTenantReconciler(client client.Client, scheme *runtime.Scheme, tenantNam
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *TenantReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	instance := &v1alpha1.Tenant{}
@@ -74,9 +76,9 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		res, err = r.handleUpdate(ctx, req.Request, instance)
 	} else {
-		res, err = r.handleDelete(ctx, req, instance)
+		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
@@ -91,7 +93,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // handleUpdate handles creation and update operations for Tenant
-func (r *TenantReconciler) handleUpdate(ctx context.Context, req ctrl.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
+func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	log.Info("handling update for Tenant", "name", instance.GetName(), "tenant", instance.Spec.Name)
@@ -127,7 +129,7 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req ctrl.Request, i
 }
 
 // handleDelete handles deletion operations for Tenant
-func (r *TenantReconciler) handleDelete(ctx context.Context, req ctrl.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
+func (r *TenantReconciler) handleDelete(ctx context.Context, req reconcile.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("handling delete for Tenant", "name", instance.Name)
 
@@ -189,25 +191,25 @@ func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Obj
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	// Predicate to filter resources with tenant label
 	tenantLabelPredicate, err := predicate.LabelSelectorPredicate(tenantLabelSelector(r.tenantNamespace))
 	if err != nil {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Tenant{}, builder.WithPredicates(tenantNamespacePredicate(r.tenantNamespace))).
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.Tenant{}, mcbuilder.WithPredicates(tenantNamespacePredicate(r.tenantNamespace))).
 		Named("tenant").
 		Watches(
 			&corev1.Namespace{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
-			builder.WithPredicates(tenantLabelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
+			mcbuilder.WithPredicates(tenantLabelPredicate),
 		).
 		Watches(
 			&ovnv1.UserDefinedNetwork{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
-			builder.WithPredicates(tenantLabelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
+			mcbuilder.WithPredicates(tenantLabelPredicate),
 		).
 		Complete(r)
 }

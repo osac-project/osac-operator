@@ -37,6 +37,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
@@ -152,7 +153,7 @@ func NamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -165,7 +166,13 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	// Get the local manager from the multicluster manager
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace))).
 		Watches(
 			&corev1.Namespace{},
@@ -238,7 +245,7 @@ func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj cli
 	}
 }
 
-func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
@@ -452,7 +459,7 @@ func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1
 	return &namespaceList.Items[0], nil
 }
 
-func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 
