@@ -75,6 +75,9 @@ const (
 	envAAPProvisionTemplate   = "CLOUDKIT_AAP_PROVISION_TEMPLATE"
 	envAAPDeprovisionTemplate = "CLOUDKIT_AAP_DEPROVISION_TEMPLATE"
 	envAAPStatusPollInterval  = "CLOUDKIT_AAP_STATUS_POLL_INTERVAL"
+
+	// Job history configuration
+	envMaxJobHistory = "CLOUDKIT_MAX_JOB_HISTORY"
 )
 
 // parsePollInterval parses a poll interval from environment variable with fallback to default.
@@ -92,6 +95,29 @@ func parsePollInterval(envVar string, defaultInterval time.Duration) time.Durati
 	}
 
 	return interval
+}
+
+// parseIntEnv parses an integer from environment variable with fallback to default.
+func parseIntEnv(envVar string, defaultValue int) int {
+	valueStr := os.Getenv(envVar)
+	if valueStr == "" {
+		return defaultValue
+	}
+
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		setupLog.Error(err, "invalid integer value, using default",
+			"envVar", envVar, "value", valueStr, "default", defaultValue)
+		return defaultValue
+	}
+
+	if value < 1 {
+		setupLog.Info("integer value must be at least 1, using default",
+			"envVar", envVar, "value", value, "default", defaultValue)
+		return defaultValue
+	}
+
+	return value
 }
 
 func init() {
@@ -410,12 +436,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse max job history
+	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
+	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
+
 	if err = (controller.NewComputeInstanceReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
 		computeInstanceNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
+		maxJobHistory,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ComputeInstance")
 		os.Exit(1)
