@@ -12,6 +12,7 @@ import (
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
+	"github.com/innabox/cloudkit-operator/internal/controller"
 )
 
 // AAPClient is the interface for AAP operations used by the provider.
@@ -143,51 +144,54 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alpha1.ComputeInstance) (bool, *ProvisionStatus, error) {
 	log := ctrllog.FromContext(ctx)
 
+	// Find latest provision job
+	latestProvisionJob := controller.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+
 	// No provision job or job ID missing - ready to proceed
-	if instance.Status.ProvisionJob == nil {
+	if latestProvisionJob == nil {
 		log.Info("no provision job found in status, ready to deprovision")
 		return true, nil, nil
 	}
-	if instance.Status.ProvisionJob.ID == "" {
+	if latestProvisionJob.JobID == "" {
 		log.Info("provision job exists but ID is empty, ready to deprovision")
 		return true, nil, nil
 	}
 
-	log.Info("checking provision job before deprovision", "jobID", instance.Status.ProvisionJob.ID, "currentState", instance.Status.ProvisionJob.State)
+	log.Info("checking provision job before deprovision", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
 
 	// Check provision job status
-	status, err := p.GetProvisionStatus(ctx, instance, instance.Status.ProvisionJob.ID)
+	status, err := p.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
 	if err != nil {
 		var notFoundErr *aap.NotFoundError
 		if errors.As(err, &notFoundErr) {
-			log.Info("AAP job not found (purged), treating as terminal", "jobID", instance.Status.ProvisionJob.ID)
+			log.Info("AAP job not found (purged), treating as terminal", "jobID", latestProvisionJob.JobID)
 			return true, nil, nil
 		}
 		return false, nil, fmt.Errorf("failed to get provision job status: %w", err)
 	}
 
-	log.Info("provision job status retrieved", "jobID", instance.Status.ProvisionJob.ID, "state", status.State, "isTerminal", status.State.IsTerminal())
+	log.Info("provision job status retrieved", "jobID", latestProvisionJob.JobID, "state", status.State, "isTerminal", status.State.IsTerminal())
 
 	// Job already terminal - ready to proceed
 	if status.State.IsTerminal() {
-		log.Info("provision job is terminal, ready to deprovision", "jobID", instance.Status.ProvisionJob.ID, "state", status.State)
+		log.Info("provision job is terminal, ready to deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
 		return true, &status, nil
 	}
 
 	// Job still running - cancel it
-	log.Info("provision job is running, attempting to cancel", "jobID", instance.Status.ProvisionJob.ID, "state", status.State)
-	if err := p.cancelProvisionJob(ctx, instance.Status.ProvisionJob.ID); err != nil {
+	log.Info("provision job is running, attempting to cancel", "jobID", latestProvisionJob.JobID, "state", status.State)
+	if err := p.cancelProvisionJob(ctx, latestProvisionJob.JobID); err != nil {
 		var methodNotAllowedErr *aap.MethodNotAllowedError
 		if !errors.As(err, &methodNotAllowedErr) {
 			return false, &status, fmt.Errorf("failed to cancel provision job: %w", err)
 		}
 		// 405 means already terminal, proceed
-		log.Info("job cancel returned 405 (already terminal), ready to deprovision", "jobID", instance.Status.ProvisionJob.ID)
+		log.Info("job cancel returned 405 (already terminal), ready to deprovision", "jobID", latestProvisionJob.JobID)
 		return true, &status, nil
 	}
 
 	// Cancellation initiated - need to wait, return current status for CR update
-	log.Info("provision job cancellation initiated, waiting for termination", "jobID", instance.Status.ProvisionJob.ID)
+	log.Info("provision job cancellation initiated, waiting for termination", "jobID", latestProvisionJob.JobID)
 	return false, &status, nil
 }
 
