@@ -65,20 +65,138 @@ var _ = Describe("EDAProvider", func() {
 	})
 
 	Describe("TriggerProvision", func() {
-		Context("when webhook succeeds", func() {
-			BeforeEach(func() {
+		Context("when webhook succeeds with no existing jobs", func() {
+			It("should generate eda-webhook-1 as first job ID", func() {
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-instance",
+						Namespace: "default",
+					},
+					Status: v1alpha1.ComputeInstanceStatus{
+						Jobs: []v1alpha1.JobStatus{},
+					},
+				}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					Expect(url).To(Equal("http://create-url"))
 					return 0, nil
 				}
-			})
 
-			It("should return eda-webhook as job ID", func() {
-				result, err := provider.TriggerProvision(ctx, resource)
+				result, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(result.JobID).To(Equal("eda-webhook"))
+				Expect(result.JobID).To(Equal("eda-webhook-1"))
 				Expect(result.InitialState).To(Equal(v1alpha1.JobStateRunning))
 				Expect(result.Message).To(Equal("Webhook sent to EDA, provisioning in progress"))
+			})
+		})
+
+		Context("when webhook succeeds with existing jobs", func() {
+			It("should increment job ID counter", func() {
+				baseTime := time.Now().UTC()
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-instance",
+						Namespace: "default",
+					},
+					Status: v1alpha1.ComputeInstanceStatus{
+						Jobs: []v1alpha1.JobStatus{
+							{
+								JobID:     "eda-webhook-1",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+							{
+								JobID:     "eda-webhook-2",
+								Type:      v1alpha1.JobTypeDeprovision,
+								Timestamp: metav1.NewTime(baseTime.Add(time.Minute)),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+						},
+					},
+				}
+				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+					return 0, nil
+				}
+
+				result, err := provider.TriggerProvision(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.JobID).To(Equal("eda-webhook-3"))
+			})
+		})
+
+		Context("when webhook succeeds with non-sequential job IDs", func() {
+			It("should use max counter + 1", func() {
+				baseTime := time.Now().UTC()
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-instance",
+						Namespace: "default",
+					},
+					Status: v1alpha1.ComputeInstanceStatus{
+						Jobs: []v1alpha1.JobStatus{
+							{
+								JobID:     "eda-webhook-1",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+							{
+								JobID:     "eda-webhook-5",
+								Type:      v1alpha1.JobTypeDeprovision,
+								Timestamp: metav1.NewTime(baseTime.Add(time.Minute)),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+							{
+								JobID:     "eda-webhook-3",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime.Add(2 * time.Minute)),
+								State:     v1alpha1.JobStateFailed,
+							},
+						},
+					},
+				}
+				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+					return 0, nil
+				}
+
+				result, err := provider.TriggerProvision(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.JobID).To(Equal("eda-webhook-6"))
+			})
+		})
+
+		Context("when webhook succeeds with mixed job types", func() {
+			It("should ignore non-EDA job IDs", func() {
+				baseTime := time.Now().UTC()
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-instance",
+						Namespace: "default",
+					},
+					Status: v1alpha1.ComputeInstanceStatus{
+						Jobs: []v1alpha1.JobStatus{
+							{
+								JobID:     "aap-job-123",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+							{
+								JobID:     "eda-webhook-2",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime.Add(time.Minute)),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+						},
+					},
+				}
+				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+					return 0, nil
+				}
+
+				result, err := provider.TriggerProvision(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.JobID).To(Equal("eda-webhook-3"))
 			})
 		})
 
@@ -139,19 +257,34 @@ var _ = Describe("EDAProvider", func() {
 
 	Describe("TriggerDeprovision", func() {
 		Context("when webhook succeeds and AAP finalizer exists", func() {
-			BeforeEach(func() {
-				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
+			It("should generate unique job ID", func() {
+				baseTime := time.Now().UTC()
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:       "test-instance",
+						Namespace:  "default",
+						Finalizers: []string{"cloudkit.openshift.io/computeinstance-aap"},
+					},
+					Status: v1alpha1.ComputeInstanceStatus{
+						Jobs: []v1alpha1.JobStatus{
+							{
+								JobID:     "eda-webhook-1",
+								Type:      v1alpha1.JobTypeProvision,
+								Timestamp: metav1.NewTime(baseTime),
+								State:     v1alpha1.JobStateSucceeded,
+							},
+						},
+					},
+				}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					Expect(url).To(Equal("http://delete-url"))
 					return 0, nil
 				}
-			})
 
-			It("should return eda-webhook as job ID", func() {
-				result, err := provider.TriggerDeprovision(ctx, resource)
+				result, err := provider.TriggerDeprovision(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
-				Expect(result.JobID).To(Equal("eda-webhook"))
+				Expect(result.JobID).To(Equal("eda-webhook-2"))
 				Expect(result.BlockDeletionOnFailure).To(BeFalse())
 			})
 		})

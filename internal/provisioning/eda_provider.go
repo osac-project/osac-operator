@@ -3,6 +3,8 @@ package provisioning
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,8 +47,29 @@ func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *E
 	}
 }
 
+// generateEDAJobID generates a unique job ID by scanning existing jobs and incrementing the counter.
+// Returns IDs in the format "eda-webhook-N" where N is an incrementing counter.
+func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
+	maxCounter := 0
+	prefix := "eda-webhook-"
+
+	for _, job := range jobs {
+		if strings.HasPrefix(job.JobID, prefix) {
+			// Extract counter from "eda-webhook-N"
+			counterStr := strings.TrimPrefix(job.JobID, prefix)
+			if counter, err := strconv.Atoi(counterStr); err == nil {
+				if counter > maxCounter {
+					maxCounter = counter
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s%d", prefix, maxCounter+1)
+}
+
 // TriggerProvision triggers provisioning via EDA webhook.
-// Returns the resource name as job ID since EDA doesn't provide a real job ID.
+// Generates a unique job ID by scanning existing jobs.
 // Returns RateLimitError if the request is rate-limited.
 func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
 	if p.createURL == "" {
@@ -68,8 +91,15 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 		return nil, &RateLimitError{RetryAfter: remainingTime}
 	}
 
+	// Generate unique job ID
+	instance, ok := resource.(*v1alpha1.ComputeInstance)
+	if !ok {
+		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	}
+	jobID := generateEDAJobID(instance.Status.Jobs)
+
 	return &ProvisionResult{
-		JobID:        "eda-webhook",
+		JobID:        jobID,
 		InitialState: v1alpha1.JobStateRunning,
 		Message:      "Webhook sent to EDA, provisioning in progress",
 	}, nil
@@ -87,7 +117,7 @@ func (p *EDAProvider) GetProvisionStatus(ctx context.Context, resource client.Ob
 }
 
 // TriggerDeprovision triggers deprovisioning via EDA webhook.
-// Returns the resource name as job ID since EDA doesn't provide a real job ID.
+// Generates a unique job ID by scanning existing jobs.
 // Returns RateLimitError if the request is rate-limited.
 func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
 	log := ctrllog.FromContext(ctx)
@@ -121,9 +151,16 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		return nil, &RateLimitError{RetryAfter: remainingTime}
 	}
 
+	// Generate unique job ID
+	instance, ok := resource.(*v1alpha1.ComputeInstance)
+	if !ok {
+		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	}
+	jobID := generateEDAJobID(instance.Status.Jobs)
+
 	return &DeprovisionResult{
 		Action:                 DeprovisionTriggered,
-		JobID:                  "eda-webhook",
+		JobID:                  jobID,
 		BlockDeletionOnFailure: false,
 	}, nil
 }
