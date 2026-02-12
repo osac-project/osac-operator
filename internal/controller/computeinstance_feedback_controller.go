@@ -161,7 +161,7 @@ func (t *computeInstanceFeedbackReconcilerTask) handleUpdate(ctx context.Context
 
 func (t *computeInstanceFeedbackReconcilerTask) syncConditions(ctx context.Context) {
 	t.syncProgressing(ctx)
-	t.syncReady(ctx)
+	t.syncAvailable(ctx)
 	t.syncRestartInProgress(ctx)
 	t.syncRestartFailed(ctx)
 }
@@ -197,13 +197,13 @@ func (t *computeInstanceFeedbackReconcilerTask) syncProgressing(ctx context.Cont
 	}
 }
 
-// syncReady synchronizes the READY VM condition from the Available CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncReady(ctx context.Context) {
+// syncAvailable synchronizes the AVAILABLE VM condition from the Available CR condition.
+func (t *computeInstanceFeedbackReconcilerTask) syncAvailable(ctx context.Context) {
 	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionAvailable)
 	if crCondition == nil {
 		return
 	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY, crCondition)
+	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_AVAILABLE, crCondition)
 }
 
 // syncRestartInProgress synchronizes the RESTART_IN_PROGRESS VM condition from the RestartInProgress CR condition.
@@ -249,12 +249,12 @@ func (t *computeInstanceFeedbackReconcilerTask) mapConditionStatus(status metav1
 
 func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 	switch t.object.Status.Phase {
-	case ckv1alpha1.ComputeInstancePhaseProgressing:
-		t.syncPhaseProgressing()
+	case ckv1alpha1.ComputeInstancePhaseStarting:
+		t.syncPhaseStarting()
 	case ckv1alpha1.ComputeInstancePhaseFailed:
 		t.syncPhaseFailed()
-	case ckv1alpha1.ComputeInstancePhaseReady:
-		t.syncPhaseReady()
+	case ckv1alpha1.ComputeInstancePhaseRunning:
+		t.syncPhaseRunning()
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info(
@@ -264,17 +264,17 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 	}
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseProgressing() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PROGRESSING)
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStarting() {
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncPhaseFailed() {
 	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseReady() {
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseRunning() {
 	ciStatus := t.ci.GetStatus()
-	ciStatus.SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY)
+	ciStatus.SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {

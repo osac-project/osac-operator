@@ -154,9 +154,9 @@ spec:
                 description: Phase provides a single-value overview of the state of
                   the ComputeInstance
                 enum:
-                - Progressing
+                - Starting
+                - Running
                 - Failed
-                - Ready
                 - Deleting
                 type: string
               reconciledConfigVersion:

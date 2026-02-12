@@ -207,7 +207,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseProgressing
+	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 
 	if controllerutil.AddFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
@@ -259,13 +259,13 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	}
 
 	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseReady
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 		r.webhookClient.ResetCache()
 		return ctrl.Result{}, nil
 	}
 
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseProgressing
+	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
 
 	if url := r.CreateComputeInstanceWebhook; url != "" {

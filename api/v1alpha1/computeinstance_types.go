@@ -57,14 +57,14 @@ type ComputeInstanceSpec struct {
 type ComputeInstancePhaseType string
 
 const (
-	// ComputeInstancePhaseProgressing means an update is in progress
-	ComputeInstancePhaseProgressing ComputeInstancePhaseType = "Progressing"
+	// ComputeInstancePhaseStarting means the compute instance is starting
+	ComputeInstancePhaseStarting ComputeInstancePhaseType = "Starting"
+
+	// ComputeInstancePhaseRunning means the compute instance is running
+	ComputeInstancePhaseRunning ComputeInstancePhaseType = "Running"
 
 	// ComputeInstancePhaseFailed means the compute instance deployment or update has failed
 	ComputeInstancePhaseFailed ComputeInstancePhaseType = "Failed"
-
-	// ComputeInstancePhaseReady means the compute instance and all associated resources are ready
-	ComputeInstancePhaseReady ComputeInstancePhaseType = "Ready"
 
 	// ComputeInstancePhaseDeleting means there has been a request to delete the ComputeInstance
 	ComputeInstancePhaseDeleting ComputeInstancePhaseType = "Deleting"
@@ -113,7 +113,7 @@ type ComputeInstanceStatus struct {
 	// Phase provides a single-value overview of the state of the ComputeInstance
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
+	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting
 	Phase ComputeInstancePhaseType `json:"phase,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ComputeInstance

@@ -239,7 +239,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Update status separately since Status is a subresource - need to get fresh copy
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseReady
+			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseRunning
 			vm.Status.Conditions = []metav1.Condition{
 				{
 					Type:               string(cloudkitv1alpha1.ComputeInstanceConditionAccepted),
@@ -288,7 +288,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdate).NotTo(BeNil())
-			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY))
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 		})
 
 		It("should sync Progressing condition to Progressing condition", func() {
@@ -313,10 +313,10 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(found).To(BeTrue())
 		})
 
-		It("should sync Progressing phase", func() {
+		It("should sync Starting phase", func() {
 			vm := &cloudkitv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseProgressing
+			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseStarting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -325,7 +325,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PROGRESSING))
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 		})
 
 		It("should sync Failed phase", func() {
