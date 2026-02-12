@@ -167,8 +167,8 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 		log.Info("detected EDA provision job (provider switch scenario), checking instance phase", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
 		// Check the ComputeInstance phase to determine if provisioning is complete
-		// Ready to deprovision if: Ready (provision succeeded) or Failed (provision failed)
-		// Not ready if: Progressing (still provisioning) or Deleting (deprovision already triggered)
+
+		// Ready or Failed - provision is done, ready to deprovision
 		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseReady {
 			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 			return true, nil, nil
@@ -177,8 +177,23 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 			log.Info("EDA provision failed, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 			return true, nil, nil
 		}
-		// Progressing or Deleting phase - not ready
-		log.Info("EDA provision not ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+
+		// Deleting phase - check if deprovision job already exists
+		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting {
+			// Check if deprovision job exists
+			latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+			if latestDeprovisionJob == nil {
+				// No deprovision job yet - this is the initial deletion, ready to create deprovision job
+				log.Info("EDA provision complete, deletion initiated, ready to create deprovision job", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+				return true, nil, nil
+			}
+			// Deprovision job already exists - not ready (already in progress)
+			log.Info("EDA provision complete, deprovision job already exists", "jobID", latestProvisionJob.JobID, "deprovisionJobID", latestDeprovisionJob.JobID, "phase", instance.Status.Phase)
+			return false, nil, nil
+		}
+
+		// Progressing phase - still provisioning, not ready
+		log.Info("EDA provision still in progress", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 		return false, nil, nil
 	}
 
