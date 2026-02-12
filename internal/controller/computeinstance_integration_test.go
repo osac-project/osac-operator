@@ -36,20 +36,20 @@ type controllableProvider struct {
 	mu sync.Mutex
 
 	provisionJobID      string
-	provisionJobState   provisioning.JobState
+	provisionJobState   cloudkitv1alpha1.JobState
 	provisionJobMsg     string
 	provisionTriggerErr error
 
 	deprovisionJobID      string
-	deprovisionJobState   provisioning.JobState
+	deprovisionJobState   cloudkitv1alpha1.JobState
 	deprovisionJobMsg     string
 	deprovisionTriggerErr error
 }
 
 func newControllableProvider() *controllableProvider {
 	return &controllableProvider{
-		provisionJobState:   provisioning.JobStatePending,
-		deprovisionJobState: provisioning.JobStatePending,
+		provisionJobState:   cloudkitv1alpha1.JobStatePending,
+		deprovisionJobState: cloudkitv1alpha1.JobStatePending,
 	}
 }
 
@@ -62,11 +62,11 @@ func (p *controllableProvider) TriggerProvision(ctx context.Context, resource cl
 	}
 
 	p.provisionJobID = "prov-job-" + resource.GetName()
-	p.provisionJobState = provisioning.JobStatePending
+	p.provisionJobState = cloudkitv1alpha1.JobStatePending
 	p.provisionJobMsg = "Job triggered"
 	return &provisioning.ProvisionResult{
 		JobID:        p.provisionJobID,
-		InitialState: provisioning.JobStatePending,
+		InitialState: cloudkitv1alpha1.JobStatePending,
 		Message:      "Job triggered",
 	}, nil
 }
@@ -93,10 +93,11 @@ func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource 
 	instance := resource.(*cloudkitv1alpha1.ComputeInstance)
 
 	// Check if provision job needs to be terminated first (AAP behavior)
-	if instance.Status.ProvisionJob != nil && instance.Status.ProvisionJob.ID != "" {
+	latestProvisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+	if latestProvisionJob != nil {
 		if !p.provisionJobState.IsTerminal() {
 			// Cancel the provision job
-			p.provisionJobState = provisioning.JobStateCanceled
+			p.provisionJobState = cloudkitv1alpha1.JobStateCanceled
 			p.provisionJobMsg = "Job canceled"
 			// Return waiting - need to poll again
 			return &provisioning.DeprovisionResult{
@@ -107,7 +108,7 @@ func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource 
 	}
 
 	p.deprovisionJobID = "deprov-job-" + resource.GetName()
-	p.deprovisionJobState = provisioning.JobStatePending
+	p.deprovisionJobState = cloudkitv1alpha1.JobStatePending
 	p.deprovisionJobMsg = "Deprovision job triggered"
 	return &provisioning.DeprovisionResult{
 		Action:                 provisioning.DeprovisionTriggered,
@@ -132,7 +133,7 @@ func (p *controllableProvider) Name() string {
 }
 
 // setProvisionJobState updates the provision job state (thread-safe)
-func (p *controllableProvider) setProvisionJobState(state provisioning.JobState, message string) {
+func (p *controllableProvider) setProvisionJobState(state cloudkitv1alpha1.JobState, message string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.provisionJobState = state
@@ -140,7 +141,7 @@ func (p *controllableProvider) setProvisionJobState(state provisioning.JobState,
 }
 
 // setDeprovisionJobState updates the deprovision job state (thread-safe)
-func (p *controllableProvider) setDeprovisionJobState(state provisioning.JobState, message string) {
+func (p *controllableProvider) setDeprovisionJobState(state cloudkitv1alpha1.JobState, message string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.deprovisionJobState = state
@@ -167,6 +168,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			ComputeInstanceNamespace: testNamespace,
 			ProvisioningProvider:     provider,
 			StatusPollInterval:       100 * time.Millisecond,
+			MaxJobHistory:            DefaultMaxJobHistory,
 		}
 	})
 
@@ -199,12 +201,13 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify job was triggered
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJob).NotTo(BeNil())
-			Expect(instance.Status.ProvisionJob.ID).To(Equal("prov-job-" + instanceName))
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStatePending)))
+			latestProvisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.JobID).To(Equal("prov-job-" + instanceName))
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStatePending))
 
 			// Simulate job transitioning to running
-			provider.setProvisionJobState(provisioning.JobStateRunning, "Job is running")
+			provider.setProvisionJobState(cloudkitv1alpha1.JobStateRunning, "Job is running")
 
 			result, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
@@ -215,10 +218,12 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status updated to running
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
+			latestProvisionJob = cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStateRunning))
 
 			// Simulate job completing successfully
-			provider.setProvisionJobState(provisioning.JobStateSucceeded, "Job completed")
+			provider.setProvisionJobState(cloudkitv1alpha1.JobStateSucceeded, "Job completed")
 
 			result, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
@@ -229,7 +234,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify final status
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
+			latestProvisionJob = cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
 		})
 
 		It("should handle provision job failure", func() {
@@ -256,7 +263,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			// Simulate job failing
-			provider.setProvisionJobState(provisioning.JobStateFailed, "Provisioning failed")
+			provider.setProvisionJobState(cloudkitv1alpha1.JobStateFailed, "Provisioning failed")
 
 			_, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
@@ -264,7 +271,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status shows failure
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
+			latestProvisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStateFailed))
 			Expect(instance.Status.Phase).To(Equal(cloudkitv1alpha1.ComputeInstancePhaseFailed))
 		})
 	})
@@ -295,12 +304,13 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
 			// Verify deprovision job was triggered (in-memory state)
-			Expect(instance.Status.DeprovisionJob).NotTo(BeNil())
-			Expect(instance.Status.DeprovisionJob.ID).To(Equal("deprov-job-" + instanceName))
-			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStatePending)))
+			latestDeprovisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeDeprovision)
+			Expect(latestDeprovisionJob).NotTo(BeNil())
+			Expect(latestDeprovisionJob.JobID).To(Equal("deprov-job-" + instanceName))
+			Expect(latestDeprovisionJob.State).To(Equal(cloudkitv1alpha1.JobStatePending))
 
 			// Simulate job completing
-			provider.setDeprovisionJobState(provisioning.JobStateSucceeded, "Deprovision completed")
+			provider.setDeprovisionJobState(cloudkitv1alpha1.JobStateSucceeded, "Deprovision completed")
 
 			result, err = reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
@@ -309,7 +319,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			// For AAP Direct: handleDeprovisioning() doesn't remove finalizers
 			// Finalizer removal is handled by handleDelete()
 			// Verify job succeeded
-			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
+			latestDeprovisionJob = cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeDeprovision)
+			Expect(latestDeprovisionJob).NotTo(BeNil())
+			Expect(latestDeprovisionJob.State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
 		})
 
 		It("should block deletion when deprovision job fails (AAP Direct)", func() {
@@ -336,7 +348,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			// Simulate job failing
-			provider.setDeprovisionJobState(provisioning.JobStateFailed, "Resource not found")
+			provider.setDeprovisionJobState(cloudkitv1alpha1.JobStateFailed, "Resource not found")
 
 			// Call again with failed job
 			result, err = reconciler.handleDeprovisioning(ctx, instance)
@@ -346,7 +358,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			// Verify deletion is blocked - status shows failed deprovision
-			Expect(instance.Status.DeprovisionJob.State).To(Equal(string(provisioning.JobStateFailed)))
+			latestDeprovisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeDeprovision)
+			Expect(latestDeprovisionJob).NotTo(BeNil())
+			Expect(latestDeprovisionJob.State).To(Equal(cloudkitv1alpha1.JobStateFailed))
 		})
 	})
 
@@ -374,25 +388,31 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify job is pending (in-memory)
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStatePending)))
+			latestProvisionJob := cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStatePending))
 
 			// Set to running and poll multiple times
-			provider.setProvisionJobState(provisioning.JobStateRunning, "Job running - step 1")
+			provider.setProvisionJobState(cloudkitv1alpha1.JobStateRunning, "Job running - step 1")
 			for i := 0; i < 3; i++ {
 				result, err := reconciler.handleProvisioning(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
-				Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateRunning)))
+				latestProvisionJob = cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+				Expect(latestProvisionJob).NotTo(BeNil())
+				Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStateRunning))
 			}
 
 			// Finally complete
-			provider.setProvisionJobState(provisioning.JobStateSucceeded, "Job completed")
+			provider.setProvisionJobState(cloudkitv1alpha1.JobStateSucceeded, "Job completed")
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 
-			Expect(instance.Status.ProvisionJob.State).To(Equal(string(provisioning.JobStateSucceeded)))
+			latestProvisionJob = cloudkitv1alpha1.FindLatestJobByType(instance.Status.Jobs, cloudkitv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
 		})
 	})
 })

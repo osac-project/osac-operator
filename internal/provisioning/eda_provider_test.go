@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/provisioning"
 	"github.com/innabox/cloudkit-operator/internal/webhook"
 )
@@ -76,7 +77,7 @@ var _ = Describe("EDAProvider", func() {
 				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.JobID).To(Equal("eda-webhook"))
-				Expect(result.InitialState).To(Equal(provisioning.JobStateRunning))
+				Expect(result.InitialState).To(Equal(v1alpha1.JobStateRunning))
 				Expect(result.Message).To(Equal("Webhook sent to EDA, provisioning in progress"))
 			})
 		})
@@ -131,7 +132,7 @@ var _ = Describe("EDAProvider", func() {
 			status, err := provider.GetProvisionStatus(ctx, resource, "job-123")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("job-123"))
-			Expect(status.State).To(Equal(provisioning.JobStateUnknown))
+			Expect(status.State).To(Equal(v1alpha1.JobStateUnknown))
 			Expect(status.Message).To(Equal("EDA provider does not support status polling"))
 		})
 	})
@@ -227,7 +228,7 @@ var _ = Describe("EDAProvider", func() {
 				status, err := provider.GetDeprovisionStatus(ctx, resource, "job-456")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.JobID).To(Equal("job-456"))
-				Expect(status.State).To(Equal(provisioning.JobStateRunning))
+				Expect(status.State).To(Equal(v1alpha1.JobStateRunning))
 				Expect(status.Message).To(Equal("Waiting for AAP playbook to complete"))
 			})
 		})
@@ -241,7 +242,7 @@ var _ = Describe("EDAProvider", func() {
 				status, err := provider.GetDeprovisionStatus(ctx, resource, "job-456")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.JobID).To(Equal("job-456"))
-				Expect(status.State).To(Equal(provisioning.JobStateSucceeded))
+				Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 				Expect(status.Message).To(Equal("AAP playbook completed (finalizer removed)"))
 			})
 		})

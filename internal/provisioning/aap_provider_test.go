@@ -119,7 +119,7 @@ var _ = Describe("AAPProvider", func() {
 				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.JobID).To(Equal("123"))
-				Expect(result.InitialState).To(Equal(provisioning.JobStatePending))
+				Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
 				Expect(result.Message).To(Equal("Provisioning job triggered"))
 			})
 		})
@@ -146,7 +146,7 @@ var _ = Describe("AAPProvider", func() {
 				result, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.JobID).To(Equal("456"))
-				Expect(result.InitialState).To(Equal(provisioning.JobStatePending))
+				Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
 				Expect(result.Message).To(Equal("Provisioning job triggered"))
 			})
 		})
@@ -222,7 +222,7 @@ var _ = Describe("AAPProvider", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.JobID).To(Equal("789"))
-				Expect(status.State).To(Equal(provisioning.JobStateSucceeded))
+				Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 				Expect(status.Message).To(Equal("successful"))
 			})
 		})
@@ -244,7 +244,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return pending state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStatePending))
+				Expect(status.State).To(Equal(v1alpha1.JobStatePending))
 			})
 		})
 
@@ -265,7 +265,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return waiting state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateWaiting))
+				Expect(status.State).To(Equal(v1alpha1.JobStateWaiting))
 			})
 		})
 
@@ -287,7 +287,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return running state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateRunning))
+				Expect(status.State).To(Equal(v1alpha1.JobStateRunning))
 			})
 		})
 
@@ -311,7 +311,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return failed state with error details", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateFailed))
+				Expect(status.State).To(Equal(v1alpha1.JobStateFailed))
 				Expect(status.ErrorDetails).To(Equal("Error: Connection timeout"))
 			})
 		})
@@ -335,7 +335,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return failed state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateFailed))
+				Expect(status.State).To(Equal(v1alpha1.JobStateFailed))
 				Expect(status.Message).To(Equal("error"))
 			})
 		})
@@ -359,7 +359,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return canceled state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateCanceled))
+				Expect(status.State).To(Equal(v1alpha1.JobStateCanceled))
 				Expect(status.Message).To(Equal("canceled"))
 			})
 		})
@@ -382,7 +382,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return unknown state", func() {
 				status, err := provider.GetProvisionStatus(ctx, resource, "789")
 				Expect(err).NotTo(HaveOccurred())
-				Expect(status.State).To(Equal(provisioning.JobStateUnknown))
+				Expect(status.State).To(Equal(v1alpha1.JobStateUnknown))
 				Expect(status.Message).To(Equal("unknown_status"))
 			})
 		})
@@ -483,7 +483,7 @@ var _ = Describe("AAPProvider", func() {
 			status, err := provider.GetDeprovisionStatus(ctx, resource, "888")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("888"))
-			Expect(status.State).To(Equal(provisioning.JobStateSucceeded))
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
 	})
 

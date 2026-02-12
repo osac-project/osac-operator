@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/webhook"
 )
 
@@ -69,7 +70,7 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 
 	return &ProvisionResult{
 		JobID:        "eda-webhook",
-		InitialState: JobStateRunning,
+		InitialState: v1alpha1.JobStateRunning,
 		Message:      "Webhook sent to EDA, provisioning in progress",
 	}, nil
 }
@@ -80,7 +81,7 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 func (p *EDAProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	return ProvisionStatus{
 		JobID:   jobID,
-		State:   JobStateUnknown,
+		State:   v1alpha1.JobStateUnknown,
 		Message: "EDA provider does not support status polling",
 	}, nil
 }
@@ -135,7 +136,7 @@ func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.
 	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
 		return ProvisionStatus{
 			JobID:   jobID,
-			State:   JobStateSucceeded,
+			State:   v1alpha1.JobStateSucceeded,
 			Message: "AAP playbook completed (finalizer removed)",
 		}, nil
 	}
@@ -143,7 +144,7 @@ func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.
 	// Finalizer still present - playbook still running
 	return ProvisionStatus{
 		JobID:   jobID,
-		State:   JobStateRunning,
+		State:   v1alpha1.JobStateRunning,
 		Message: "Waiting for AAP playbook to complete",
 	}, nil
 }

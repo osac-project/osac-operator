@@ -92,21 +92,6 @@ func NewComputeInstanceReconciler(
 	}
 }
 
-// FindLatestJobByType finds the job with the most recent timestamp for the given type.
-// Returns nil if no job of the given type is found.
-// Exported for use by provisioning providers.
-func FindLatestJobByType(jobs []v1alpha1.JobStatus, jobType v1alpha1.JobType) *v1alpha1.JobStatus {
-	var latest *v1alpha1.JobStatus
-	for i := range jobs {
-		if jobs[i].Type == jobType {
-			if latest == nil || jobs[i].Timestamp.After(latest.Timestamp.Time) {
-				latest = &jobs[i]
-			}
-		}
-	}
-	return latest
-}
-
 // findJobByID finds a job by its ID in the jobs array.
 // Returns a pointer to the job if found, nil otherwise.
 // The returned pointer can be used to update the job in place.
@@ -306,7 +291,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	// Check if we already have a provision job
-	latestProvisionJob := FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
 	if latestProvisionJob == nil || latestProvisionJob.JobID == "" {
 		// No job yet, trigger provisioning
@@ -325,7 +310,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 			newJob := v1alpha1.JobStatus{
 				JobID:     "",
 				Type:      v1alpha1.JobTypeProvision,
-				Timestamp: metav1.Now(),
+				Timestamp: metav1.NewTime(time.Now().UTC()),
 				State:     v1alpha1.JobStateFailed,
 				Message:   fmt.Sprintf("Failed to trigger provisioning: %v", err),
 			}
@@ -336,10 +321,10 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		newJob := v1alpha1.JobStatus{
 			JobID:                  result.JobID,
 			Type:                   v1alpha1.JobTypeProvision,
-			Timestamp:              metav1.Now(),
-			State:                  v1alpha1.JobState(result.InitialState),
+			Timestamp:              metav1.NewTime(time.Now().UTC()),
+			State:                  result.InitialState,
 			Message:                result.Message,
-			BlockDeletionOnFailure: result.BlockDeletionOnFailure,
+			BlockDeletionOnFailure: false, // Provision failures don't block deletion
 		}
 		instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
 		log.Info("provisioning job triggered", "jobID", result.JobID)
@@ -358,7 +343,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 
 	// Update job status
 	updatedJob := *latestProvisionJob
-	updatedJob.State = v1alpha1.JobState(status.State)
+	updatedJob.State = status.State
 	updatedJob.Message = status.Message
 	if status.ErrorDetails != "" {
 		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
@@ -404,8 +389,11 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		return ctrl.Result{}, nil
 	}
 
+	// Check if we already have a deprovision job
+	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+
 	// Trigger deprovisioning - provider decides internally if ready
-	if instance.Status.DeprovisionJob == nil || instance.Status.DeprovisionJob.ID == "" {
+	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
 
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
@@ -427,10 +415,15 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		case provisioning.DeprovisionWaiting:
 			// Provider not ready yet (e.g., canceling provision job)
 			// Update provision job status if provider returned one (e.g., cancellation in progress)
-			if result.ProvisionJobStatus != nil && instance.Status.ProvisionJob != nil {
-				instance.Status.ProvisionJob.State = string(result.ProvisionJobStatus.State)
-				instance.Status.ProvisionJob.Message = result.ProvisionJobStatus.Message
-				log.Info("updated provision job status while waiting for deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					updateJob(instance.Status.Jobs, updatedJob)
+					log.Info("updated provision job status while waiting for deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+				}
 			}
 			log.Info("deprovisioning not ready, requeueing")
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
@@ -443,46 +436,58 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		case provisioning.DeprovisionTriggered:
 			// Deprovision started successfully
 			// Update provision job status if provider returned one (job was terminal before deprovision)
-			if result.ProvisionJobStatus != nil && instance.Status.ProvisionJob != nil {
-				instance.Status.ProvisionJob.State = string(result.ProvisionJobStatus.State)
-				instance.Status.ProvisionJob.Message = result.ProvisionJobStatus.Message
-				log.Info("updated provision job status before starting deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					updateJob(instance.Status.Jobs, updatedJob)
+					log.Info("updated provision job status before starting deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+				}
 			}
-			instance.Status.DeprovisionJob = &v1alpha1.JobStatus{
-				ID:                     result.JobID,
-				State:                  string(provisioning.JobStatePending),
+			newJob := v1alpha1.JobStatus{
+				JobID:                  result.JobID,
+				Type:                   v1alpha1.JobTypeDeprovision,
+				Timestamp:              metav1.NewTime(time.Now().UTC()),
+				State:                  v1alpha1.JobStatePending,
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
+			instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
 
 	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance, instance.Status.DeprovisionJob.ID)
+	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance, latestDeprovisionJob.JobID)
 	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", instance.Status.DeprovisionJob.ID)
-		instance.Status.DeprovisionJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
+		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
+		updatedJob := *latestDeprovisionJob
+		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
+		updateJob(instance.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// Update status fields (main reconcile loop will persist these)
-	instance.Status.DeprovisionJob.State = string(status.State)
-	instance.Status.DeprovisionJob.Message = status.Message
+	// Update job status
+	updatedJob := *latestDeprovisionJob
+	updatedJob.State = status.State
+	updatedJob.Message = status.Message
 	if status.ErrorDetails != "" {
-		instance.Status.DeprovisionJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
+	updateJob(instance.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", instance.Status.DeprovisionJob.ID, "state", status.State)
+		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Job reached terminal state (Succeeded, Failed, or Canceled)
 	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", instance.Status.DeprovisionJob.ID)
+		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
 		// For EDA: AAP playbook removes AAP finalizer on success
 		// For AAP Direct: handleDelete() removes base finalizer
 		return ctrl.Result{}, nil
@@ -490,19 +495,19 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 
 	// Job failed or was canceled
 	// Check policy stored in job status
-	if instance.Status.DeprovisionJob.BlockDeletionOnFailure {
+	if latestDeprovisionJob.BlockDeletionOnFailure {
 		// Block deletion to prevent orphaned resources
 		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", instance.Status.DeprovisionJob.ID,
+			"jobID", latestDeprovisionJob.JobID,
 			"state", status.State,
-			"message", instance.Status.DeprovisionJob.Message)
+			"message", updatedJob.Message)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	} else {
 		// Allow process to continue (webhook handles cleanup)
 		log.Info("deprovision job did not succeed, allowing process to continue",
-			"jobID", instance.Status.DeprovisionJob.ID,
+			"jobID", latestDeprovisionJob.JobID,
 			"state", status.State,
-			"message", instance.Status.DeprovisionJob.Message)
+			"message", updatedJob.Message)
 		return ctrl.Result{}, nil
 	}
 }
@@ -568,10 +573,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 
 		// If we're tracking a provision job that hasn't reached terminal state, continue polling
 		// This ensures job status fields are accurate and reflect the final job outcome
-		if r.ProvisioningProvider != nil && instance.Status.ProvisionJob != nil && instance.Status.ProvisionJob.ID != "" {
-			jobState := provisioning.JobState(instance.Status.ProvisionJob.State)
-			if !jobState.IsTerminal() {
-				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", instance.Status.ProvisionJob.ID, "state", jobState)
+		latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+		if r.ProvisioningProvider != nil && latestProvisionJob != nil {
+			if !latestProvisionJob.State.IsTerminal() {
+				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", latestProvisionJob.JobID, "state", latestProvisionJob.State)
 				return r.handleProvisioning(ctx, instance)
 			}
 		}

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 )
 
 // ProviderType represents the type of provisioning provider.
@@ -25,7 +27,7 @@ type ProvisionResult struct {
 	JobID string
 
 	// InitialState is the initial state of the job (typically Pending or Running)
-	InitialState JobState
+	InitialState v1alpha1.JobState
 
 	// Message is a human-readable status message
 	Message string
@@ -99,7 +101,7 @@ type ProvisionStatus struct {
 	JobID string
 
 	// State indicates the current state of the job.
-	State JobState
+	State v1alpha1.JobState
 
 	// Message provides a human-readable status message.
 	Message string
@@ -121,41 +123,4 @@ type ProvisionStatus struct {
 
 	// ErrorDetails contains detailed error information when State is JobStateFailed.
 	ErrorDetails string
-}
-
-// JobState represents the state of a provisioning job.
-type JobState string
-
-const (
-	// JobStatePending indicates the job has been created but not yet started.
-	JobStatePending JobState = "Pending"
-
-	// JobStateWaiting indicates the job is waiting for resources or dependencies.
-	JobStateWaiting JobState = "Waiting"
-
-	// JobStateRunning indicates the job is currently executing.
-	JobStateRunning JobState = "Running"
-
-	// JobStateSucceeded indicates the job completed successfully.
-	JobStateSucceeded JobState = "Succeeded"
-
-	// JobStateFailed indicates the job failed.
-	JobStateFailed JobState = "Failed"
-
-	// JobStateCanceled indicates the job was canceled before completion.
-	JobStateCanceled JobState = "Canceled"
-
-	// JobStateUnknown indicates the job status is not recognized.
-	// This is a non-terminal state to allow continued polling.
-	JobStateUnknown JobState = "Unknown"
-)
-
-// IsTerminal returns true if the job state is in a terminal state (succeeded, failed, or canceled).
-func (s JobState) IsTerminal() bool {
-	return s == JobStateSucceeded || s == JobStateFailed || s == JobStateCanceled
-}
-
-// IsSuccessful returns true if the job completed successfully.
-func (s JobState) IsSuccessful() bool {
-	return s == JobStateSucceeded
 }

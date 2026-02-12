@@ -392,4 +392,336 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(vm.Status.ReconciledConfigVersion).To(Equal("version-2"))
 		})
 	})
+
+	Context("Helper functions", func() {
+		Describe("findJobByID", func() {
+			It("should return nil when jobs slice is empty", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{}
+				result := findJobByID(jobs, "job-123")
+				Expect(result).To(BeNil())
+			})
+
+			It("should return nil when job ID is not found", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStatePending,
+					},
+					{
+						JobID:     "job-2",
+						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStateRunning,
+					},
+				}
+				result := findJobByID(jobs, "job-999")
+				Expect(result).To(BeNil())
+			})
+
+			It("should return pointer to job when found", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStatePending,
+						Message:   "First job",
+					},
+					{
+						JobID:     "job-2",
+						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStateRunning,
+						Message:   "Second job",
+					},
+				}
+				result := findJobByID(jobs, "job-2")
+				Expect(result).NotTo(BeNil())
+				Expect(result.JobID).To(Equal("job-2"))
+				Expect(result.State).To(Equal(cloudkitv1alpha1.JobStateRunning))
+				Expect(result.Message).To(Equal("Second job"))
+			})
+		})
+
+		Describe("appendJob", func() {
+			var reconciler *ComputeInstanceReconciler
+
+			BeforeEach(func() {
+				reconciler = &ComputeInstanceReconciler{
+					MaxJobHistory: 3, // Use 3 for easier testing
+				}
+			})
+
+			It("should append job to empty slice", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{}
+				newJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-1",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     cloudkitv1alpha1.JobStatePending,
+				}
+				result := reconciler.appendJob(jobs, newJob)
+				Expect(result).To(HaveLen(1))
+				Expect(result[0].JobID).To(Equal("job-1"))
+			})
+
+			It("should append job when under max history", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStatePending,
+					},
+				}
+				newJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-2",
+					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     cloudkitv1alpha1.JobStateRunning,
+				}
+				result := reconciler.appendJob(jobs, newJob)
+				Expect(result).To(HaveLen(2))
+				Expect(result[0].JobID).To(Equal("job-1"))
+				Expect(result[1].JobID).To(Equal("job-2"))
+			})
+
+			It("should trim old jobs when exceeding max history", func() {
+				baseTime := time.Now().UTC()
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime),
+						State:     cloudkitv1alpha1.JobStatePending,
+					},
+					{
+						JobID:     "job-2",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
+						State:     cloudkitv1alpha1.JobStateRunning,
+					},
+					{
+						JobID:     "job-3",
+						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
+						State:     cloudkitv1alpha1.JobStateSucceeded,
+					},
+				}
+				newJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-4",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
+					State:     cloudkitv1alpha1.JobStatePending,
+				}
+				// MaxJobHistory is 3, so adding 4th job should remove job-1
+				result := reconciler.appendJob(jobs, newJob)
+				Expect(result).To(HaveLen(3))
+				Expect(result[0].JobID).To(Equal("job-2"))
+				Expect(result[1].JobID).To(Equal("job-3"))
+				Expect(result[2].JobID).To(Equal("job-4"))
+			})
+
+			It("should keep trimming as jobs are added", func() {
+				baseTime := time.Now().UTC()
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime),
+						State:     cloudkitv1alpha1.JobStatePending,
+					},
+					{
+						JobID:     "job-2",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
+						State:     cloudkitv1alpha1.JobStateRunning,
+					},
+					{
+						JobID:     "job-3",
+						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
+						State:     cloudkitv1alpha1.JobStateSucceeded,
+					},
+				}
+				// Add job-4 (removes job-1)
+				jobs = reconciler.appendJob(jobs, cloudkitv1alpha1.JobStatus{
+					JobID:     "job-4",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
+					State:     cloudkitv1alpha1.JobStatePending,
+				})
+				Expect(jobs).To(HaveLen(3))
+				Expect(jobs[0].JobID).To(Equal("job-2"))
+
+				// Add job-5 (removes job-2)
+				jobs = reconciler.appendJob(jobs, cloudkitv1alpha1.JobStatus{
+					JobID:     "job-5",
+					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Timestamp: metav1.NewTime(baseTime.Add(4 * time.Second)),
+					State:     cloudkitv1alpha1.JobStateRunning,
+				})
+				Expect(jobs).To(HaveLen(3))
+				Expect(jobs[0].JobID).To(Equal("job-3"))
+				Expect(jobs[1].JobID).To(Equal("job-4"))
+				Expect(jobs[2].JobID).To(Equal("job-5"))
+			})
+
+			It("should use default max history when set", func() {
+				reconciler := &ComputeInstanceReconciler{
+					MaxJobHistory: DefaultMaxJobHistory, // Use default (10)
+				}
+				jobs := []cloudkitv1alpha1.JobStatus{}
+				// Add 15 jobs
+				baseTime := time.Now().UTC()
+				for i := 1; i <= 15; i++ {
+					newJob := cloudkitv1alpha1.JobStatus{
+						JobID:     "job-" + string(rune('0'+i)),
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Second)),
+						State:     cloudkitv1alpha1.JobStatePending,
+					}
+					jobs = reconciler.appendJob(jobs, newJob)
+				}
+				// Should keep only last 10
+				Expect(jobs).To(HaveLen(DefaultMaxJobHistory))
+			})
+		})
+
+		Describe("updateJob", func() {
+			It("should return false when job ID not found", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(time.Now().UTC()),
+						State:     cloudkitv1alpha1.JobStatePending,
+					},
+				}
+				updatedJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-999",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     cloudkitv1alpha1.JobStateSucceeded,
+				}
+				result := updateJob(jobs, updatedJob)
+				Expect(result).To(BeFalse())
+				// Original job should be unchanged
+				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+			})
+
+			It("should return false when jobs slice is empty", func() {
+				jobs := []cloudkitv1alpha1.JobStatus{}
+				updatedJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-1",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     cloudkitv1alpha1.JobStateSucceeded,
+				}
+				result := updateJob(jobs, updatedJob)
+				Expect(result).To(BeFalse())
+			})
+
+			It("should update job and return true when found", func() {
+				baseTime := time.Now().UTC()
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime),
+						State:     cloudkitv1alpha1.JobStatePending,
+						Message:   "Initial message",
+					},
+				}
+				updatedTime := baseTime.Add(5 * time.Second)
+				updatedJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-1",
+					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(updatedTime),
+					State:     cloudkitv1alpha1.JobStateSucceeded,
+					Message:   "Updated message",
+				}
+				result := updateJob(jobs, updatedJob)
+				Expect(result).To(BeTrue())
+				// Job should be fully updated
+				Expect(jobs[0].JobID).To(Equal("job-1"))
+				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
+				Expect(jobs[0].Message).To(Equal("Updated message"))
+				Expect(jobs[0].Timestamp.Time).To(Equal(updatedTime))
+			})
+
+			It("should update correct job when multiple jobs exist", func() {
+				baseTime := time.Now().UTC()
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:     "job-1",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime),
+						State:     cloudkitv1alpha1.JobStatePending,
+						Message:   "First job",
+					},
+					{
+						JobID:     "job-2",
+						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
+						State:     cloudkitv1alpha1.JobStateRunning,
+						Message:   "Second job",
+					},
+					{
+						JobID:     "job-3",
+						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
+						State:     cloudkitv1alpha1.JobStatePending,
+						Message:   "Third job",
+					},
+				}
+				updatedJob := cloudkitv1alpha1.JobStatus{
+					JobID:     "job-2",
+					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
+					State:     cloudkitv1alpha1.JobStateSucceeded,
+					Message:   "Second job completed",
+				}
+				result := updateJob(jobs, updatedJob)
+				Expect(result).To(BeTrue())
+				// Only job-2 should be updated
+				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+				Expect(jobs[0].Message).To(Equal("First job"))
+				Expect(jobs[1].State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
+				Expect(jobs[1].Message).To(Equal("Second job completed"))
+				Expect(jobs[2].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+				Expect(jobs[2].Message).To(Equal("Third job"))
+			})
+
+			It("should update all fields of the job", func() {
+				baseTime := time.Now().UTC()
+				jobs := []cloudkitv1alpha1.JobStatus{
+					{
+						JobID:                  "job-1",
+						Type:                   cloudkitv1alpha1.JobTypeProvision,
+						Timestamp:              metav1.NewTime(baseTime),
+						State:                  cloudkitv1alpha1.JobStatePending,
+						Message:                "Initial",
+						BlockDeletionOnFailure: false,
+					},
+				}
+				updatedJob := cloudkitv1alpha1.JobStatus{
+					JobID:                  "job-1",
+					Type:                   cloudkitv1alpha1.JobTypeDeprovision, // Changed type
+					Timestamp:              metav1.NewTime(baseTime.Add(time.Minute)),
+					State:                  cloudkitv1alpha1.JobStateFailed,
+					Message:                "Failed with error",
+					BlockDeletionOnFailure: true,
+				}
+				result := updateJob(jobs, updatedJob)
+				Expect(result).To(BeTrue())
+				Expect(jobs[0].Type).To(Equal(cloudkitv1alpha1.JobTypeDeprovision))
+				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStateFailed))
+				Expect(jobs[0].Message).To(Equal("Failed with error"))
+				Expect(jobs[0].BlockDeletionOnFailure).To(BeTrue())
+			})
+		})
+	})
 })

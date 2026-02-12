@@ -12,7 +12,6 @@ import (
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
-	"github.com/innabox/cloudkit-operator/internal/controller"
 )
 
 // AAPClient is the interface for AAP operations used by the provider.
@@ -50,7 +49,7 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 
 	return &ProvisionResult{
 		JobID:        jobID,
-		InitialState: JobStatePending,
+		InitialState: v1alpha1.JobStatePending,
 		Message:      "Provisioning job triggered",
 	}, nil
 }
@@ -145,15 +144,11 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 	log := ctrllog.FromContext(ctx)
 
 	// Find latest provision job
-	latestProvisionJob := controller.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	// No provision job or job ID missing - ready to proceed
+	// No provision job - ready to proceed
 	if latestProvisionJob == nil {
 		log.Info("no provision job found in status, ready to deprovision")
-		return true, nil, nil
-	}
-	if latestProvisionJob.JobID == "" {
-		log.Info("provision job exists but ID is empty, ready to deprovision")
 		return true, nil, nil
 	}
 
@@ -287,7 +282,7 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 	}
 
 	// Populate error details if job failed
-	if status.State == JobStateFailed && job.ResultTraceback != "" {
+	if status.State == v1alpha1.JobStateFailed && job.ResultTraceback != "" {
 		status.ErrorDetails = job.ResultTraceback
 	}
 
@@ -295,23 +290,23 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 }
 
 // mapAAPStatusToJobState converts AAP job status to JobState.
-func mapAAPStatusToJobState(aapStatus string) JobState {
+func mapAAPStatusToJobState(aapStatus string) v1alpha1.JobState {
 	switch aapStatus {
 	case "successful":
-		return JobStateSucceeded
+		return v1alpha1.JobStateSucceeded
 	case "failed", "error":
-		return JobStateFailed
+		return v1alpha1.JobStateFailed
 	case "canceled":
-		return JobStateCanceled
+		return v1alpha1.JobStateCanceled
 	case "pending":
-		return JobStatePending
+		return v1alpha1.JobStatePending
 	case "waiting":
-		return JobStateWaiting
+		return v1alpha1.JobStateWaiting
 	case "running":
-		return JobStateRunning
+		return v1alpha1.JobStateRunning
 	default:
 		// Unknown states should be marked as Unknown (non-terminal) to allow continued polling
-		return JobStateUnknown
+		return v1alpha1.JobStateUnknown
 	}
 }
 
