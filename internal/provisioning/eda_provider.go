@@ -21,6 +21,12 @@ const (
 	EDAJobIDPrefix = "eda-webhook-"
 )
 
+// IsEDAJobID returns true if the job ID is from the EDA provider.
+// EDA job IDs have the format "eda-webhook-N", while AAP job IDs are numeric.
+func IsEDAJobID(jobID string) bool {
+	return strings.HasPrefix(jobID, EDAJobIDPrefix)
+}
+
 // RateLimitError indicates a request was rate-limited and should be retried.
 type RateLimitError struct {
 	RetryAfter time.Duration
@@ -59,7 +65,7 @@ func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
 	maxCounter := 0
 
 	for _, job := range jobs {
-		if strings.HasPrefix(job.JobID, EDAJobIDPrefix) {
+		if IsEDAJobID(job.JobID) {
 			// Extract counter from "eda-webhook-N"
 			counterStr := strings.TrimPrefix(job.JobID, EDAJobIDPrefix)
 			if counter, err := strconv.Atoi(counterStr); err == nil {

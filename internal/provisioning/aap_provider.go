@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,12 +37,6 @@ func NewAAPProvider(client AAPClient, provisionTemplate, deprovisionTemplate str
 		provisionTemplate:   provisionTemplate,
 		deprovisionTemplate: deprovisionTemplate,
 	}
-}
-
-// isEDAJobID returns true if the job ID is from the EDA provider.
-// EDA job IDs have the format "eda-webhook-N", while AAP job IDs are numeric.
-func isEDAJobID(jobID string) bool {
-	return strings.HasPrefix(jobID, EDAJobIDPrefix)
 }
 
 // TriggerProvision triggers provisioning via AAP API.
@@ -163,7 +156,7 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 
 	// Check if this is an EDA job ID (provider switch scenario)
 	// EDA job IDs start with "eda-webhook-", AAP job IDs are numeric
-	if isEDAJobID(latestProvisionJob.JobID) {
+	if IsEDAJobID(latestProvisionJob.JobID) {
 		log.Info("detected EDA provision job (provider switch scenario), checking instance phase", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
 		// Check the ComputeInstance phase to determine if provisioning is complete
