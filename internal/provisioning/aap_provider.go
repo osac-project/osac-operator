@@ -168,8 +168,8 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
 		// Check the ComputeInstance phase to determine if provisioning is complete
 
-		// Ready or Failed - provision is done, ready to deprovision
-		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseReady {
+		// Running or Failed - provision is done, ready to deprovision
+		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseRunning {
 			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 			return true, nil, nil
 		}
@@ -192,7 +192,7 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 			return false, nil, nil
 		}
 
-		// Progressing phase - still provisioning, not ready
+		// Starting phase - still provisioning, not ready
 		log.Info("EDA provision still in progress", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
 		return false, nil, nil
 	}
