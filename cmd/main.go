@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,8 +50,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	v1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/innabox/cloudkit-operator/internal/aap"
 	"github.com/innabox/cloudkit-operator/internal/controller"
 	"github.com/innabox/cloudkit-operator/internal/helpers"
+	"github.com/innabox/cloudkit-operator/internal/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -59,6 +62,65 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	// EDA webhook environment variables
+	envComputeInstanceProvisionWebhook   = "CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
+	envComputeInstanceDeprovisionWebhook = "CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
+
+	// Provider selection
+	envProvisioningProvider = "CLOUDKIT_PROVISIONING_PROVIDER"
+
+	// AAP configuration
+	envAAPURL                 = "CLOUDKIT_AAP_URL"
+	envAAPToken               = "CLOUDKIT_AAP_TOKEN"
+	envAAPProvisionTemplate   = "CLOUDKIT_AAP_PROVISION_TEMPLATE"
+	envAAPDeprovisionTemplate = "CLOUDKIT_AAP_DEPROVISION_TEMPLATE"
+	envAAPStatusPollInterval  = "CLOUDKIT_AAP_STATUS_POLL_INTERVAL"
+
+	// Job history configuration
+	envMaxJobHistory = "CLOUDKIT_MAX_JOB_HISTORY"
+)
+
+// parsePollInterval parses a poll interval from environment variable with fallback to default.
+func parsePollInterval(envVar string, defaultInterval time.Duration) time.Duration {
+	pollIntervalStr := os.Getenv(envVar)
+	if pollIntervalStr == "" {
+		return defaultInterval
+	}
+
+	interval, err := time.ParseDuration(pollIntervalStr)
+	if err != nil {
+		setupLog.Error(err, "invalid poll interval, using default",
+			"envVar", envVar, "value", pollIntervalStr, "default", defaultInterval)
+		return defaultInterval
+	}
+
+	return interval
+}
+
+// parseIntEnv parses an integer from environment variable with fallback to default.
+func parseIntEnv(envVar string, defaultValue int) int {
+	valueStr := os.Getenv(envVar)
+	if valueStr == "" {
+		return defaultValue
+	}
+
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		setupLog.Error(err, "invalid integer value, using default",
+			"envVar", envVar, "value", valueStr, "default", defaultValue)
+		return defaultValue
+	}
+
+	if value < 1 {
+		setupLog.Info("integer value must be at least 1, using default",
+			"envVar", envVar, "value", value, "default", defaultValue)
+		return defaultValue
+	}
+
+	return value
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -66,6 +128,78 @@ func init() {
 	utilruntime.Must(kubevirtv1.AddToScheme(scheme))
 	utilruntime.Must(ovnv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+// createEDAProvider creates and validates EDA webhook provider configuration.
+func createEDAProvider(
+	provisionWebhook, deprovisionWebhook string,
+	minimumRequestInterval time.Duration,
+) (provisioning.ProvisioningProvider, time.Duration, error) {
+	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
+	config := provisioning.ProviderConfig{
+		ProviderType:       provisioning.ProviderTypeEDA,
+		WebhookClient:      webhookClient,
+		ProvisionWebhook:   provisionWebhook,
+		DeprovisionWebhook: deprovisionWebhook,
+	}
+
+	provider, err := provisioning.NewProvider(config)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	setupLog.Info("using EDA webhook provider for ComputeInstance",
+		"provisionURL", provisionWebhook,
+		"deprovisionURL", deprovisionWebhook)
+
+	return provider, provisioning.DefaultStatusPollInterval, nil
+}
+
+// createAAPProvider creates and validates AAP direct provider configuration.
+func createAAPProvider(
+	aapURL, aapToken, provisionTemplate, deprovisionTemplate string,
+) (provisioning.ProvisioningProvider, time.Duration, error) {
+	statusPollInterval := parsePollInterval(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
+
+	aapClient := aap.NewClient(aapURL, aapToken)
+	config := provisioning.ProviderConfig{
+		ProviderType:        provisioning.ProviderTypeAAP,
+		AAPClient:           aapClient,
+		ProvisionTemplate:   provisionTemplate,
+		DeprovisionTemplate: deprovisionTemplate,
+	}
+
+	provider, err := provisioning.NewProvider(config)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	setupLog.Info("using AAP direct provider for ComputeInstance",
+		"url", aapURL,
+		"provisionTemplate", provisionTemplate,
+		"deprovisionTemplate", deprovisionTemplate,
+		"statusPollInterval", statusPollInterval)
+
+	return provider, statusPollInterval, nil
+}
+
+// createProvider creates a provisioning provider based on type.
+func createProvider(
+	providerType provisioning.ProviderType,
+	provisionWebhook, deprovisionWebhook string,
+	aapURL, aapToken, provisionTemplate, deprovisionTemplate string,
+	minimumRequestInterval time.Duration,
+) (provisioning.ProvisioningProvider, time.Duration, error) {
+	switch providerType {
+	case provisioning.ProviderTypeEDA:
+		return createEDAProvider(provisionWebhook, deprovisionWebhook, minimumRequestInterval)
+
+	case provisioning.ProviderTypeAAP:
+		return createAAPProvider(aapURL, aapToken, provisionTemplate, deprovisionTemplate)
+
+	default:
+		return nil, 0, fmt.Errorf("unknown provider type: %s", providerType)
+	}
 }
 
 func main() {
@@ -276,14 +410,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create the ComputeInstance reconciler
+	// Create the ComputeInstance reconciler with appropriate provider
+	// Read all configuration upfront
+	providerTypeStr := os.Getenv(envProvisioningProvider)
+	provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
+	deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+	provisionTemplate := os.Getenv(envAAPProvisionTemplate)
+	deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
+
+	// Default to EDA if not specified (backward compatibility)
+	providerType := provisioning.ProviderType(providerTypeStr)
+	if providerType == "" {
+		providerType = provisioning.ProviderTypeEDA
+	}
+
+	computeInstanceProvider, statusPollInterval, err := createProvider(
+		providerType,
+		provisionWebhook, deprovisionWebhook,
+		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+		minimumRequestInterval,
+	)
+	if err != nil {
+		setupLog.Error(err, "failed to create provisioning provider")
+		os.Exit(1)
+	}
+
+	// Parse max job history
+	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
+	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
+
 	if err = (controller.NewComputeInstanceReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		os.Getenv("CLOUDKIT_COMPUTE_INSTANCE_CREATE_WEBHOOK"),
-		os.Getenv("CLOUDKIT_COMPUTE_INSTANCE_DELETE_WEBHOOK"),
 		computeInstanceNamespace,
-		minimumRequestInterval,
+		computeInstanceProvider,
+		statusPollInterval,
+		maxJobHistory,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ComputeInstance")
 		os.Exit(1)

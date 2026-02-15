@@ -1,0 +1,192 @@
+package provisioning
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/innabox/cloudkit-operator/internal/webhook"
+)
+
+// RateLimitError indicates a request was rate-limited and should be retried.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("rate limit active, retry after %v", e.RetryAfter)
+}
+
+// WebhookClient is the interface for triggering webhooks to EDA.
+// This matches the existing webhook_common.WebhookClient implementation.
+type WebhookClient interface {
+	TriggerWebhook(ctx context.Context, url string, resource webhook.Resource) (remainingTime time.Duration, err error)
+}
+
+// EDAProvider implements ProvisioningProvider using EDA webhooks.
+// It maintains backward compatibility with the existing webhook-based approach.
+type EDAProvider struct {
+	webhookClient WebhookClient
+	createURL     string
+	deleteURL     string
+}
+
+// NewEDAProvider creates a new EDA provider.
+func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *EDAProvider {
+	return &EDAProvider{
+		webhookClient: webhookClient,
+		createURL:     createURL,
+		deleteURL:     deleteURL,
+	}
+}
+
+// generateEDAJobID generates a unique job ID by scanning existing jobs and incrementing the counter.
+// Returns IDs in the format "eda-webhook-N" where N is an incrementing counter.
+func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
+	maxCounter := 0
+	prefix := "eda-webhook-"
+
+	for _, job := range jobs {
+		if strings.HasPrefix(job.JobID, prefix) {
+			// Extract counter from "eda-webhook-N"
+			counterStr := strings.TrimPrefix(job.JobID, prefix)
+			if counter, err := strconv.Atoi(counterStr); err == nil {
+				if counter > maxCounter {
+					maxCounter = counter
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s%d", prefix, maxCounter+1)
+}
+
+// TriggerProvision triggers provisioning via EDA webhook.
+// Generates a unique job ID by scanning existing jobs.
+// Returns RateLimitError if the request is rate-limited.
+func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
+	if p.createURL == "" {
+		return nil, fmt.Errorf("create webhook URL not configured")
+	}
+
+	webhookResource, ok := resource.(webhook.Resource)
+	if !ok {
+		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
+	}
+
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.createURL, webhookResource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to trigger create webhook: %w", err)
+	}
+
+	// If we're within the rate limit window, return rate limit error
+	if remainingTime > 0 {
+		return nil, &RateLimitError{RetryAfter: remainingTime}
+	}
+
+	// Generate unique job ID
+	instance, ok := resource.(*v1alpha1.ComputeInstance)
+	if !ok {
+		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	}
+	jobID := generateEDAJobID(instance.Status.Jobs)
+
+	return &ProvisionResult{
+		JobID:        jobID,
+		InitialState: v1alpha1.JobStateRunning,
+		Message:      "Webhook sent to EDA, provisioning in progress",
+	}, nil
+}
+
+// GetProvisionStatus checks provisioning status.
+// EDA doesn't provide status polling, so this always returns JobStateUnknown.
+// The reconciler must check the CR annotation for completion.
+func (p *EDAProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
+	return ProvisionStatus{
+		JobID:   jobID,
+		State:   v1alpha1.JobStateUnknown,
+		Message: "EDA provider does not support status polling",
+	}, nil
+}
+
+// TriggerDeprovision triggers deprovisioning via EDA webhook.
+// Generates a unique job ID by scanning existing jobs.
+// Returns RateLimitError if the request is rate-limited.
+func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// EDA only deprovisions if AAP finalizer exists (set by playbook during provision)
+	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
+		log.Info("no AAP finalizer, skipping EDA deprovisioning")
+		return &DeprovisionResult{
+			Action:                 DeprovisionSkipped,
+			BlockDeletionOnFailure: false,
+		}, nil
+	}
+
+	// Trigger webhook
+	if p.deleteURL == "" {
+		return nil, fmt.Errorf("delete webhook URL not configured")
+	}
+
+	webhookResource, ok := resource.(webhook.Resource)
+	if !ok {
+		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
+	}
+
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.deleteURL, webhookResource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to trigger delete webhook: %w", err)
+	}
+
+	// If we're within the rate limit window, return rate limit error
+	if remainingTime > 0 {
+		return nil, &RateLimitError{RetryAfter: remainingTime}
+	}
+
+	// Generate unique job ID
+	instance, ok := resource.(*v1alpha1.ComputeInstance)
+	if !ok {
+		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	}
+	jobID := generateEDAJobID(instance.Status.Jobs)
+
+	return &DeprovisionResult{
+		Action:                 DeprovisionTriggered,
+		JobID:                  jobID,
+		BlockDeletionOnFailure: false,
+	}, nil
+}
+
+// GetDeprovisionStatus checks deprovisioning status.
+// EDA signals completion by having the AAP playbook remove the AAP finalizer.
+// Returns Succeeded when finalizer is removed, Running while it still exists.
+func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
+	// Check if AAP finalizer has been removed (signals playbook completion)
+	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
+		return ProvisionStatus{
+			JobID:   jobID,
+			State:   v1alpha1.JobStateSucceeded,
+			Message: "AAP playbook completed (finalizer removed)",
+		}, nil
+	}
+
+	// Finalizer still present - playbook still running
+	return ProvisionStatus{
+		JobID:   jobID,
+		State:   v1alpha1.JobStateRunning,
+		Message: "Waiting for AAP playbook to complete",
+	}, nil
+}
+
+// Name returns the provider name for logging.
+func (p *EDAProvider) Name() string {
+	return "eda"
+}

@@ -146,6 +146,12 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
+
+	// Jobs tracks the history of provision and deprovision operations
+	// Ordered chronologically, with latest operations at the end
+	// Limited to the last N jobs (configurable via CLOUDKIT_MAX_JOB_HISTORY, default 10)
+	// +kubebuilder:validation:Optional
+	Jobs []JobStatus `json:"jobs,omitempty"`
 }
 
 // +kubebuilder:object:root=true

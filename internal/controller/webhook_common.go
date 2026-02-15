@@ -26,12 +26,9 @@ import (
 	"time"
 
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-)
 
-// WebhookResource represents any resource that can be sent via webhook
-type WebhookResource interface {
-	GetName() string
-}
+	"github.com/innabox/cloudkit-operator/internal/webhook"
+)
 
 // InflightRequest represents a request that is currently being processed
 type InflightRequest struct {
@@ -99,7 +96,7 @@ func (wc *WebhookClient) purgeExpiredRequests(ctx context.Context) {
 }
 
 // TriggerWebhook sends a webhook request for the given resource
-func (wc *WebhookClient) TriggerWebhook(ctx context.Context, url string, resource WebhookResource) (time.Duration, error) {
+func (wc *WebhookClient) TriggerWebhook(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if delta := wc.checkForExistingRequest(ctx, url, resource.GetName()); delta != 0 {

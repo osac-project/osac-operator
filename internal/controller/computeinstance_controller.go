@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,40 +40,90 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/innabox/cloudkit-operator/internal/provisioning"
 	kubevirtv1 "kubevirt.io/api/core/v1"
+)
+
+const (
+	// DefaultMaxJobHistory is the default number of jobs to keep in status.jobs array
+	DefaultMaxJobHistory = 10
 )
 
 // ComputeInstanceReconciler reconciles a ComputeInstance object
 type ComputeInstanceReconciler struct {
 	client.Client
-	Scheme                       *runtime.Scheme
-	CreateComputeInstanceWebhook string
-	DeleteComputeInstanceWebhook string
-	ComputeInstanceNamespace     string
-	webhookClient                *WebhookClient
+	Scheme                   *runtime.Scheme
+	ComputeInstanceNamespace string
+	ProvisioningProvider     provisioning.ProvisioningProvider
+	// StatusPollInterval defines how often to check provisioning job status
+	StatusPollInterval time.Duration
+	// MaxJobHistory defines how many jobs to keep in status.jobs array
+	MaxJobHistory int
 }
 
 func NewComputeInstanceReconciler(
 	client client.Client,
 	scheme *runtime.Scheme,
-	createVMWebhook string,
-	deleteVMWebhook string,
 	computeInstanceNamespace string,
-	minimumRequestInterval time.Duration,
+	provisioningProvider provisioning.ProvisioningProvider,
+	statusPollInterval time.Duration,
+	maxJobHistory int,
 ) *ComputeInstanceReconciler {
 
 	if computeInstanceNamespace == "" {
 		computeInstanceNamespace = defaultComputeInstanceNamespace
 	}
 
-	return &ComputeInstanceReconciler{
-		Client:                       client,
-		Scheme:                       scheme,
-		CreateComputeInstanceWebhook: createVMWebhook,
-		DeleteComputeInstanceWebhook: deleteVMWebhook,
-		ComputeInstanceNamespace:     computeInstanceNamespace,
-		webhookClient:                NewWebhookClient(10*time.Second, minimumRequestInterval),
+	if statusPollInterval == 0 {
+		statusPollInterval = 30 * time.Second
 	}
+
+	if maxJobHistory <= 0 {
+		maxJobHistory = DefaultMaxJobHistory
+	}
+
+	return &ComputeInstanceReconciler{
+		Client:                   client,
+		Scheme:                   scheme,
+		ComputeInstanceNamespace: computeInstanceNamespace,
+		ProvisioningProvider:     provisioningProvider,
+		StatusPollInterval:       statusPollInterval,
+		MaxJobHistory:            maxJobHistory,
+	}
+}
+
+// findJobByID finds a job by its ID in the jobs array.
+// Returns a pointer to the job if found, nil otherwise.
+// The returned pointer can be used to update the job in place.
+func findJobByID(jobs []v1alpha1.JobStatus, jobID string) *v1alpha1.JobStatus {
+	for i := range jobs {
+		if jobs[i].JobID == jobID {
+			return &jobs[i]
+		}
+	}
+	return nil
+}
+
+// appendJob adds a new job to the jobs array and trims to maxHistory.
+// Jobs are appended in chronological order (oldest first, newest last).
+func (r *ComputeInstanceReconciler) appendJob(jobs []v1alpha1.JobStatus, newJob v1alpha1.JobStatus) []v1alpha1.JobStatus {
+	jobs = append(jobs, newJob)
+	if len(jobs) > r.MaxJobHistory {
+		// Keep only the last MaxJobHistory jobs
+		jobs = jobs[len(jobs)-r.MaxJobHistory:]
+	}
+	return jobs
+}
+
+// updateJob updates an existing job by ID with new values.
+// Returns true if the job was found and updated, false otherwise.
+func updateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
+	job := findJobByID(jobs, updatedJob.JobID)
+	if job == nil {
+		return false
+	}
+	*job = updatedJob
+	return true
 }
 
 // +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
@@ -110,13 +162,29 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, instance); err != nil {
+		if err := r.updateStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
 			return res, err
 		}
 	}
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+// updateStatusWithRetry updates the instance status with retry on conflict.
+// This prevents duplicate job triggers when status updates fail due to optimistic concurrency conflicts.
+func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ComputeInstanceStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Fetch latest version to get current resourceVersion
+		latest := &v1alpha1.ComputeInstance{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		// Copy status updates to the latest version
+		latest.Status = newStatus
+		// Attempt to update with fresh resourceVersion
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
@@ -203,6 +271,247 @@ func (r *ComputeInstanceReconciler) mapObjectToComputeInstance(ctx context.Conte
 	}
 }
 
+// handleProvisioning manages the provisioning job lifecycle for a ComputeInstance.
+// It triggers provisioning if needed and polls job status until completion.
+// Status updates are handled by the main reconcile loop.
+func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// Check for ManagementStateManual annotation
+	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
+	if exists && val == ManagementStateManual {
+		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
+		return ctrl.Result{}, nil
+	}
+
+	// If no provider configured, skip provisioning
+	if r.ProvisioningProvider == nil {
+		log.Info("no provisioning provider configured, skipping provisioning")
+		return ctrl.Result{}, nil
+	}
+
+	// Check if we already have a provision job
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+
+	if latestProvisionJob == nil || latestProvisionJob.JobID == "" {
+		// No job yet, trigger provisioning
+		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
+		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
+		if err != nil {
+			// Check if this is a rate limit error
+			var rateLimitErr *provisioning.RateLimitError
+			if errors.As(err, &rateLimitErr) {
+				log.Info("provisioning request rate-limited, will retry", "retryAfter", rateLimitErr.RetryAfter)
+				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
+			}
+
+			// Actual error - mark as failed
+			log.Error(err, "failed to trigger provisioning")
+			newJob := v1alpha1.JobStatus{
+				JobID:     "",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+				State:     v1alpha1.JobStateFailed,
+				Message:   fmt.Sprintf("Failed to trigger provisioning: %v", err),
+			}
+			instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+
+		newJob := v1alpha1.JobStatus{
+			JobID:                  result.JobID,
+			Type:                   v1alpha1.JobTypeProvision,
+			Timestamp:              metav1.NewTime(time.Now().UTC()),
+			State:                  result.InitialState,
+			Message:                result.Message,
+			BlockDeletionOnFailure: false, // Provision failures don't block deletion
+		}
+		instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+		log.Info("provisioning job triggered", "jobID", result.JobID)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// We have a job ID, check its status
+	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
+	if err != nil {
+		log.Error(err, "failed to get provision job status", "jobID", latestProvisionJob.JobID)
+		updatedJob := *latestProvisionJob
+		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
+		updateJob(instance.Status.Jobs, updatedJob)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Update job status
+	updatedJob := *latestProvisionJob
+	updatedJob.State = status.State
+	updatedJob.Message = status.Message
+	if status.ErrorDetails != "" {
+		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+	}
+	updateJob(instance.Status.Jobs, updatedJob)
+
+	// If job is still running, requeue
+	if !status.State.IsTerminal() {
+		log.Info("provision job still running", "jobID", latestProvisionJob.JobID, "state", status.State)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Job is complete
+	if status.State.IsSuccessful() {
+		log.Info("provision job succeeded", "jobID", latestProvisionJob.JobID)
+		// Update reconciled version if provided
+		if status.ReconciledVersion != "" {
+			instance.Status.ReconciledConfigVersion = status.ReconciledVersion
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Job failed
+	log.Error(nil, "provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
+	instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+	return ctrl.Result{}, nil
+}
+
+// handleDeprovisioning manages the deprovisioning job lifecycle for a ComputeInstance.
+// It triggers deprovisioning if needed and polls job status until completion.
+// For EDA provider: This is called only when AAP finalizer exists (set by playbook).
+// For AAP Direct provider: This is always called to handle cancellation and deprovision.
+// Note: Finalizer management is handled by handleDelete(), not here.
+func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// Check for ManagementStateManual annotation
+	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
+	if exists && val == ManagementStateManual {
+		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
+		// For EDA: AAP playbook handles finalizer removal
+		// For AAP Direct: handleDelete() removes base finalizer
+		return ctrl.Result{}, nil
+	}
+
+	// Check if we already have a deprovision job
+	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+
+	// Trigger deprovisioning - provider decides internally if ready
+	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
+		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
+
+		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
+		if err != nil {
+			// Check if this is a rate limit error
+			var rateLimitErr *provisioning.RateLimitError
+			if errors.As(err, &rateLimitErr) {
+				log.Info("deprovisioning request rate-limited, will retry", "retryAfter", rateLimitErr.RetryAfter)
+				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
+			}
+
+			// Actual error
+			log.Error(err, "failed to trigger deprovisioning")
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+
+		// Handle provider action
+		switch result.Action {
+		case provisioning.DeprovisionWaiting:
+			// Provider not ready yet (e.g., canceling provision job)
+			// Update provision job status if provider returned one (e.g., cancellation in progress)
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					updateJob(instance.Status.Jobs, updatedJob)
+					log.Info("updated provision job status while waiting for deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+				}
+			}
+			log.Info("deprovisioning not ready, requeueing")
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+		case provisioning.DeprovisionSkipped:
+			// Provider determined deprovisioning not needed (e.g., EDA without finalizer)
+			log.Info("provider skipped deprovisioning")
+			return ctrl.Result{}, nil
+
+		case provisioning.DeprovisionTriggered:
+			// Deprovision started successfully
+			// Update provision job status if provider returned one (job was terminal before deprovision)
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					updateJob(instance.Status.Jobs, updatedJob)
+					log.Info("updated provision job status before starting deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
+				}
+			}
+			newJob := v1alpha1.JobStatus{
+				JobID:                  result.JobID,
+				Type:                   v1alpha1.JobTypeDeprovision,
+				Timestamp:              metav1.NewTime(time.Now().UTC()),
+				State:                  v1alpha1.JobStatePending,
+				Message:                "Deprovisioning job triggered",
+				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
+			}
+			instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+			log.Info("deprovisioning job triggered", "jobID", result.JobID)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+	}
+
+	// We have a job ID, check its status
+	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance, latestDeprovisionJob.JobID)
+	if err != nil {
+		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
+		updatedJob := *latestDeprovisionJob
+		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
+		updateJob(instance.Status.Jobs, updatedJob)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Update job status
+	updatedJob := *latestDeprovisionJob
+	updatedJob.State = status.State
+	updatedJob.Message = status.Message
+	if status.ErrorDetails != "" {
+		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
+	}
+	updateJob(instance.Status.Jobs, updatedJob)
+
+	// If job is still running, requeue
+	if !status.State.IsTerminal() {
+		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Job reached terminal state (Succeeded, Failed, or Canceled)
+	if status.State.IsSuccessful() {
+		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
+		// For EDA: AAP playbook removes AAP finalizer on success
+		// For AAP Direct: handleDelete() removes base finalizer
+		return ctrl.Result{}, nil
+	}
+
+	// Job failed or was canceled
+	// Check policy stored in job status
+	if latestDeprovisionJob.BlockDeletionOnFailure {
+		// Block deletion to prevent orphaned resources
+		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
+			"jobID", latestDeprovisionJob.JobID,
+			"state", status.State,
+			"message", updatedJob.Message)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	} else {
+		// Allow process to continue (webhook handles cleanup)
+		log.Info("deprovision job did not succeed, allowing process to continue",
+			"jobID", latestDeprovisionJob.JobID,
+			"state", status.State,
+			"message", updatedJob.Message)
+		return ctrl.Result{}, nil
+	}
+}
+
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -261,33 +570,25 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
 		instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
-		r.webhookClient.ResetCache()
+
+		// If we're tracking a provision job that hasn't reached terminal state, continue polling
+		// This ensures job status fields are accurate and reflect the final job outcome
+		latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+		if r.ProvisioningProvider != nil && latestProvisionJob != nil {
+			if !latestProvisionJob.State.IsTerminal() {
+				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", latestProvisionJob.JobID, "state", latestProvisionJob.State)
+				return r.handleProvisioning(ctx, instance)
+			}
+		}
+
 		return ctrl.Result{}, nil
 	}
 
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
 
-	if url := r.CreateComputeInstanceWebhook; url != "" {
-		val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
-		if exists && val == ManagementStateManual {
-			log.Info("not triggering create webhook due to management-state annotation", "url", url, "management-state", val)
-		} else {
-			remainingTime, err := r.webhookClient.TriggerWebhook(ctx, url, instance)
-			if err != nil {
-				log.Error(err, "failed to trigger webhook", "url", url, "error", err)
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-			}
-
-			// Verify if we are within the minimum request window
-			if remainingTime != 0 {
-				log.Info("request is within minimum request window", "url", url)
-				return ctrl.Result{RequeueAfter: remainingTime}, nil
-			}
-		}
-	}
-
-	return ctrl.Result{}, nil
+	// Handle provisioning via provider abstraction
+	return r.handleProvisioning(ctx, instance)
 }
 
 func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
@@ -296,33 +597,24 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Req
 
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
 
-	// Finalizer has already been removed, return
+	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
-	// AAP Finalizer is here, trigger deletion webhook
-	if controllerutil.ContainsFinalizer(instance, cloudkitAAPComputeInstanceFinalizer) {
-		if url := r.DeleteComputeInstanceWebhook; url != "" {
-			val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
-			if exists && val == ManagementStateManual {
-				log.Info("not triggering delete webhook due to management-state annotation", "url", url, "management-state", val)
-			} else {
-				remainingTime, err := r.webhookClient.TriggerWebhook(ctx, url, instance)
-				if err != nil {
-					log.Error(err, "failed to trigger webhook", "url", url, "error", err)
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-				}
-
-				if remainingTime != 0 {
-					return ctrl.Result{RequeueAfter: remainingTime}, nil
-				}
-			}
-		}
-		return ctrl.Result{}, nil
+	// Handle deprovisioning - provider decides internally if needed
+	log.Info("handling deletion")
+	result, err := r.handleDeprovisioning(ctx, instance)
+	if err != nil {
+		return result, err
 	}
 
-	// Let this CR be deleted
+	// If we need to requeue (jobs still running or provider needs time), do so
+	if result.RequeueAfter > 0 {
+		return result, nil
+	}
+
+	// Deprovisioning complete or skipped, remove base finalizer
 	if controllerutil.RemoveFinalizer(instance, cloudkitComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err

@@ -25,3 +25,6 @@ go.work
 *.swp
 *.swo
 *~
+
+# Development memory/notes (local only)
+MEMORY.md
