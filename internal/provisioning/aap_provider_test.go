@@ -460,6 +460,160 @@ var _ = Describe("AAPProvider", func() {
 				Expect(err.Error()).To(ContainSubstring("deprovision template not configured"))
 			})
 		})
+
+		Context("with EDA provision job (provider switch scenario)", func() {
+			BeforeEach(func() {
+				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+				}
+				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+					return &aap.LaunchJobTemplateResponse{JobID: 999}, nil
+				}
+			})
+
+			Context("when EDA provision job is in Running phase", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "eda-webhook-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateUnknown,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+					}
+				})
+
+				It("should trigger deprovision immediately", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+					Expect(result.JobID).To(Equal("999"))
+				})
+			})
+
+			Context("when EDA provision job is in Failed phase", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "eda-webhook-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateUnknown,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+					}
+				})
+
+				It("should trigger deprovision immediately", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+					Expect(result.JobID).To(Equal("999"))
+				})
+			})
+
+			Context("when EDA provision job is in Starting phase", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "eda-webhook-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateUnknown,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+					}
+				})
+
+				It("should wait (not ready for deprovision)", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionWaiting))
+				})
+			})
+
+			Context("when EDA provision job is in Deleting phase with no deprovision job yet", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "eda-webhook-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateUnknown,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+					}
+				})
+
+				It("should trigger deprovision (initial deletion)", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+					Expect(result.JobID).To(Equal("999"))
+				})
+			})
+
+			Context("when EDA provision job is in Deleting phase with existing deprovision job", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "eda-webhook-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateUnknown,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+						{
+							JobID:     "999",
+							Type:      v1alpha1.JobTypeDeprovision,
+							State:     v1alpha1.JobStateRunning,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-1 * time.Minute)),
+						},
+					}
+				})
+
+				It("should wait (deprovision already in progress)", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionWaiting))
+				})
+			})
+
+			Context("when provision job is AAP (numeric ID) not EDA", func() {
+				BeforeEach(func() {
+					instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+					instance.Status.Jobs = []v1alpha1.JobStatus{
+						{
+							JobID:     "9876",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateRunning,
+							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+						},
+					}
+					aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
+						return &aap.Job{
+							ID:       9876,
+							Status:   "running",
+							Started:  time.Now().UTC().Add(-5 * time.Minute),
+							Finished: time.Time{},
+						}, nil
+					}
+					aapClient.cancelJobFunc = func(ctx context.Context, jobID string) error {
+						return nil
+					}
+				})
+
+				It("should check AAP job status and cancel if running", func() {
+					result, err := provider.TriggerDeprovision(ctx, instance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.Action).To(Equal(provisioning.DeprovisionWaiting))
+					Expect(result.ProvisionJobStatus).NotTo(BeNil())
+					Expect(result.ProvisionJobStatus.State).To(Equal(v1alpha1.JobStateRunning))
+				})
+			})
+		})
 	})
 
 	Describe("GetDeprovisionStatus", func() {
