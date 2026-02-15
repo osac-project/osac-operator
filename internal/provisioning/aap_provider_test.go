@@ -477,7 +477,7 @@ var _ = Describe("AAPProvider", func() {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
 					instance.Status.Jobs = []v1alpha1.JobStatus{
 						{
-							JobID:     "eda-webhook-1",
+							JobID:     fmt.Sprintf("%s1", provisioning.EDAJobIDPrefix),
 							Type:      v1alpha1.JobTypeProvision,
 							State:     v1alpha1.JobStateUnknown,
 							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
@@ -498,7 +498,7 @@ var _ = Describe("AAPProvider", func() {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
 					instance.Status.Jobs = []v1alpha1.JobStatus{
 						{
-							JobID:     "eda-webhook-1",
+							JobID:     fmt.Sprintf("%s1", provisioning.EDAJobIDPrefix),
 							Type:      v1alpha1.JobTypeProvision,
 							State:     v1alpha1.JobStateUnknown,
 							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
@@ -519,7 +519,7 @@ var _ = Describe("AAPProvider", func() {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 					instance.Status.Jobs = []v1alpha1.JobStatus{
 						{
-							JobID:     "eda-webhook-1",
+							JobID:     fmt.Sprintf("%s1", provisioning.EDAJobIDPrefix),
 							Type:      v1alpha1.JobTypeProvision,
 							State:     v1alpha1.JobStateUnknown,
 							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
@@ -539,7 +539,7 @@ var _ = Describe("AAPProvider", func() {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
 					instance.Status.Jobs = []v1alpha1.JobStatus{
 						{
-							JobID:     "eda-webhook-1",
+							JobID:     fmt.Sprintf("%s1", provisioning.EDAJobIDPrefix),
 							Type:      v1alpha1.JobTypeProvision,
 							State:     v1alpha1.JobStateUnknown,
 							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
@@ -560,7 +560,7 @@ var _ = Describe("AAPProvider", func() {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
 					instance.Status.Jobs = []v1alpha1.JobStatus{
 						{
-							JobID:     "eda-webhook-1",
+							JobID:     fmt.Sprintf("%s1", provisioning.EDAJobIDPrefix),
 							Type:      v1alpha1.JobTypeProvision,
 							State:     v1alpha1.JobStateUnknown,
 							Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
