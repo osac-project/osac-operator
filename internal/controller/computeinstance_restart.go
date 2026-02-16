@@ -42,7 +42,7 @@ const (
 // handleRestartRequest processes restart requests for a ComputeInstance.
 // It uses a simple declarative pattern: if spec.restartRequestedAt > status.lastRestartedAt,
 // execute the restart.
-func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, tenant *v1alpha1.Tenant, ci *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	// Check if restart is requested
@@ -56,7 +56,7 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 	// Check if restart is in progress
 	if meta.IsStatusConditionTrue(ci.Status.Conditions, string(v1alpha1.ComputeInstanceConditionRestartInProgress)) {
 		// Check if restart has completed
-		if err := r.checkRestartCompletion(ctx, ci); err != nil {
+		if err := r.checkRestartCompletion(ctx, tenant, ci); err != nil {
 			return ctrl.Result{}, err
 		}
 		// Status will be updated by the main Reconcile loop
@@ -74,12 +74,12 @@ func (r *ComputeInstanceReconciler) handleRestartRequest(ctx context.Context, ci
 		"requestedAt", ci.Spec.RestartRequestedAt.Time.Format(time.RFC3339))
 
 	// Execute the restart
-	return r.performRestart(ctx, ci)
+	return r.performRestart(ctx, tenant, ci)
 }
 
 // performRestart executes the VM restart by deleting the VirtualMachineInstance.
 // KubeVirt will automatically recreate the VMI, resulting in a restart.
-func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, tenant *v1alpha1.Tenant, ci *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	// Check if VirtualMachineReference exists
@@ -103,7 +103,13 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 		Namespace: ci.Status.VirtualMachineReference.Namespace,
 	}
 
-	if err := r.Get(ctx, vmiName, vmi); err != nil {
+	cli, err := getClusterClient(ctx, r.Manager, tenant.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "failed to get VM client")
+		return ctrl.Result{}, err
+	}
+
+	if err := cli.Get(ctx, vmiName, vmi); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("VirtualMachineInstance not found, marking restart as in progress")
 			// VMI doesn't exist yet, but will be created by VM controller
@@ -124,7 +130,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 
 	// Delete VMI to trigger restart (KubeVirt will recreate it)
 	log.Info("Deleting VirtualMachineInstance to trigger restart", "vmi", vmiName.String())
-	if err := r.Delete(ctx, vmi); err != nil {
+	if err := cli.Delete(ctx, vmi); err != nil {
 		if !apierrors.IsNotFound(err) {
 			log.Error(err, "Failed to delete VirtualMachineInstance")
 			meta.SetStatusCondition(&ci.Status.Conditions, metav1.Condition{
@@ -161,7 +167,7 @@ func (r *ComputeInstanceReconciler) performRestart(ctx context.Context, ci *v1al
 
 // checkRestartCompletion checks if a restart in progress has completed.
 // A restart is considered complete when the VMI has been recreated (creation timestamp after restart request).
-func (r *ComputeInstanceReconciler) checkRestartCompletion(ctx context.Context, ci *v1alpha1.ComputeInstance) error {
+func (r *ComputeInstanceReconciler) checkRestartCompletion(ctx context.Context, tenant *v1alpha1.Tenant, ci *v1alpha1.ComputeInstance) error {
 	log := log.FromContext(ctx)
 
 	// Check if VirtualMachineReference exists
@@ -176,7 +182,13 @@ func (r *ComputeInstanceReconciler) checkRestartCompletion(ctx context.Context, 
 		Namespace: ci.Status.VirtualMachineReference.Namespace,
 	}
 
-	if err := r.Get(ctx, vmiName, vmi); err != nil {
+	cli, err := getClusterClient(ctx, r.Manager, tenant.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "failed to get VM client")
+		return err
+	}
+
+	if err := cli.Get(ctx, vmiName, vmi); err != nil {
 		if apierrors.IsNotFound(err) {
 			// VMI not found yet, restart still in progress
 			return nil

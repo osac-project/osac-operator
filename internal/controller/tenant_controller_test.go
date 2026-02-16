@@ -54,7 +54,8 @@ var _ = Describe("Tenant Controller", func() {
 						Namespace: "default",
 					},
 					Spec: v1alpha1.TenantSpec{
-						Name: "my-tenant",
+						Name:        "my-tenant",
+						ClusterName: "local",
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -73,7 +74,7 @@ var _ = Describe("Tenant Controller", func() {
 			// https://book.kubebuilder.io/reference/envtest.html#namespace-usage-limitation
 			By("Reconciling until namespace is terminating")
 			Eventually(func(g Gomega) {
-				controllerReconciler := NewTenantReconciler(k8sClient, k8sClient.Scheme(), "default")
+				controllerReconciler := NewTenantReconciler(testMcManager, "default")
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
 					Request: reconcile.Request{NamespacedName: typeNamespacedName},
 				})
@@ -85,7 +86,7 @@ var _ = Describe("Tenant Controller", func() {
 			}).Should(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
-			controllerReconciler := NewTenantReconciler(k8sClient, k8sClient.Scheme(), "default")
+			controllerReconciler := NewTenantReconciler(testMcManager, "default")
 
 			By("reconciling until tenant is ready")
 			Eventually(func(g Gomega) {

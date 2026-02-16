@@ -38,7 +38,12 @@ func (r *TenantReconciler) createOrUpdateTenantNamespace(ctx context.Context, in
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, namespace, func() error {
+	cli, err := getClusterClient(ctx, r.Manager, instance.Spec.ClusterName)
+	if err != nil {
+		return err
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, cli, namespace, func() error {
 		ensureCommonLabelsForTenant(instance, namespace)
 		return nil
 	})
@@ -73,7 +78,12 @@ func (r *TenantReconciler) createOrUpdateTenantUDN(ctx context.Context, instance
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, udn, func() error {
+	cli, err := getClusterClient(ctx, r.Manager, instance.Spec.ClusterName)
+	if err != nil {
+		return err
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, cli, udn, func() error {
 		ensureCommonLabelsForTenant(instance, udn)
 		return nil
 	})
@@ -94,7 +104,12 @@ func (r *TenantReconciler) deleteTenantUDN(ctx context.Context, instance *v1alph
 		return nil, client.IgnoreNotFound(err)
 	}
 
-	return udn, r.Client.Delete(ctx, udn)
+	cli, err := getClusterClient(ctx, r.Manager, instance.Spec.ClusterName)
+	if err != nil {
+		return nil, err
+	}
+
+	return udn, cli.Delete(ctx, udn)
 }
 
 func (r *TenantReconciler) deleteTenantNamespace(ctx context.Context, instance *v1alpha1.Tenant) (*corev1.Namespace, error) {
@@ -104,14 +119,19 @@ func (r *TenantReconciler) deleteTenantNamespace(ctx context.Context, instance *
 		return nil, nil
 	}
 
+	cli, err := getClusterClient(ctx, r.Manager, instance.Spec.ClusterName)
+	if err != nil {
+		return nil, err
+	}
+
 	namespace := &corev1.Namespace{}
-	err := r.Client.Get(ctx, client.ObjectKey{Name: namespaceName}, namespace)
+	err = cli.Get(ctx, client.ObjectKey{Name: namespaceName}, namespace)
 	if err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
 
 	if namespace.Status.Phase != corev1.NamespaceTerminating {
-		err = r.Client.Delete(ctx, namespace)
+		err = cli.Delete(ctx, namespace)
 	}
 
 	return namespace, err

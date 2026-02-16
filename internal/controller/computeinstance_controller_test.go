@@ -84,6 +84,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Scheme:               k8sClient.Scheme(),
 					ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
 					StatusPollInterval:   100 * time.Millisecond,
+					Manager:              nil, // single-cluster test
 				}
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
 					Request: reconcile.Request{NamespacedName: typeNamespacedName},
@@ -98,6 +99,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
 				StatusPollInterval:   100 * time.Millisecond,
+				Manager:              nil, // single-cluster test
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
@@ -144,8 +146,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		BeforeEach(func() {
 			reconciler = &ComputeInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Manager: nil, // single-cluster test
 			}
 		})
 
@@ -301,8 +304,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		BeforeEach(func() {
 			reconciler = &ComputeInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Manager: nil, // single-cluster test
 			}
 		})
 
