@@ -218,6 +218,9 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 		return err
 	}
 
+	// Watch VMs on remote cluster if provider is set
+	watchVMsOnRemoteCluster := r.Manager.GetProvider() != nil
+
 	forOpts := []mcbuilder.ForOption{
 		mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
 		mcbuilder.WithEngageWithLocalCluster(true),
@@ -225,8 +228,8 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 	}
 	vmWatchOpts := []mcbuilder.WatchesOption{
 		mcbuilder.WithPredicates(labelPredicate),
-		mcbuilder.WithEngageWithLocalCluster(false),
-		mcbuilder.WithEngageWithProviderClusters(true),
+		mcbuilder.WithEngageWithLocalCluster(!watchVMsOnRemoteCluster),
+		mcbuilder.WithEngageWithProviderClusters(watchVMsOnRemoteCluster),
 	}
 	tenantWatchOpts := []mcbuilder.WatchesOption{
 		mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
