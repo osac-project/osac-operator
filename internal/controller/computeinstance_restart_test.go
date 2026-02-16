@@ -28,7 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
+	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("ComputeInstance Restart Handler", func() {

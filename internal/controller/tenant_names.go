@@ -22,7 +22,7 @@ import (
 	"hash/fnv"
 	"strings"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/api/v1alpha1"
 )
 
 var (

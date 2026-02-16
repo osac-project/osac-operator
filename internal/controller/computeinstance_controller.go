@@ -39,8 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/provisioning"
+	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/provisioning"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 

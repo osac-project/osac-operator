@@ -10,8 +10,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/aap"
+	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/aap"
 )
 
 // AAPClient is the interface for AAP operations used by the provider.

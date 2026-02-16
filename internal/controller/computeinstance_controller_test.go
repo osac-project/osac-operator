@@ -27,8 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/provisioning"
+	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/provisioning"
 )
 
 var _ = Describe("ComputeInstance Controller", func() {

@@ -1,4 +1,4 @@
-# cloudkit-operator
+# osac-operator
 
 Deploy OpenShift clusters in response to `ClusterOrders` using [Hosted Control Planes].
 
@@ -6,14 +6,14 @@ Deploy OpenShift clusters in response to `ClusterOrders` using [Hosted Control P
 
 ## Description
 
-cloudkit-operator is part of the [AI-in-a-Box][innabox] project. It accepts `ClusterOrder` requests from the [fulfillment service] (or from elsewhere), and drives the process of deploying a new cluster.
+osac-operator is part of the [OSAC][osac] (Open Source AI Cloud) project. It accepts `ClusterOrder` requests from the [fulfillment service] (or from elsewhere), and drives the process of deploying a new cluster.
 
-[innabox]: https://github.com/innabox
-[fulfillment service]: https://github.com/innabox/fulfillment-service/
+[osac]: https://github.com/osac
+[fulfillment service]: https://github.com/osac/fulfillment-service/
 
 ## Configuration
 
-cloudkit-operator makes use of the following environment variables:
+osac-operator makes use of the following environment variables:
 
 ### Cluster Provisioning
 - `CLOUDKIT_CLUSTER_CREATE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL after creating the target namespace, service account, and rolebinding.
@@ -51,7 +51,7 @@ See `config/samples/cloudkit-config-secret.yaml` for a complete configuration ex
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
-make image-build image-push IMG=<some-registry>/cloudkit-operator:tag
+make image-build image-push IMG=<some-registry>/osac-operator:tag
 ```
 
 **NOTE:** This image ought to be published in the personal registry you specified.
@@ -67,7 +67,7 @@ make install
 **Deploy the Manager to the cluster with the image specified by `IMG`:**
 
 ```sh
-make deploy IMG=<some-registry>/cloudkit-operator:tag
+make deploy IMG=<some-registry>/osac-operator:tag
 ```
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
@@ -108,7 +108,7 @@ Following are the steps to build the installer and distribute this project to us
 1. Build the installer for the image built and published in the registry:
 
 ```sh
-make build-installer IMG=<some-registry>/cloudkit-operator:tag
+make build-installer IMG=<some-registry>/osac-operator:tag
 ```
 
 NOTE: The makefile target mentioned above generates an 'install.yaml'
@@ -121,7 +121,7 @@ its dependencies.
 Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/cloudkit-operator/<tag or branch>/dist/install.yaml
+kubectl apply -f https://raw.githubusercontent.com/<org>/osac-operator/<tag or branch>/dist/install.yaml
 ```
 
 ## Contributing

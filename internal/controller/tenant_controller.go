@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/api/v1alpha1"
 )
 
 // TenantReconciler reconciles a Tenant object

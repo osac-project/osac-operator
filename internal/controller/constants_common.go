@@ -24,7 +24,7 @@ const (
 	ManagementStateUnmanaged = "unmanaged"
 
 	// cloudkitAppName is the name of the cloudkit application
-	cloudkitAppName string = "cloudkit-operator"
+	cloudkitAppName string = "osac-operator"
 
 	// cloudkitPrefix is the prefix used to identify cloudkit resources
 	cloudkitPrefix string = "cloudkit.openshift.io"

@@ -4,5 +4,5 @@ resources:
 - manager.yaml
 images:
 - name: controller
-  newName: ghcr.io/innabox/cloudkit-operator
+  newName: ghcr.io/osac/osac-operator
   newTag: latest

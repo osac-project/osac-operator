@@ -24,10 +24,10 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
-	"github.com/innabox/cloudkit-operator/test/utils"
+	"github.com/osac/osac-operator/test/utils"
 )
 
-const namespace = "cloudkit-operator-system"
+const namespace = "osac-operator-system"
 
 var _ = Describe("controller", Ordered, func() {
 	BeforeAll(func() {
@@ -60,7 +60,7 @@ var _ = Describe("controller", Ordered, func() {
 			var err error
 
 			// projectimage stores the name of the image used in the example
-			projectimage := "example.com/cloudkit-operator:v0.0.1"
+			projectimage := "example.com/osac-operator:v0.0.1"
 
 			By("building the manager(Operator) image")
 			cmd := exec.Command("make", "image-build", fmt.Sprintf("IMG=%s", projectimage))

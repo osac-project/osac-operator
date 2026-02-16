@@ -28,8 +28,8 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # This variable is used to construct full image tags for bundle and catalog images.
 #
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# openshift.io/cloudkit-operator-bundle:$VERSION and openshift.io/cloudkit-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= openshift.io/cloudkit-operator
+# openshift.io/osac-operator-bundle:$VERSION and openshift.io/osac-operator-catalog:$VERSION.
+IMAGE_TAG_BASE ?= openshift.io/osac-operator
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
@@ -46,13 +46,13 @@ ifeq ($(USE_IMAGE_DIGESTS), true)
 	BUNDLE_GEN_FLAGS += --use-image-digests
 endif
 
-CLOUDKIT_DEV_NAMESPACE ?= cloudkit-operator-dev
+CLOUDKIT_DEV_NAMESPACE ?= osac-operator-dev
 
 # Set the Operator SDK version to use. By default, what is installed on the system is used.
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.39.1
 # Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/innabox/cloudkit-operator:latest
+IMG ?= ghcr.io/osac/osac-operator:latest
 # Name of Containerfile
 CONTAINERFILE ?= Containerfile
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -73,7 +73,7 @@ CONTAINER_TOOL ?= podman
 
 # KIND defines the path to your kind binary.
 KIND = kind
-KIND_CLUSTER_NAME = innabox
+KIND_CLUSTER_NAME = osac
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -207,10 +207,10 @@ PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 docker-buildx: ## Build and push container image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name cloudkit-operator-builder
-	$(CONTAINER_TOOL) buildx use cloudkit-operator-builder
+	- $(CONTAINER_TOOL) buildx create --name osac-operator-builder
+	$(CONTAINER_TOOL) buildx use osac-operator-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm cloudkit-operator-builder
+	- $(CONTAINER_TOOL) buildx rm osac-operator-builder
 	rm Dockerfile.cross
 
 .PHONY: build-installer

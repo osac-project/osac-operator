@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/webhook"
+	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/webhook"
 )
 
 const (

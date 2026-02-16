@@ -30,9 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
-	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
-	sharedv1 "github.com/innabox/cloudkit-operator/internal/api/shared/v1"
+	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
 )
 
 // mockComputeInstancesClient is a mock implementation of ComputeInstancesClient for testing.

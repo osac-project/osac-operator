@@ -36,7 +36,7 @@ import (
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
-	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
+	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

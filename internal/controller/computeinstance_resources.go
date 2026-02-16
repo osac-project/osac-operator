@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/api/v1alpha1"
 )
 
 // getTenant gets the tenant object from the cluster

@@ -28,9 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	ckv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
-	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
-	sharedv1 "github.com/innabox/cloudkit-operator/internal/api/shared/v1"
+	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
 )
 
 // FeedbackReconciler sends updates to the fulfillment service.

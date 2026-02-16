@@ -26,8 +26,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	cloudkitv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/provisioning"
+	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/provisioning"
 )
 
 // mockProvisioningProvider implements the ProvisioningProvider interface for testing

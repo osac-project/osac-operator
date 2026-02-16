@@ -7,7 +7,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/api/v1alpha1"
 )
 
 // ProviderType represents the type of provisioning provider.

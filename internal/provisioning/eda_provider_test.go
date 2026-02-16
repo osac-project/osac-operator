@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/innabox/cloudkit-operator/api/v1alpha1"
-	"github.com/innabox/cloudkit-operator/internal/provisioning"
-	"github.com/innabox/cloudkit-operator/internal/webhook"
+	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/provisioning"
+	"github.com/osac/osac-operator/internal/webhook"
 )
 
 // mockWebhookClient is a test double for WebhookClient

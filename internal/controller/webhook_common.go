@@ -27,7 +27,7 @@ import (
 
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/innabox/cloudkit-operator/internal/webhook"
+	"github.com/osac/osac-operator/internal/webhook"
 )
 
 // InflightRequest represents a request that is currently being processed

@@ -2,7 +2,7 @@ apiVersion: cloudkit.openshift.io/v1alpha1
 kind: HostPool
 metadata:
   labels:
-    app.kubernetes.io/name: cloudkit-operator
+    app.kubernetes.io/name: osac-operator
     app.kubernetes.io/managed-by: kustomize
   name: hostpool-sample
 spec:
