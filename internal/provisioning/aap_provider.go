@@ -154,7 +154,43 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 
 	log.Info("checking provision job before deprovision", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
 
-	// Check provision job status
+	// Check if this is an EDA job ID (provider switch scenario)
+	// EDA job IDs start with "eda-webhook-", AAP job IDs are numeric
+	if IsEDAJobID(latestProvisionJob.JobID) {
+		log.Info("detected EDA provision job (provider switch scenario), checking instance phase", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
+		// Check the ComputeInstance phase to determine if provisioning is complete
+
+		// Running or Failed - provision is done, ready to deprovision
+		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseRunning {
+			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+			return true, nil, nil
+		}
+		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseFailed {
+			log.Info("EDA provision failed, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+			return true, nil, nil
+		}
+
+		// Deleting phase - check if deprovision job already exists
+		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting {
+			// Check if deprovision job exists
+			latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+			if latestDeprovisionJob == nil {
+				// No deprovision job yet - this is the initial deletion, ready to create deprovision job
+				log.Info("EDA provision complete, deletion initiated, ready to create deprovision job", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+				return true, nil, nil
+			}
+			// Deprovision job already exists - not ready (already in progress)
+			log.Info("EDA provision complete, deprovision job already exists", "jobID", latestProvisionJob.JobID, "deprovisionJobID", latestDeprovisionJob.JobID, "phase", instance.Status.Phase)
+			return false, nil, nil
+		}
+
+		// Starting phase - still provisioning, not ready
+		log.Info("EDA provision still in progress", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		return false, nil, nil
+	}
+
+	// AAP job - query status from AAP API
 	status, err := p.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
 	if err != nil {
 		var notFoundErr *aap.NotFoundError
