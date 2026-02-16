@@ -18,6 +18,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -43,6 +44,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -50,6 +52,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	kubeconfigprovider "sigs.k8s.io/multicluster-runtime/providers/kubeconfig"
 
 	v1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
 	"github.com/innabox/cloudkit-operator/internal/aap"
@@ -306,7 +309,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), nil, manager.Options{
+	managerOpts := manager.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -324,10 +327,33 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+	}
+
+	var mgr mcmanager.Manager
+	var err error
+	remoteClusterSecretNamespace := os.Getenv("REMOTE_CLUSTER_SECRET_NAMESPACE")
+	if remoteClusterSecretNamespace != "" {
+		setupLog.Info("remote cluster enabled via kubeconfig provider", "namespace", remoteClusterSecretNamespace)
+		kubeconfigProvider := kubeconfigprovider.New(kubeconfigprovider.Options{
+			Namespace:      remoteClusterSecretNamespace,
+			ClusterOptions: []cluster.Option{func(o *cluster.Options) { o.Scheme = scheme }},
+		})
+		mgr, err = mcmanager.New(ctrl.GetConfigOrDie(), kubeconfigProvider, managerOpts)
+		if err != nil {
+			setupLog.Error(err, "unable to start manager with kubeconfig provider")
+			os.Exit(1)
+		}
+		ctx := context.Background()
+		if err = kubeconfigProvider.SetupWithManager(ctx, mgr); err != nil {
+			setupLog.Error(err, "unable to setup kubeconfig provider with manager")
+			os.Exit(1)
+		}
+	} else {
+		mgr, err = mcmanager.New(ctrl.GetConfigOrDie(), nil, managerOpts)
+		if err != nil {
+			setupLog.Error(err, "unable to start manager")
+			os.Exit(1)
+		}
 	}
 
 	computeInstanceNamespace := os.Getenv("CLOUDKIT_COMPUTE_INSTANCE_NAMESPACE")
@@ -445,8 +471,7 @@ func main() {
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if err = (controller.NewComputeInstanceReconciler(
-		localMgr.GetClient(),
-		localMgr.GetScheme(),
+		mgr,
 		computeInstanceNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
@@ -457,8 +482,7 @@ func main() {
 	}
 	// Tenant reconciler in ComputeInstance namespace
 	if err := (controller.NewTenantReconciler(
-		localMgr.GetClient(),
-		localMgr.GetScheme(),
+		mgr,
 		computeInstanceNamespace,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant", "namespace", computeInstanceNamespace)

@@ -49,12 +49,18 @@ spec:
           spec:
             description: TenantSpec defines the desired state of Tenant.
             properties:
+              clusterName:
+                type: string
+                x-kubernetes-validations:
+                - message: name is immutable once set
+                  rule: self == oldSelf
               name:
                 type: string
                 x-kubernetes-validations:
                 - message: name is immutable once set
                   rule: self == oldSelf
             required:
+            - clusterName
             - name
             type: object
           status:

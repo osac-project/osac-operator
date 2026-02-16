@@ -31,6 +31,10 @@ type TenantSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable once set"
 	Name string `json:"name,omitempty"`
+
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable once set"
+	ClusterName string `json:"clusterName,omitempty"`
 }
 
 type TenantPhaseType string

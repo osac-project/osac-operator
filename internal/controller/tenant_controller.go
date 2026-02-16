@@ -42,6 +42,7 @@ import (
 type TenantReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
+	Manager         mcmanager.Manager
 	tenantNamespace string
 }
 
@@ -51,10 +52,11 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
 
-func NewTenantReconciler(client client.Client, scheme *runtime.Scheme, tenantNamespace string) *TenantReconciler {
+func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string) *TenantReconciler {
 	return &TenantReconciler{
-		Client:          client,
-		Scheme:          scheme,
+		Client:          mgr.GetLocalManager().GetClient(),
+		Scheme:          mgr.GetLocalManager().GetScheme(),
+		Manager:         mgr,
 		tenantNamespace: tenantNamespace,
 	}
 }
@@ -205,11 +207,15 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			&corev1.Namespace{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
 			mcbuilder.WithPredicates(tenantLabelPredicate),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(true),
 		).
 		Watches(
 			&ovnv1.UserDefinedNetwork{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
 			mcbuilder.WithPredicates(tenantLabelPredicate),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(true),
 		).
 		Complete(r)
 }

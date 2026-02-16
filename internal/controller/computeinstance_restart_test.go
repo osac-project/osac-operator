@@ -33,12 +33,17 @@ import (
 
 var _ = Describe("ComputeInstance Restart Handler", func() {
 	var reconciler *ComputeInstanceReconciler
+	var tenant *cloudkitv1alpha1.Tenant
 	ctx := context.Background()
 
 	BeforeEach(func() {
 		reconciler = &ComputeInstanceReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
+			Client:  k8sClient,
+			Scheme:  k8sClient.Scheme(),
+			Manager: testMcManager,
+		}
+		tenant = &cloudkitv1alpha1.Tenant{
+			Spec: cloudkitv1alpha1.TenantSpec{ClusterName: "local"},
 		}
 	})
 
@@ -55,7 +60,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				},
 			}
 
-			result, err := reconciler.handleRestartRequest(ctx, ci)
+			result, err := reconciler.handleRestartRequest(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
@@ -83,7 +88,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 			// Note: performRestart will fail due to no VM reference, but handleRestartRequest
 			// should still call it (we're testing the flow, not the success)
-			_, _ = reconciler.handleRestartRequest(ctx, ci)
+			_, _ = reconciler.handleRestartRequest(ctx, tenant, ci)
 
 			// Cleanup
 			_ = k8sClient.Delete(ctx, ci)
@@ -105,7 +110,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				},
 			}
 
-			result, err := reconciler.handleRestartRequest(ctx, ci)
+			result, err := reconciler.handleRestartRequest(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
@@ -127,7 +132,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				},
 			}
 
-			result, err := reconciler.handleRestartRequest(ctx, ci)
+			result, err := reconciler.handleRestartRequest(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 		})
@@ -155,7 +160,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Note: performRestart will fail due to no VM reference
-			_, _ = reconciler.handleRestartRequest(ctx, ci)
+			_, _ = reconciler.handleRestartRequest(ctx, tenant, ci)
 
 			// Cleanup
 			_ = k8sClient.Delete(ctx, ci)
@@ -181,7 +186,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			err := k8sClient.Create(ctx, ci)
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := reconciler.performRestart(ctx, ci)
+			result, err := reconciler.performRestart(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 			// Update status (normally done by main Reconcile loop)
@@ -247,7 +252,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			})
 
 			// Perform restart
-			result, err := reconciler.performRestart(ctx, ci)
+			result, err := reconciler.performRestart(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 
@@ -283,7 +288,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				},
 			}
 
-			err := reconciler.checkRestartCompletion(ctx, ci)
+			err := reconciler.checkRestartCompletion(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			// lastRestartedAt should still be nil
 			Expect(ci.Status.LastRestartedAt).To(BeNil())
@@ -330,7 +335,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				_ = k8sClient.Delete(ctx, vmi)
 			})
 
-			err = reconciler.checkRestartCompletion(ctx, ci)
+			err = reconciler.checkRestartCompletion(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 
 			// lastRestartedAt should still be nil
@@ -381,7 +386,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 				_ = k8sClient.Delete(ctx, vmi)
 			})
 
-			err = reconciler.checkRestartCompletion(ctx, ci)
+			err = reconciler.checkRestartCompletion(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 
 			// lastRestartedAt should now be set
@@ -442,7 +447,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 			}).Should(Succeed())
 
 			// Call handleRestartRequest
-			result, err := reconciler.handleRestartRequest(ctx, ci)
+			result, err := reconciler.handleRestartRequest(ctx, tenant, ci)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 
