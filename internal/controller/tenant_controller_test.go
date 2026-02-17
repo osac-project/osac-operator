@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 )
 
 var _ = Describe("Tenant Controller", func() {
@@ -73,8 +74,8 @@ var _ = Describe("Tenant Controller", func() {
 			By("Reconciling until namespace is terminating")
 			Eventually(func(g Gomega) {
 				controllerReconciler := NewTenantReconciler(k8sClient, k8sClient.Scheme(), "default")
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
+				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+					Request: reconcile.Request{NamespacedName: typeNamespacedName},
 				})
 				g.Expect(err).NotTo(HaveOccurred())
 
@@ -88,8 +89,8 @@ var _ = Describe("Tenant Controller", func() {
 
 			By("reconciling until tenant is ready")
 			Eventually(func(g Gomega) {
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
+				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+					Request: reconcile.Request{NamespacedName: typeNamespacedName},
 				})
 				g.Expect(err).NotTo(HaveOccurred())
 
