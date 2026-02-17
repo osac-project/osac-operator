@@ -31,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	osacv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
-	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
-	sharedv1 "github.com/innabox/cloudkit-operator/internal/api/shared/v1"
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 )
 
 // mockComputeInstancesClient is a mock implementation of ComputeInstancesClient for testing.
@@ -233,7 +233,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
@@ -317,9 +317,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 					Finalizers: []string{cloudkitComputeInstanceFinalizer, cloudkitComputeInstanceFeedbackFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -335,7 +333,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
@@ -389,9 +387,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 					Finalizers: []string{cloudkitComputeInstanceFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -407,7 +403,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 					},
 				},
 			}
