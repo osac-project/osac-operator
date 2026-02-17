@@ -813,11 +813,11 @@ func (r *ComputeInstanceReconciler) handleReconciledConfigVersion(ctx context.Co
 	return nil
 }
 
-// ensureBackwardCompatibility populates templateParameters from new explicit fields for backward compatibility.
-// This allows existing AAP templates that expect templateParameters to continue working while
-// enabling new templates to use the structured fields directly.
+// ensureBackwardCompatibility populates templateParameters from new explicit fields.
+// This is the intended mechanism for templates to receive parameters - templates consume templateParameters,
+// while users can provide values via either explicit fields OR templateParameters directly.
 //
-// The function generates templateParameters in the format expected by existing templates:
+// The function generates templateParameters in the format expected by templates:
 //   - cpu_cores: from spec.cores
 //   - memory: from spec.memoryGiB (converted to "XGi" format)
 //   - disk_size: from spec.bootDisk.sizeGiB (converted to "XGi" format)

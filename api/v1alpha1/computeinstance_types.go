@@ -83,10 +83,12 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Pattern=^[a-zA-Z_][a-zA-Z0-9._]*$
 	TemplateID string `json:"templateID"`
 
-	// TemplateParameters is DEPRECATED - use explicit fields instead
-	// This field is kept for backwards compatibility
+	// TemplateParameters allows passing additional template-specific parameters as JSON-encoded key-value pairs.
+	// This complements the explicit fields (cores, memoryGiB, etc.) and is used for:
+	// - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
+	// - Custom parameters defined by specific templates
+	// - Backward compatibility with existing ComputeInstances
 	// +kubebuilder:validation:Optional
-	// +deprecated
 	TemplateParameters string `json:"templateParameters,omitempty"`
 
 	// Image defines the VM image configuration

@@ -173,8 +173,11 @@ spec:
                 type: string
               templateParameters:
                 description: |-
-                  TemplateParameters is DEPRECATED - use explicit fields instead
-                  This field is kept for backwards compatibility
+                  TemplateParameters allows passing additional template-specific parameters as JSON-encoded key-value pairs.
+                  This complements the explicit fields (cores, memoryGiB, etc.) and is used for:
+                  - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
+                  - Custom parameters defined by specific templates
+                  - Backward compatibility with existing ComputeInstances
                 type: string
               userDataSecretRef:
                 description: UserDataSecretRef references cloud-init user data
