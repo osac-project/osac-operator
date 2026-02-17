@@ -63,19 +63,37 @@ var (
 )
 
 const (
-	// EDA webhook environment variables
+	// ComputeInstance EDA webhook environment variables
 	envComputeInstanceProvisionWebhook   = "CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
-	// Provider selection
-	envProvisioningProvider = "CLOUDKIT_PROVISIONING_PROVIDER"
+	// ClusterOrder EDA webhook environment variables
+	envClusterOrderProvisionWebhook   = "CLOUDKIT_CLUSTER_ORDER_PROVISION_WEBHOOK"
+	envClusterOrderDeprovisionWebhook = "CLOUDKIT_CLUSTER_ORDER_DEPROVISION_WEBHOOK"
 
-	// AAP configuration
+	// HostPool EDA webhook environment variables
+	envHostPoolProvisionWebhook   = "CLOUDKIT_HOSTPOOL_PROVISION_WEBHOOK"
+	envHostPoolDeprovisionWebhook = "CLOUDKIT_HOSTPOOL_DEPROVISION_WEBHOOK"
+
+	// Provider selection (per resource type)
+	envProvisioningProvider             = "CLOUDKIT_PROVISIONING_PROVIDER"
+	envClusterOrderProvisioningProvider = "CLOUDKIT_CLUSTER_ORDER_PROVISIONING_PROVIDER"
+	envHostPoolProvisioningProvider     = "CLOUDKIT_HOSTPOOL_PROVISIONING_PROVIDER"
+
+	// AAP configuration (shared or per-resource-type)
 	envAAPURL                 = "CLOUDKIT_AAP_URL"
 	envAAPToken               = "CLOUDKIT_AAP_TOKEN"
 	envAAPProvisionTemplate   = "CLOUDKIT_AAP_PROVISION_TEMPLATE"
 	envAAPDeprovisionTemplate = "CLOUDKIT_AAP_DEPROVISION_TEMPLATE"
 	envAAPStatusPollInterval  = "CLOUDKIT_AAP_STATUS_POLL_INTERVAL"
+
+	// ClusterOrder AAP templates (overrides for resource-specific templates)
+	envClusterOrderAAPProvisionTemplate   = "CLOUDKIT_CLUSTER_ORDER_AAP_PROVISION_TEMPLATE"
+	envClusterOrderAAPDeprovisionTemplate = "CLOUDKIT_CLUSTER_ORDER_AAP_DEPROVISION_TEMPLATE"
+
+	// HostPool AAP templates (overrides for resource-specific templates)
+	envHostPoolAAPProvisionTemplate   = "CLOUDKIT_HOSTPOOL_AAP_PROVISION_TEMPLATE"
+	envHostPoolAAPDeprovisionTemplate = "CLOUDKIT_HOSTPOOL_AAP_DEPROVISION_TEMPLATE"
 
 	// Job history configuration
 	envMaxJobHistory = "CLOUDKIT_MAX_JOB_HISTORY"
@@ -386,6 +404,62 @@ func main() {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
 
+	// Read shared provider configuration (used by all CRs)
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+
+	// Parse max job history (shared across all resources)
+	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
+	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
+
+	// Create shared provider for all CRs (ComputeInstance, ClusterOrder, HostPool)
+	// Provider type determines which provider to use (EDA or AAP)
+	providerTypeStr := os.Getenv(envProvisioningProvider)
+	providerType := provisioning.ProviderType(providerTypeStr)
+
+	// For backward compatibility: if CLOUDKIT_PROVISIONING_PROVIDER not set, check legacy per-CR vars
+	// But generally, one provider instance serves all CRs
+	var sharedProvider provisioning.ProvisioningProvider
+	var statusPollInterval time.Duration
+
+	if providerType != "" {
+		var err error
+
+		// For EDA: use webhook URLs (can be different per CR, but provider is shared)
+		// For AAP: use templates (can be different per CR via provider's extractExtraVars)
+		if providerType == provisioning.ProviderTypeEDA {
+			// EDA webhooks - use ComputeInstance webhooks for now (can extend later)
+			provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
+			deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
+			sharedProvider, statusPollInterval, err = createProvider(
+				providerType,
+				provisionWebhook, deprovisionWebhook,
+				"", "", "", "", // AAP params not needed for EDA
+				minimumRequestInterval,
+			)
+		} else if providerType == provisioning.ProviderTypeAAP {
+			// AAP templates - use shared templates (provider extracts resource-specific vars)
+			provisionTemplate := os.Getenv(envAAPProvisionTemplate)
+			deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
+			sharedProvider, statusPollInterval, err = createProvider(
+				providerType,
+				"", "", // Webhook params not needed for AAP
+				aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+				minimumRequestInterval,
+			)
+		} else {
+			err = fmt.Errorf("unknown provider type: %s", providerType)
+		}
+
+		if err != nil {
+			setupLog.Error(err, "failed to create shared provisioning provider")
+			os.Exit(1)
+		}
+		setupLog.Info("shared provider configured for all CRs", "type", providerType, "pollInterval", statusPollInterval)
+	} else {
+		setupLog.Info("provider not configured, controllers will use webhook fallback")
+	}
+
 	if err = (controller.NewClusterOrderReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
@@ -393,6 +467,9 @@ func main() {
 		os.Getenv("CLOUDKIT_CLUSTER_DELETE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_CLUSTER_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterOrder")
 		os.Exit(1)
@@ -405,49 +482,22 @@ func main() {
 		os.Getenv("CLOUDKIT_HOSTPOOL_DELETE_WEBHOOK"),
 		os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HostPool")
 		os.Exit(1)
 	}
 
-	// Create the ComputeInstance reconciler with appropriate provider
-	// Read all configuration upfront
-	providerTypeStr := os.Getenv(envProvisioningProvider)
-	provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
-	deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
-	aapURL := os.Getenv(envAAPURL)
-	aapToken := os.Getenv(envAAPToken)
-	provisionTemplate := os.Getenv(envAAPProvisionTemplate)
-	deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
-
-	// Default to EDA if not specified (backward compatibility)
-	providerType := provisioning.ProviderType(providerTypeStr)
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeEDA
-	}
-
-	computeInstanceProvider, statusPollInterval, err := createProvider(
-		providerType,
-		provisionWebhook, deprovisionWebhook,
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-		minimumRequestInterval,
-	)
-	if err != nil {
-		setupLog.Error(err, "failed to create provisioning provider")
-		os.Exit(1)
-	}
-
-	// Parse max job history
-	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
-	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
-
+	// Create the ComputeInstance reconciler with shared provider
 	if err = (controller.NewComputeInstanceReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
 		computeInstanceNamespace,
-		computeInstanceProvider,
-		statusPollInterval,
-		maxJobHistory,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ComputeInstance")
 		os.Exit(1)
