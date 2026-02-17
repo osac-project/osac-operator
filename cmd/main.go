@@ -67,33 +67,15 @@ const (
 	envComputeInstanceProvisionWebhook   = "CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
-	// ClusterOrder EDA webhook environment variables
-	envClusterOrderProvisionWebhook   = "CLOUDKIT_CLUSTER_ORDER_PROVISION_WEBHOOK"
-	envClusterOrderDeprovisionWebhook = "CLOUDKIT_CLUSTER_ORDER_DEPROVISION_WEBHOOK"
+	// Provider selection (shared across all resource types)
+	envProvisioningProvider = "CLOUDKIT_PROVISIONING_PROVIDER"
 
-	// HostPool EDA webhook environment variables
-	envHostPoolProvisionWebhook   = "CLOUDKIT_HOSTPOOL_PROVISION_WEBHOOK"
-	envHostPoolDeprovisionWebhook = "CLOUDKIT_HOSTPOOL_DEPROVISION_WEBHOOK"
-
-	// Provider selection (per resource type)
-	envProvisioningProvider             = "CLOUDKIT_PROVISIONING_PROVIDER"
-	envClusterOrderProvisioningProvider = "CLOUDKIT_CLUSTER_ORDER_PROVISIONING_PROVIDER"
-	envHostPoolProvisioningProvider     = "CLOUDKIT_HOSTPOOL_PROVISIONING_PROVIDER"
-
-	// AAP configuration (shared or per-resource-type)
+	// AAP configuration (shared across all resource types)
 	envAAPURL                 = "CLOUDKIT_AAP_URL"
 	envAAPToken               = "CLOUDKIT_AAP_TOKEN"
 	envAAPProvisionTemplate   = "CLOUDKIT_AAP_PROVISION_TEMPLATE"
 	envAAPDeprovisionTemplate = "CLOUDKIT_AAP_DEPROVISION_TEMPLATE"
 	envAAPStatusPollInterval  = "CLOUDKIT_AAP_STATUS_POLL_INTERVAL"
-
-	// ClusterOrder AAP templates (overrides for resource-specific templates)
-	envClusterOrderAAPProvisionTemplate   = "CLOUDKIT_CLUSTER_ORDER_AAP_PROVISION_TEMPLATE"
-	envClusterOrderAAPDeprovisionTemplate = "CLOUDKIT_CLUSTER_ORDER_AAP_DEPROVISION_TEMPLATE"
-
-	// HostPool AAP templates (overrides for resource-specific templates)
-	envHostPoolAAPProvisionTemplate   = "CLOUDKIT_HOSTPOOL_AAP_PROVISION_TEMPLATE"
-	envHostPoolAAPDeprovisionTemplate = "CLOUDKIT_HOSTPOOL_AAP_DEPROVISION_TEMPLATE"
 
 	// Job history configuration
 	envMaxJobHistory = "CLOUDKIT_MAX_JOB_HISTORY"
@@ -427,7 +409,8 @@ func main() {
 
 		// For EDA: use webhook URLs (can be different per CR, but provider is shared)
 		// For AAP: use templates (can be different per CR via provider's extractExtraVars)
-		if providerType == provisioning.ProviderTypeEDA {
+		switch providerType {
+		case provisioning.ProviderTypeEDA:
 			// EDA webhooks - use ComputeInstance webhooks for now (can extend later)
 			provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
 			deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
@@ -437,7 +420,7 @@ func main() {
 				"", "", "", "", // AAP params not needed for EDA
 				minimumRequestInterval,
 			)
-		} else if providerType == provisioning.ProviderTypeAAP {
+		case provisioning.ProviderTypeAAP:
 			// AAP templates - use shared templates (provider extracts resource-specific vars)
 			provisionTemplate := os.Getenv(envAAPProvisionTemplate)
 			deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
@@ -447,7 +430,7 @@ func main() {
 				aapURL, aapToken, provisionTemplate, deprovisionTemplate,
 				minimumRequestInterval,
 			)
-		} else {
+		default:
 			err = fmt.Errorf("unknown provider type: %s", providerType)
 		}
 
