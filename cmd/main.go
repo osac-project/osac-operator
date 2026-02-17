@@ -132,25 +132,27 @@ func init() {
 
 // createEDAProvider creates and validates EDA webhook provider configuration.
 func createEDAProvider(
-	provisionWebhook, deprovisionWebhook string,
+	computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook string,
+	clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook string,
+	hostPoolProvisionWebhook, hostPoolDeprovisionWebhook string,
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
 	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
-	config := provisioning.ProviderConfig{
-		ProviderType:       provisioning.ProviderTypeEDA,
-		WebhookClient:      webhookClient,
-		ProvisionWebhook:   provisionWebhook,
-		DeprovisionWebhook: deprovisionWebhook,
-	}
 
-	provider, err := provisioning.NewProvider(config)
-	if err != nil {
-		return nil, 0, err
-	}
+	provider := provisioning.NewEDAProvider(
+		webhookClient,
+		computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+		clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+		hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+	)
 
-	setupLog.Info("using EDA webhook provider for ComputeInstance",
-		"provisionURL", provisionWebhook,
-		"deprovisionURL", deprovisionWebhook)
+	setupLog.Info("using EDA webhook provider for all CRs",
+		"computeInstanceProvision", computeInstanceProvisionWebhook,
+		"computeInstanceDeprovision", computeInstanceDeprovisionWebhook,
+		"clusterOrderProvision", clusterOrderProvisionWebhook,
+		"clusterOrderDeprovision", clusterOrderDeprovisionWebhook,
+		"hostPoolProvision", hostPoolProvisionWebhook,
+		"hostPoolDeprovision", hostPoolDeprovisionWebhook)
 
 	return provider, provisioning.DefaultStatusPollInterval, nil
 }
@@ -186,13 +188,20 @@ func createAAPProvider(
 // createProvider creates a provisioning provider based on type.
 func createProvider(
 	providerType provisioning.ProviderType,
-	provisionWebhook, deprovisionWebhook string,
+	computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook string,
+	clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook string,
+	hostPoolProvisionWebhook, hostPoolDeprovisionWebhook string,
 	aapURL, aapToken, provisionTemplate, deprovisionTemplate string,
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
 	switch providerType {
 	case provisioning.ProviderTypeEDA:
-		return createEDAProvider(provisionWebhook, deprovisionWebhook, minimumRequestInterval)
+		return createEDAProvider(
+			computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+			clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+			hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+			minimumRequestInterval,
+		)
 
 	case provisioning.ProviderTypeAAP:
 		return createAAPProvider(aapURL, aapToken, provisionTemplate, deprovisionTemplate)
@@ -407,32 +416,27 @@ func main() {
 	if providerType != "" {
 		var err error
 
-		// For EDA: use webhook URLs (can be different per CR, but provider is shared)
-		// For AAP: use templates (can be different per CR via provider's extractExtraVars)
-		switch providerType {
-		case provisioning.ProviderTypeEDA:
-			// EDA webhooks - use ComputeInstance webhooks for now (can extend later)
-			provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
-			deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
-			sharedProvider, statusPollInterval, err = createProvider(
-				providerType,
-				provisionWebhook, deprovisionWebhook,
-				"", "", "", "", // AAP params not needed for EDA
-				minimumRequestInterval,
-			)
-		case provisioning.ProviderTypeAAP:
-			// AAP templates - use shared templates (provider extracts resource-specific vars)
-			provisionTemplate := os.Getenv(envAAPProvisionTemplate)
-			deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
-			sharedProvider, statusPollInterval, err = createProvider(
-				providerType,
-				"", "", // Webhook params not needed for AAP
-				aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-				minimumRequestInterval,
-			)
-		default:
-			err = fmt.Errorf("unknown provider type: %s", providerType)
-		}
+		// Read all webhook URLs for EDA provider (one per resource type)
+		computeInstanceProvisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
+		computeInstanceDeprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
+		clusterOrderProvisionWebhook := os.Getenv("CLOUDKIT_CLUSTER_CREATE_WEBHOOK")
+		clusterOrderDeprovisionWebhook := os.Getenv("CLOUDKIT_CLUSTER_DELETE_WEBHOOK")
+		hostPoolProvisionWebhook := os.Getenv("CLOUDKIT_HOSTPOOL_CREATE_WEBHOOK")
+		hostPoolDeprovisionWebhook := os.Getenv("CLOUDKIT_HOSTPOOL_DELETE_WEBHOOK")
+
+		// Read AAP templates (shared across all resource types)
+		provisionTemplate := os.Getenv(envAAPProvisionTemplate)
+		deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
+
+		// Create shared provider for all CRs
+		sharedProvider, statusPollInterval, err = createProvider(
+			providerType,
+			computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+			clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+			hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+			aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+			minimumRequestInterval,
+		)
 
 		if err != nil {
 			setupLog.Error(err, "failed to create shared provisioning provider")

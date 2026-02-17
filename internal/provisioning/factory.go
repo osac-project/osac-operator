@@ -33,7 +33,14 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 		if config.ProvisionWebhook == "" || config.DeprovisionWebhook == "" {
 			return nil, fmt.Errorf("EDA provider requires both ProvisionWebhook and DeprovisionWebhook")
 		}
-		return NewEDAProvider(config.WebhookClient, config.ProvisionWebhook, config.DeprovisionWebhook), nil
+		// For backward compatibility, use ProvisionWebhook/DeprovisionWebhook as ComputeInstance URLs
+		// Other resource types will have empty URLs (must be configured separately)
+		return NewEDAProvider(
+			config.WebhookClient,
+			config.ProvisionWebhook, config.DeprovisionWebhook, // ComputeInstance
+			"", "", // ClusterOrder (not configured via factory)
+			"", "", // HostPool (not configured via factory)
+		), nil
 
 	case ProviderTypeAAP:
 		if config.AAPClient == nil {
