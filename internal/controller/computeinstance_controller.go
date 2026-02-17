@@ -720,6 +720,12 @@ func (r *ComputeInstanceReconciler) syncRunStrategy(ctx context.Context, instanc
 	kv *kubevirtv1.VirtualMachine) error {
 	log := ctrllog.FromContext(ctx)
 
+	// Skip if runStrategy is not set (for backward compatibility with old ComputeInstances)
+	if instance.Spec.RunStrategy == "" {
+		log.V(1).Info("skipping runStrategy sync - field not set (old ComputeInstance)")
+		return nil
+	}
+
 	// Determine desired running state from runStrategy
 	var desiredRunning bool
 	switch instance.Spec.RunStrategy {
