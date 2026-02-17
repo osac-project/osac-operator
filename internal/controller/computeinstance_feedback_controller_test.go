@@ -31,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
+	osacv1alpha1 "github.com/innabox/cloudkit-operator/api/v1alpha1"
+	privatev1 "github.com/innabox/cloudkit-operator/internal/api/private/v1"
+	sharedv1 "github.com/innabox/cloudkit-operator/internal/api/shared/v1"
 )
 
 // mockComputeInstancesClient is a mock implementation of ComputeInstancesClient for testing.
@@ -95,7 +95,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		resourceName      = "test-ci"
 		vmNamespace       = "default"
 		ciID              = "test-ci-id"
-		computeInstanceNS = "osac-computeinstance"
+		computeInstanceNS = "cloudkit-computeinstance"
 	)
 
 	var (
@@ -153,9 +153,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 		})
@@ -184,7 +182,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Add the feedback finalizer and trigger deletion
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Finalizers = []string{osacComputeInstanceFeedbackFinalizer}
+			vm.Finalizers = []string{cloudkitComputeInstanceFeedbackFinalizer}
 			Expect(k8sClient.Update(ctx, vm)).To(Succeed())
 
 			// Delete triggers DeletionTimestamp
@@ -213,13 +211,11 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						osacComputeInstanceIDLabel: ciID,
+						cloudkitComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{osacComputeInstanceFeedbackFinalizer},
+					Finalizers: []string{cloudkitComputeInstanceFeedbackFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -237,7 +233,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
 					},
 				},
 			}
@@ -317,9 +313,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      deletingResourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						osacComputeInstanceIDLabel: ciID,
+						cloudkitComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
+					Finalizers: []string{cloudkitComputeInstanceFinalizer, cloudkitComputeInstanceFeedbackFinalizer},
 				},
 				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
@@ -339,7 +335,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
 					},
 				},
 			}
@@ -369,7 +365,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Finalizer should still be present
 			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeTrue())
+			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeTrue())
 		})
 	})
 
@@ -389,9 +385,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      deletingResourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						osacComputeInstanceIDLabel: ciID,
+						cloudkitComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{osacComputeInstanceFinalizer},
+					Finalizers: []string{cloudkitComputeInstanceFinalizer},
 				},
 				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
@@ -411,7 +407,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Id:   ciID,
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_READY,
 					},
 				},
 			}
@@ -438,7 +434,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Verify feedback finalizer was NOT added
 			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeFalse())
+			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeFalse())
 			// Signal should NOT be called (our finalizer isn't present)
 			Expect(mockClient.signalCalled).To(BeFalse())
 		})
@@ -455,12 +451,10 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						osacComputeInstanceIDLabel: ciID,
+						cloudkitComputeInstanceIDLabel: ciID,
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 			// Update status separately since Status is a subresource - need to get fresh copy
@@ -520,7 +514,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Verify feedback finalizer was added
 			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeTrue())
+			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should successfully sync conditions and phase", func() {

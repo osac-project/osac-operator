@@ -101,9 +101,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 				Name:      "test-instance",
 				Namespace: "default",
 			},
-			Spec: osacv1alpha1.ComputeInstanceSpec{
-				TemplateID: "test_template",
-			},
+			Spec: newTestComputeInstanceSpec("test_template"),
 		}
 		reconciler = &ComputeInstanceReconciler{
 			Client:             k8sClient,
@@ -297,7 +295,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should skip provisioning when ManagementStateManual annotation is set", func() {
 			instance.Annotations = map[string]string{
-				osacComputeInstanceManagementStateAnnotation: ManagementStateManual,
+				cloudkitComputeInstanceManagementStateAnnotation: ManagementStateManual,
 			}
 			provider := &mockProvisioningProvider{}
 			reconciler.ProvisioningProvider = provider
@@ -313,7 +311,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 	Context("handleDeprovisioning", func() {
 		BeforeEach(func() {
 			// Add finalizer for deletion tests
-			instance.Finalizers = []string{osacAAPComputeInstanceFinalizer}
+			instance.Finalizers = []string{cloudkitAAPComputeInstanceFinalizer}
 		})
 
 		It("should trigger deprovision when no job ID exists", func() {
@@ -395,7 +393,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(latestDeprovisionJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 			Expect(latestDeprovisionJob.Message).To(Equal("Deprovisioning in progress"))
 			// Finalizer should still be present while job is running
-			Expect(instance.Finalizers).To(ContainElement(osacAAPComputeInstanceFinalizer))
+			Expect(instance.Finalizers).To(ContainElement(cloudkitAAPComputeInstanceFinalizer))
 		})
 
 		It("should handle deprovision status check error", func() {
@@ -424,7 +422,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 
 		It("should skip deprovisioning when ManagementStateManual annotation is set", func() {
 			instance.Annotations = map[string]string{
-				osacComputeInstanceManagementStateAnnotation: ManagementStateManual,
+				cloudkitComputeInstanceManagementStateAnnotation: ManagementStateManual,
 			}
 			provider := &mockProvisioningProvider{
 				name: string(provisioning.ProviderTypeAAP),

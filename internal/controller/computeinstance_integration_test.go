@@ -180,12 +180,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						cloudkitTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -246,12 +244,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						cloudkitTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -286,14 +282,12 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					// AAP Direct uses base finalizer, not AAP-specific finalizer
-					Finalizers: []string{osacComputeInstanceFinalizer},
+					Finalizers: []string{cloudkitComputeInstanceFinalizer},
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						cloudkitTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -331,12 +325,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						cloudkitTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -372,12 +364,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						cloudkitTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())

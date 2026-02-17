@@ -107,3 +107,20 @@ var _ = AfterSuite(func() {
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+// newTestComputeInstanceSpec creates a valid ComputeInstanceSpec for testing
+func newTestComputeInstanceSpec(templateID string) osacv1alpha1.ComputeInstanceSpec {
+	return osacv1alpha1.ComputeInstanceSpec{
+		TemplateID: templateID,
+		Image: osacv1alpha1.ImageSpec{
+			SourceType: osacv1alpha1.ImageSourceTypeRegistry,
+			SourceRef:  "quay.io/fedora/fedora-coreos:stable",
+		},
+		Cores:     4,
+		MemoryGiB: 8,
+		BootDisk: osacv1alpha1.DiskSpec{
+			SizeGiB: 30,
+		},
+		RunStrategy: osacv1alpha1.RunStrategyAlways,
+	}
+}
