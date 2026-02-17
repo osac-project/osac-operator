@@ -36,7 +36,13 @@ var _ = Describe("EDAProvider", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		webhookClient = &mockWebhookClient{}
-		provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
+		// Test with ComputeInstance URLs, other resource types use empty strings
+		provider = provisioning.NewEDAProvider(
+			webhookClient,
+			"http://create-url", "http://delete-url", // ComputeInstance
+			"", "", // ClusterOrder
+			"", "", // HostPool
+		)
 	})
 
 	Describe("TriggerProvision", func() {
@@ -192,7 +198,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when create URL is empty", func() {
 			BeforeEach(func() {
-				provider = provisioning.NewEDAProvider(webhookClient, "", "http://delete-url")
+				provider = provisioning.NewEDAProvider(webhookClient, "", "http://delete-url", "", "", "", "")
 			})
 
 			It("should return error", func() {
@@ -205,7 +211,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when webhook is rate-limited", func() {
 			BeforeEach(func() {
-				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
+				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url", "", "", "", "")
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 5 * time.Second, nil
 				}
@@ -313,7 +319,7 @@ var _ = Describe("EDAProvider", func() {
 						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
 					},
 				}
-				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "")
+				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "", "", "", "", "")
 
 				_, err := provider.TriggerDeprovision(ctx, instance)
 				Expect(err).To(HaveOccurred())
@@ -330,7 +336,7 @@ var _ = Describe("EDAProvider", func() {
 						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
 					},
 				}
-				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
+				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url", "", "", "", "")
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 3 * time.Second, nil
 				}

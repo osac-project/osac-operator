@@ -44,18 +44,50 @@ type WebhookClient interface {
 
 // EDAProvider implements ProvisioningProvider using EDA webhooks.
 // It maintains backward compatibility with the existing webhook-based approach.
+// Supports different webhook URLs per resource type.
 type EDAProvider struct {
 	webhookClient WebhookClient
-	createURL     string
-	deleteURL     string
+	// ComputeInstance webhook URLs
+	computeInstanceCreateURL string
+	computeInstanceDeleteURL string
+	// ClusterOrder webhook URLs
+	clusterOrderCreateURL string
+	clusterOrderDeleteURL string
+	// HostPool webhook URLs
+	hostPoolCreateURL string
+	hostPoolDeleteURL string
 }
 
-// NewEDAProvider creates a new EDA provider.
-func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *EDAProvider {
+// NewEDAProvider creates a new EDA provider with webhook URLs for all resource types.
+func NewEDAProvider(
+	webhookClient WebhookClient,
+	computeInstanceCreateURL, computeInstanceDeleteURL string,
+	clusterOrderCreateURL, clusterOrderDeleteURL string,
+	hostPoolCreateURL, hostPoolDeleteURL string,
+) *EDAProvider {
 	return &EDAProvider{
-		webhookClient: webhookClient,
-		createURL:     createURL,
-		deleteURL:     deleteURL,
+		webhookClient:            webhookClient,
+		computeInstanceCreateURL: computeInstanceCreateURL,
+		computeInstanceDeleteURL: computeInstanceDeleteURL,
+		clusterOrderCreateURL:    clusterOrderCreateURL,
+		clusterOrderDeleteURL:    clusterOrderDeleteURL,
+		hostPoolCreateURL:        hostPoolCreateURL,
+		hostPoolDeleteURL:        hostPoolDeleteURL,
+	}
+}
+
+// getWebhookURLs returns the appropriate create/delete webhook URLs for the resource type.
+func (p *EDAProvider) getWebhookURLs(resource client.Object) (createURL, deleteURL string) {
+	switch resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return p.computeInstanceCreateURL, p.computeInstanceDeleteURL
+	case *v1alpha1.ClusterOrder:
+		return p.clusterOrderCreateURL, p.clusterOrderDeleteURL
+	case *v1alpha1.HostPool:
+		return p.hostPoolCreateURL, p.hostPoolDeleteURL
+	default:
+		// Fallback to ComputeInstance URLs for unknown types
+		return p.computeInstanceCreateURL, p.computeInstanceDeleteURL
 	}
 }
 
@@ -98,8 +130,9 @@ func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
 // Generates a unique job ID by scanning existing jobs.
 // Returns RateLimitError if the request is rate-limited.
 func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
-	if p.createURL == "" {
-		return nil, fmt.Errorf("create webhook URL not configured")
+	createURL, _ := p.getWebhookURLs(resource)
+	if createURL == "" {
+		return nil, fmt.Errorf("create webhook URL not configured for resource type %T", resource)
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
@@ -107,7 +140,7 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
-	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.createURL, webhookResource)
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, createURL, webhookResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to trigger create webhook: %w", err)
 	}
@@ -159,8 +192,9 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	}
 
 	// Trigger webhook
-	if p.deleteURL == "" {
-		return nil, fmt.Errorf("delete webhook URL not configured")
+	_, deleteURL := p.getWebhookURLs(resource)
+	if deleteURL == "" {
+		return nil, fmt.Errorf("delete webhook URL not configured for resource type %T", resource)
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
@@ -168,7 +202,7 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
-	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.deleteURL, webhookResource)
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, deleteURL, webhookResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to trigger delete webhook: %w", err)
 	}
