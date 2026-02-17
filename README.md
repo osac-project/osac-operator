@@ -1,19 +1,21 @@
-# osac-operator
+# OSAC operator
 
-Deploy OpenShift clusters in response to `ClusterOrders` using [Hosted Control Planes].
+Reconciles `ClusterOrder`, `HostPool`, `ComputeInstance`, and `Tenant` custom resources created by the [fulfillment service] or elsewhere. `ClusterOrder` deploys OpenShift clusters via [Hosted Control Planes]. `ComputeInstance` provisions virtual machines via [KubeVirt]. `HostPool` creates a namespace and notifies an external system via webhooks. `Tenant` provisions a namespace and an [OVN-Kubernetes UserDefinedNetwork] for tenant networking.
 
 [hosted control planes]: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/hosted-control-planes-overview
+[kubevirt]: https://kubevirt.io/
+[ovn-kubernetes userdefinednetwork]: https://github.com/ovn-org/ovn-kubernetes/blob/master/go-controller/pkg/crd/userdefinednetwork/v1/network.go
 
 ## Description
 
-osac-operator is part of the [OSAC][osac] (Open Source AI Cloud) project. It accepts `ClusterOrder` requests from the [fulfillment service] (or from elsewhere), and drives the process of deploying a new cluster.
+OSAC operator is part of the [Open Sovereign AI Cloud (OSAC)][osac-project] project. All four resource types are created by the fulfillment service (or elsewhere); the operator reconciles them. For `ClusterOrder` it drives cluster deployment using Hosted Control Planes. For `ComputeInstance` it provisions VMs using KubeVirt. For `HostPool` it creates a dedicated namespace and calls create/delete webhooks so an external system can provision the hosts. For `Tenant` it creates a namespace and an OVN-Kubernetes UserDefinedNetwork (layer-2, persistent IPAM) for tenant isolation.
 
-[osac]: https://github.com/osac
-[fulfillment service]: https://github.com/osac/fulfillment-service/
+[osac-project]: https://github.com/osac-project
+[fulfillment service]: https://github.com/osac-project/fulfillment-service/
 
 ## Configuration
 
-osac-operator makes use of the following environment variables:
+OSAC operator makes use of the following environment variables:
 
 ### Cluster Provisioning
 - `CLOUDKIT_CLUSTER_CREATE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL after creating the target namespace, service account, and rolebinding.
