@@ -697,10 +697,63 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	instance.SetVirtualMachineReferenceNamespace(kv.GetNamespace())
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAccepted, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
+	// Sync runStrategy to VirtualMachine spec.running
+	if err := r.syncRunStrategy(ctx, instance, kv); err != nil {
+		return fmt.Errorf("failed to sync runStrategy: %w", err)
+	}
+
 	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue) {
 		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName())
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 	}
+
+	return nil
+}
+
+// syncRunStrategy synchronizes the ComputeInstance runStrategy field to the VirtualMachine spec.running field.
+// This allows users to control VM power state through the ComputeInstance resource.
+//
+// RunStrategy mapping:
+//   - Always: VM should always be running (spec.running = true)
+//   - Halted: VM should be stopped (spec.running = false)
+func (r *ComputeInstanceReconciler) syncRunStrategy(ctx context.Context, instance *v1alpha1.ComputeInstance,
+	kv *kubevirtv1.VirtualMachine) error {
+	log := ctrllog.FromContext(ctx)
+
+	// Determine desired running state from runStrategy
+	var desiredRunning bool
+	switch instance.Spec.RunStrategy {
+	case v1alpha1.RunStrategyAlways:
+		desiredRunning = true
+	case v1alpha1.RunStrategyHalted:
+		desiredRunning = false
+	default:
+		return fmt.Errorf("unknown runStrategy value: %s", instance.Spec.RunStrategy)
+	}
+
+	// Check if VM running state needs to be updated
+	currentRunning := kv.Spec.Running != nil && *kv.Spec.Running
+	if currentRunning == desiredRunning {
+		// Already in desired state
+		return nil
+	}
+
+	// Update VirtualMachine spec.running to match runStrategy
+	log.Info("syncing runStrategy to VirtualMachine",
+		"computeinstance", instance.GetName(),
+		"runStrategy", instance.Spec.RunStrategy,
+		"currentRunning", currentRunning,
+		"desiredRunning", desiredRunning)
+
+	kv.Spec.Running = &desiredRunning
+	if err := r.Update(ctx, kv); err != nil {
+		return fmt.Errorf("failed to update VirtualMachine running state: %w", err)
+	}
+
+	log.Info("successfully synced runStrategy to VirtualMachine",
+		"computeinstance", instance.GetName(),
+		"runStrategy", instance.Spec.RunStrategy,
+		"running", desiredRunning)
 
 	return nil
 }
