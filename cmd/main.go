@@ -85,7 +85,7 @@ const (
 	// Provider selection
 	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
 
-	// AAP configuration (shared or per-resource-type)
+	// AAP configuration
 	envAAPURL                 = "OSAC_AAP_URL"
 	envAAPToken               = "OSAC_AAP_TOKEN"
 	envAAPProvisionTemplate   = "OSAC_AAP_PROVISION_TEMPLATE"
@@ -93,11 +93,11 @@ const (
 	envAAPStatusPollInterval  = "OSAC_AAP_STATUS_POLL_INTERVAL"
 	envAAPInsecureSkipVerify  = "OSAC_AAP_INSECURE_SKIP_VERIFY"
 
-	// ClusterOrder AAP templates (overrides for resource-specific templates)
+	// ClusterOrder AAP template overrides
 	envClusterOrderAAPProvisionTemplate   = "OSAC_CLUSTER_ORDER_AAP_PROVISION_TEMPLATE"
 	envClusterOrderAAPDeprovisionTemplate = "OSAC_CLUSTER_ORDER_AAP_DEPROVISION_TEMPLATE"
 
-	// HostPool AAP templates (overrides for resource-specific templates)
+	// HostPool AAP template overrides
 	envHostPoolAAPProvisionTemplate   = "OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE"
 	envHostPoolAAPDeprovisionTemplate = "OSAC_HOSTPOOL_AAP_DEPROVISION_TEMPLATE"
 
