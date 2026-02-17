@@ -28,8 +28,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac/osac-operator/internal/helpers"
 	"github.com/osac/osac-operator/internal/provisioning"
 )
+
+// Test helpers - wrappers around shared helpers for backwards compatibility with tests
+func findJobByID(jobs []cloudkitv1alpha1.JobStatus, jobID string) *cloudkitv1alpha1.JobStatus {
+	return helpers.FindJobByID(jobs, jobID)
+}
+
+func updateJob(jobs []cloudkitv1alpha1.JobStatus, updatedJob cloudkitv1alpha1.JobStatus) bool {
+	return helpers.UpdateJob(jobs, updatedJob)
+}
+
+func (r *ComputeInstanceReconciler) appendJob(jobs []cloudkitv1alpha1.JobStatus, newJob cloudkitv1alpha1.JobStatus) []cloudkitv1alpha1.JobStatus {
+	return helpers.AppendJob(jobs, newJob, r.MaxJobHistory)
+}
 
 var _ = Describe("ComputeInstance Controller", func() {
 	Context("When reconciling a resource", func() {

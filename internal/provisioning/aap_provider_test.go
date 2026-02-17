@@ -81,18 +81,11 @@ var _ = Describe("AAPProvider", func() {
 		provider  *provisioning.AAPProvider
 		aapClient *mockAAPClient
 		ctx       context.Context
-		resource  *mockResource
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		aapClient = &mockAAPClient{}
-		resource = &mockResource{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-resource",
-				Namespace: "default",
-			},
-		}
 	})
 
 	Describe("TriggerProvision", func() {
@@ -107,16 +100,23 @@ var _ = Describe("AAPProvider", func() {
 					// Verify EDA event structure for compatibility with EDA-designed templates
 					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
 					payload := extractEDAPayload(req.ExtraVars)
-					// Verify serialized resource contains the ObjectMeta fields
-					// Note: mockResource embeds ObjectMeta, so fields are at top level
-					Expect(payload).To(HaveKeyWithValue("name", "test-resource"))
-					Expect(payload).To(HaveKeyWithValue("namespace", "default"))
+					// Verify serialized resource contains the ObjectMeta fields under "metadata"
+					Expect(payload).To(HaveKey("metadata"))
+					metadata := payload["metadata"].(map[string]any)
+					Expect(metadata).To(HaveKeyWithValue("name", "test-resource"))
+					Expect(metadata).To(HaveKeyWithValue("namespace", "default"))
 					return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
 				}
 			})
 
 			It("should launch job template and return job ID", func() {
-				result, err := provider.TriggerProvision(ctx, resource)
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				result, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.JobID).To(Equal("123"))
 				Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
@@ -135,15 +135,22 @@ var _ = Describe("AAPProvider", func() {
 					// Verify EDA event structure for compatibility with EDA-designed templates
 					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
 					payload := extractEDAPayload(req.ExtraVars)
-					// Verify serialized resource contains the ObjectMeta fields
-					// Note: mockResource embeds ObjectMeta, so fields are at top level
-					Expect(payload).To(HaveKeyWithValue("namespace", "default"))
+					// Verify serialized resource contains the ObjectMeta fields under "metadata"
+					Expect(payload).To(HaveKey("metadata"))
+					metadata := payload["metadata"].(map[string]any)
+					Expect(metadata).To(HaveKeyWithValue("namespace", "default"))
 					return &aap.LaunchWorkflowTemplateResponse{JobID: 456}, nil
 				}
 			})
 
 			It("should launch workflow template and return job ID", func() {
-				result, err := provider.TriggerProvision(ctx, resource)
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				result, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.JobID).To(Equal("456"))
 				Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
@@ -157,7 +164,13 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.TriggerProvision(ctx, resource)
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				_, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("provision template not configured"))
 			})
@@ -172,7 +185,13 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.TriggerProvision(ctx, resource)
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				_, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("failed to get template"))
 			})
@@ -190,7 +209,13 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.TriggerProvision(ctx, resource)
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				_, err := provider.TriggerProvision(ctx, instance)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("failed to launch job template"))
 			})
@@ -219,7 +244,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return succeeded state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.JobID).To(Equal("789"))
 				Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
@@ -242,7 +268,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return pending state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStatePending))
 			})
@@ -263,7 +290,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return waiting state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateWaiting))
 			})
@@ -285,7 +313,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return running state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateRunning))
 			})
@@ -309,7 +338,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return failed state with error details", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateFailed))
 				Expect(status.ErrorDetails).To(Equal("Error: Connection timeout"))
@@ -333,7 +363,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return failed state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateFailed))
 				Expect(status.Message).To(Equal("error"))
@@ -357,7 +388,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return canceled state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateCanceled))
 				Expect(status.Message).To(Equal("canceled"))
@@ -380,7 +412,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return unknown state", func() {
-				status, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				status, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(status.State).To(Equal(v1alpha1.JobStateUnknown))
 				Expect(status.Message).To(Equal("unknown_status"))
@@ -395,7 +428,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.GetProvisionStatus(ctx, resource, "invalid")
+				instance := &v1alpha1.ComputeInstance{}
+				_, err := provider.GetProvisionStatus(ctx, instance, "invalid")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("failed to get job"))
 			})
@@ -409,7 +443,8 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			It("should return error", func() {
-				_, err := provider.GetProvisionStatus(ctx, resource, "789")
+				instance := &v1alpha1.ComputeInstance{}
+				_, err := provider.GetProvisionStatus(ctx, instance, "789")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("failed to get job"))
 			})
@@ -634,7 +669,8 @@ var _ = Describe("AAPProvider", func() {
 		})
 
 		It("should return job status", func() {
-			status, err := provider.GetDeprovisionStatus(ctx, resource, "888")
+			instance := &v1alpha1.ComputeInstance{}
+			status, err := provider.GetDeprovisionStatus(ctx, instance, "888")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("888"))
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))

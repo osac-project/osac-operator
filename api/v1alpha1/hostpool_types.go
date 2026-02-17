@@ -97,6 +97,12 @@ type HostPoolStatus struct {
 
 	// HostSets reflects how many hosts are currently allocated for each host class
 	HostSets []HostSet `json:"hostSets,omitempty"`
+
+	// Jobs tracks the history of provision and deprovision operations
+	// Ordered chronologically, with latest operations at the end
+	// Limited to the last N jobs (configurable via CLOUDKIT_MAX_JOB_HISTORY, default 10)
+	// +kubebuilder:validation:Optional
+	Jobs []JobStatus `json:"jobs,omitempty"`
 }
 
 // +kubebuilder:object:root=true
