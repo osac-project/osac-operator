@@ -18,28 +18,28 @@ OSAC operator is part of the [Open Sovereign AI Cloud (OSAC)][osac-project] proj
 OSAC operator makes use of the following environment variables:
 
 ### Cluster Provisioning
-- `CLOUDKIT_CLUSTER_CREATE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL after creating the target namespace, service account, and rolebinding.
-- `CLOUDKIT_CLUSTER_DELETE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL before deleting the target namespace.
+- `OSAC_CLUSTER_CREATE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL after creating the target namespace, service account, and rolebinding.
+- `OSAC_CLUSTER_DELETE_WEBHOOK` -- the operator will post the JSON-serialized ClusterOrder to this URL before deleting the target namespace.
 
 ### ComputeInstance Provisioning
 
 The operator supports two provisioning providers for ComputeInstance resources:
 
 **Provider Selection:**
-- `CLOUDKIT_PROVISIONING_PROVIDER` -- selects the provider: `"eda"` (default) or `"aap"`
+- `OSAC_PROVISIONING_PROVIDER` -- selects the provider: `"eda"` (default) or `"aap"`
 
 **EDA Provider (default):**
-- `CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK` -- webhook URL for provisioning
-- `CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` -- webhook URL for deprovisioning
+- `OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK` -- webhook URL for provisioning
+- `OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` -- webhook URL for deprovisioning
 
 **AAP Provider:**
-- `CLOUDKIT_AAP_URL` -- AAP server URL (required)
-- `CLOUDKIT_AAP_TOKEN` -- AAP authentication token (required)
-- `CLOUDKIT_AAP_PROVISION_TEMPLATE` -- template name for provisioning (optional)
-- `CLOUDKIT_AAP_DEPROVISION_TEMPLATE` -- template name for deprovisioning (optional)
-- `CLOUDKIT_AAP_STATUS_POLL_INTERVAL` -- job status polling interval (optional, default: 30s)
+- `OSAC_AAP_URL` -- AAP server URL (required)
+- `OSAC_AAP_TOKEN` -- AAP authentication token (required)
+- `OSAC_AAP_PROVISION_TEMPLATE` -- template name for provisioning (optional)
+- `OSAC_AAP_DEPROVISION_TEMPLATE` -- template name for deprovisioning (optional)
+- `OSAC_AAP_STATUS_POLL_INTERVAL` -- job status polling interval (optional, default: 30s)
 
-See `config/samples/cloudkit-config-secret.yaml` for a complete configuration example.
+See `config/samples/osac-config-secret.yaml` for a complete configuration example.
 
 ## Getting Started
 

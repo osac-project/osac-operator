@@ -8,7 +8,7 @@ metadata:
   name: clusterorder-editor-role
 rules:
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - clusterorders
   verbs:
@@ -20,7 +20,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - clusterorders/status
   verbs:

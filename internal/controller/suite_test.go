@@ -36,7 +36,7 @@ import (
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
-	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -85,7 +85,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
-	err = cloudkitv1alpha1.AddToScheme(scheme.Scheme)
+	err = osacv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = ovnv1.AddToScheme(scheme.Scheme)

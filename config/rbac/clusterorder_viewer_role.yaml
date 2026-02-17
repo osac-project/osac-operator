@@ -8,7 +8,7 @@ metadata:
   name: clusterorder-viewer-role
 rules:
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - clusterorders
   verbs:
@@ -16,7 +16,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - clusterorders/status
   verbs:

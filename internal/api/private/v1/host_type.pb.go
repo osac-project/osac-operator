@@ -22,7 +22,7 @@
 package privatev1
 
 import (
-	v1 "github.com/osac/osac-operator/internal/api/shared/v1"
+	v1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"

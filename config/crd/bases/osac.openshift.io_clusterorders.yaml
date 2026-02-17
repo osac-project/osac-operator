@@ -4,29 +4,29 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: hostpools.cloudkit.openshift.io
+  name: clusterorders.osac.openshift.io
 spec:
-  group: cloudkit.openshift.io
+  group: osac.openshift.io
   names:
-    kind: HostPool
-    listKind: HostPoolList
-    plural: hostpools
+    kind: ClusterOrder
+    listKind: ClusterOrderList
+    plural: clusterorders
     shortNames:
-    - hp
-    singular: hostpool
+    - cord
+    singular: clusterorder
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.templateID
+      name: Template
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .spec.hostSets[*].size
-      name: Host Sets
-      type: integer
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HostPool is the Schema for the hostpools API
+        description: ClusterOrder is the Schema for the clusterorders API
         properties:
           apiVersion:
             description: |-
@@ -46,35 +46,66 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of HostPool
+            description: ClusterOrderSpec defines the desired state of ClusterOrder
             properties:
-              hostSets:
+              nodeRequests:
                 description: |-
-                  HostSets defines the types of hosts and number of each type of host that will be allocated
-                  for this host pool
+                  NodeRequests defines the types of nodes and number of each type of node that will be used
+                  to build the cluster. This value is optional and if not provided will be filled in with template-provided
+                  defaults. The selected template may limit what node types you can request.
                 items:
                   properties:
-                    hostClass:
-                      description: HostClass describes the type of host you are requesting
-                      type: string
-                    size:
-                      description: Size describes the number of hosts you want of
-                        the given host class
+                    numberOfNodes:
+                      description: NumberOfNodes describes the number of nodes you
+                        want of the given resource class
                       type: integer
+                    resourceClass:
+                      description: ResourceClass describes the type of node you are
+                        requesting
+                      type: string
                   required:
-                  - hostClass
-                  - size
+                  - numberOfNodes
+                  - resourceClass
                   type: object
                 type: array
+              templateID:
+                description: TemplateID is the unique identigier of the cluster template
+                  to use when creating this cluster
+                pattern: ^[a-zA-Z_][a-zA-Z0-9._]*$
+                type: string
+              templateParameters:
+                description: |-
+                  TemplateParameters is a JSON-encoded map of the parameter values for the
+                  selected cluster template.
+                type: string
             required:
-            - hostSets
+            - templateID
             type: object
           status:
-            description: status defines the observed state of HostPool
+            description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
+              clusterReference:
+                description: Reference to the namespace that contains the HostedCluster
+                  resource
+                properties:
+                  hostedClusterName:
+                    type: string
+                  namespace:
+                    description: Namespace that contains the HostedCluster resource
+                    type: string
+                  roleBindingName:
+                    type: string
+                  serviceAccountName:
+                    type: string
+                required:
+                - hostedClusterName
+                - namespace
+                - roleBindingName
+                - serviceAccountName
+                type: object
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
-                  the state of the HostPool
+                  the state of the ClusterOrder
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -130,35 +161,27 @@ spec:
                   - type
                   type: object
                 type: array
-              hostPoolReference:
-                description: Reference to the resources created for this HostPool
-                properties:
-                  namespace:
-                    description: Namespace that contains the HostPool resources
-                    type: string
-                required:
-                - namespace
-                type: object
-              hostSets:
-                description: HostSets reflects how many hosts are currently allocated
-                  for each host class
+              nodeRequests:
+                description: NodeRequests reflects how many nodes are currently associated
+                  with the ClusterOrder
                 items:
                   properties:
-                    hostClass:
-                      description: HostClass describes the type of host you are requesting
-                      type: string
-                    size:
-                      description: Size describes the number of hosts you want of
-                        the given host class
+                    numberOfNodes:
+                      description: NumberOfNodes describes the number of nodes you
+                        want of the given resource class
                       type: integer
+                    resourceClass:
+                      description: ResourceClass describes the type of node you are
+                        requesting
+                      type: string
                   required:
-                  - hostClass
-                  - size
+                  - numberOfNodes
+                  - resourceClass
                   type: object
                 type: array
               phase:
                 description: Phase provides a single-value overview of the state of
-                  the HostPool
+                  the ClusterOrder
                 enum:
                 - Progressing
                 - Failed
@@ -166,8 +189,6 @@ spec:
                 - Deleting
                 type: string
             type: object
-        required:
-        - spec
         type: object
     served: true
     storage: true

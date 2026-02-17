@@ -23,9 +23,9 @@ const (
 	// ManagementStateUnmanaged indicates that the resource should be ignored by the controller
 	ManagementStateUnmanaged = "unmanaged"
 
-	// cloudkitAppName is the name of the cloudkit application
-	cloudkitAppName string = "osac-operator"
+	// osacAppName is the name of the osac application
+	osacAppName string = "osac-operator"
 
-	// cloudkitPrefix is the prefix used to identify cloudkit resources
-	cloudkitPrefix string = "cloudkit.openshift.io"
+	// osacPrefix is the prefix used to identify osac resources
+	osacPrefix string = "osac.openshift.io"
 )

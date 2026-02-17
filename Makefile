@@ -46,13 +46,13 @@ ifeq ($(USE_IMAGE_DIGESTS), true)
 	BUNDLE_GEN_FLAGS += --use-image-digests
 endif
 
-CLOUDKIT_DEV_NAMESPACE ?= osac-operator-dev
+OSAC_DEV_NAMESPACE ?= osac-operator-dev
 
 # Set the Operator SDK version to use. By default, what is installed on the system is used.
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.39.1
 # Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/osac/osac-operator:latest
+IMG ?= ghcr.io/osac-project/osac-operator:latest
 # Name of Containerfile
 CONTAINERFILE ?= Containerfile
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -137,16 +137,16 @@ test-kustomize: kustomize ## Validate kustomize configurations (catches missing 
 .PHONY: test-smoke
 test-smoke: kustomize ## Run smoke test in kind cluster (creates/deletes test cluster).
 	@echo "Creating kind cluster..."
-	$(KIND) create cluster --name cloudkit-test --wait 5m || true
+	$(KIND) create cluster --name osac-test --wait 5m || true
 	@echo "Installing CRDs..."
 	$(KUBECTL) apply -k config/crd
 	@echo "Creating sample ComputeInstance..."
-	$(KUBECTL) apply -f config/samples/cloudkit_v1alpha1_computeinstance.yaml
+	$(KUBECTL) apply -f config/samples/osac_v1alpha1_computeinstance.yaml
 	@echo "Verifying ComputeInstance creation..."
 	$(KUBECTL) get computeinstance
 	$(KUBECTL) get ci
 	@echo "Cleaning up..."
-	$(KIND) delete cluster --name cloudkit-test
+	$(KIND) delete cluster --name osac-test
 	@echo "Smoke test passed!"
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
@@ -185,11 +185,11 @@ image-push: ## Push container image with the manager.
 
 .PHONY: image-run
 image-run: ## Run container image locally.
-	$(CONTAINER_TOOL) run --rm --userns keep-id --name cloudkit-controller \
+	$(CONTAINER_TOOL) run --rm --userns keep-id --name osac-controller \
 		-v ${HOME}/.kube:/.kube -e HOME=/ \
-		-e CLOUDKIT_CLUSTER_ORDER_NAMESPACE=$(CLOUDKIT_DEV_NAMESPACE) \
-		-e CLOUDKIT_COMPUTE_INSTANCE_NAMESPACE=$(CLOUDKIT_DEV_NAMESPACE) \
-		-e CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE=$(CLOUDKIT_DEV_NAMESPACE) \
+		-e OSAC_CLUSTER_ORDER_NAMESPACE=$(OSAC_DEV_NAMESPACE) \
+		-e OSAC_COMPUTE_INSTANCE_NAMESPACE=$(OSAC_DEV_NAMESPACE) \
+		-e OSAC_HOSTPOOL_ORDER_NAMESPACE=$(OSAC_DEV_NAMESPACE) \
 		${IMG}
 
 .PHONY: kind-load

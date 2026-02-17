@@ -24,9 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
+	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 )
 
 // HostPoolFeedbackReconciler sends updates to the fulfillment service.
@@ -74,11 +74,11 @@ func (r *HostPoolFeedbackReconciler) Reconcile(ctx context.Context, request ctrl
 
 	// Get the identifier of the host pool from the labels. If this isn't present it means that the object wasn't
 	// created by the fulfillment service, so we ignore it.
-	hostPoolID, ok := object.Labels[cloudkitHostPoolIDLabel]
+	hostPoolID, ok := object.Labels[osacHostPoolIDLabel]
 	if !ok {
 		r.logger.Info(
 			"There is no label containing the host pool identifier, will ignore it",
-			"label", cloudkitHostPoolIDLabel,
+			"label", osacHostPoolIDLabel,
 		)
 		return
 	}

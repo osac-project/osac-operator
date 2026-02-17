@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/provisioning"
-	"github.com/osac/osac-operator/internal/webhook"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/internal/webhook"
 )
 
 // mockWebhookClient is a test double for WebhookClient
@@ -263,7 +263,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"cloudkit.openshift.io/computeinstance-aap"},
+						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
 					},
 					Status: v1alpha1.ComputeInstanceStatus{
 						Jobs: []v1alpha1.JobStatus{
@@ -305,7 +305,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when webhook fails", func() {
 			BeforeEach(func() {
-				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
+				resource.Finalizers = []string{"osac.openshift.io/computeinstance-aap"}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 0, errors.New("webhook error")
 				}
@@ -320,7 +320,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when delete URL is empty", func() {
 			BeforeEach(func() {
-				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
+				resource.Finalizers = []string{"osac.openshift.io/computeinstance-aap"}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "")
 			})
 
@@ -333,7 +333,7 @@ var _ = Describe("EDAProvider", func() {
 
 		Context("when webhook is rate-limited", func() {
 			BeforeEach(func() {
-				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
+				resource.Finalizers = []string{"osac.openshift.io/computeinstance-aap"}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
 					return 3 * time.Second, nil
@@ -354,7 +354,7 @@ var _ = Describe("EDAProvider", func() {
 	Describe("GetDeprovisionStatus", func() {
 		Context("when AAP finalizer is present", func() {
 			BeforeEach(func() {
-				resource.Finalizers = []string{"cloudkit.openshift.io/computeinstance-aap"}
+				resource.Finalizers = []string{"osac.openshift.io/computeinstance-aap"}
 			})
 
 			It("should return running state", func() {

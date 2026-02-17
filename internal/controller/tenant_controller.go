@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 // TenantReconciler reconciles a Tenant object
@@ -43,9 +43,9 @@ type TenantReconciler struct {
 	tenantNamespace string
 }
 
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=tenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=tenants/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
 
@@ -165,7 +165,7 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, req ctrl.Request, i
 func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	tenantName, exists := obj.GetLabels()[cloudkitTenantRefLabel]
+	tenantName, exists := obj.GetLabels()[osacTenantRefLabel]
 	if !exists {
 		return nil
 	}
@@ -226,11 +226,11 @@ func tenantLabelSelector(project string) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
-				Key:      cloudkitTenantRefLabel,
+				Key:      osacTenantRefLabel,
 				Operator: metav1.LabelSelectorOpExists,
 			},
 			{
-				Key:      cloudkitProjectRefLabel,
+				Key:      osacProjectRefLabel,
 				Operator: metav1.LabelSelectorOpIn,
 				Values:   []string{project},
 			},

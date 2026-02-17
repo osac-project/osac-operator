@@ -10,8 +10,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/aap"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/aap"
 )
 
 // AAPClient is the interface for AAP operations used by the provider.
@@ -348,7 +348,7 @@ func mapAAPStatusToJobState(aapStatus string) v1alpha1.JobState {
 
 // extractExtraVars extracts extra variables from a resource to pass to AAP.
 //
-// NOTE: The current AAP templates (innabox-create-compute-instance, innabox-delete-compute-instance)
+// NOTE: The current AAP templates (osac-create-compute-instance, osac-delete-compute-instance)
 // were designed to be triggered by EDA (Event-Driven Ansible) and expect the full Kubernetes resource
 // object wrapped in an EDA event structure. To maintain compatibility with existing templates, we
 // serialize the entire resource object and wrap it in the ansible_eda.event.payload structure.

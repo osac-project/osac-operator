@@ -10,9 +10,9 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/aap"
-	"github.com/osac/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/aap"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
 // mockAAPClient is a test double for aap.Client

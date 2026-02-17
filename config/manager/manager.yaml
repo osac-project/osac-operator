@@ -69,18 +69,18 @@ spec:
         name: manager
         envFrom:
           - secretRef:
-              name: cloudkit-config
+              name: osac-config
               optional: true
         env:
-          - name: CLOUDKIT_CLUSTER_ORDER_NAMESPACE
+          - name: OSAC_CLUSTER_ORDER_NAMESPACE
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
-          - name: CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE
+          - name: OSAC_HOSTPOOL_ORDER_NAMESPACE
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
-          - name: CLOUDKIT_COMPUTE_INSTANCE_NAMESPACE
+          - name: OSAC_COMPUTE_INSTANCE_NAMESPACE
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
