@@ -19,6 +19,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,6 +40,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/helpers"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
 // NewComponentFn is the type of a function that creates a required component
@@ -70,6 +73,9 @@ type ClusterOrderReconciler struct {
 	DeleteClusterWebhook  string
 	ClusterOrderNamespace string
 	webhookClient         *WebhookClient
+	ProvisioningProvider  provisioning.ProvisioningProvider
+	StatusPollInterval    time.Duration
+	MaxJobHistory         int
 }
 
 func NewClusterOrderReconciler(
@@ -79,10 +85,21 @@ func NewClusterOrderReconciler(
 	deleteClusterWebhook string,
 	clusterOrderNamespace string,
 	minimumRequestInterval time.Duration,
+	provisioningProvider provisioning.ProvisioningProvider,
+	statusPollInterval time.Duration,
+	maxJobHistory int,
 ) *ClusterOrderReconciler {
 
 	if clusterOrderNamespace == "" {
 		clusterOrderNamespace = defaultClusterOrderNamespace
+	}
+
+	if statusPollInterval == 0 {
+		statusPollInterval = 30 * time.Second
+	}
+
+	if maxJobHistory <= 0 {
+		maxJobHistory = DefaultMaxJobHistory
 	}
 
 	return &ClusterOrderReconciler{
@@ -92,6 +109,9 @@ func NewClusterOrderReconciler(
 		DeleteClusterWebhook:  deleteClusterWebhook,
 		ClusterOrderNamespace: clusterOrderNamespace,
 		webhookClient:         NewWebhookClient(10*time.Second, minimumRequestInterval),
+		ProvisioningProvider:  provisioningProvider,
+		StatusPollInterval:    statusPollInterval,
+		MaxJobHistory:         maxJobHistory,
 	}
 }
 
@@ -274,6 +294,13 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Reques
 
 	instance.SetStatusCondition(v1alpha1.ConditionNamespaceCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
+	// Handle provisioning via provider (hybrid approach: job tracking + HC watching)
+	// Non-blocking: returns RequeueAfter for polling without delaying reconciliation
+	provisionResult, err := r.handleProvisioning(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	ns, err := r.findNamespace(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -302,6 +329,11 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Reques
 				return ctrl.Result{RequeueAfter: remainingTime}, nil
 			}
 		}
+	}
+
+	// If provision job needs polling, requeue for status updates
+	if provisionResult.RequeueAfter > 0 {
+		return provisionResult, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -458,6 +490,17 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Reques
 
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 
+	// Handle deprovisioning via provider
+	// Waits for provision job termination and polls deprovision job if needed
+	deprovisionResult, err := r.handleDeprovisioning(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// If deprovision job is still running, requeue and wait
+	if deprovisionResult.RequeueAfter > 0 {
+		return deprovisionResult, nil
+	}
+
 	ns, err := r.findNamespace(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -509,6 +552,180 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Reques
 		}
 	}
 
+	return ctrl.Result{}, nil
+}
+
+// handleProvisioning manages the provisioning job lifecycle for ClusterOrder.
+// Uses hybrid approach: provider for job tracking + existing watch-based HC readiness.
+// Non-blocking: returns RequeueAfter for polling, doesn't delay reconciliation.
+func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// If provider not configured, skip (webhook fallback)
+	if r.ProvisioningProvider == nil {
+		return ctrl.Result{}, nil
+	}
+
+	// Check if provision job already exists
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+
+	// If no provision job exists, trigger one
+	if latestProvisionJob == nil {
+		log.Info("triggering provision job")
+		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
+		if err != nil {
+			var rateLimitErr *provisioning.RateLimitError
+			if errors.As(err, &rateLimitErr) {
+				log.Info("provision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
+				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to trigger provision: %w", err)
+		}
+
+		// Append new job to status
+		instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
+			JobID:     result.JobID,
+			Type:      v1alpha1.JobTypeProvision,
+			State:     result.InitialState,
+			Message:   result.Message,
+			Timestamp: metav1.Now(),
+		}, r.MaxJobHistory)
+
+		// Requeue to poll status
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Poll existing provision job status (non-blocking)
+	if !latestProvisionJob.State.IsTerminal() {
+		log.Info("polling provision job status", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
+		status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
+		if err != nil {
+			log.Error(err, "failed to get provision status", "jobID", latestProvisionJob.JobID)
+			// Don't block reconciliation on polling errors, just requeue
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+
+		// Update job status if changed
+		if status.State != latestProvisionJob.State || status.Message != latestProvisionJob.Message {
+			log.Info("provision job status changed", "jobID", latestProvisionJob.JobID, "oldState", latestProvisionJob.State, "newState", status.State)
+			updatedJob := *latestProvisionJob
+			updatedJob.State = status.State
+			updatedJob.Message = status.Message
+			helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+
+			// If job failed, set Phase to Failed
+			if status.State == v1alpha1.JobStateFailed {
+				log.Info("provision job failed", "jobID", latestProvisionJob.JobID)
+				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
+			}
+		}
+
+		// Continue polling if still running
+		if !status.State.IsTerminal() {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+	}
+
+	// Job is terminal or no polling needed, continue with normal reconciliation
+	return ctrl.Result{}, nil
+}
+
+// handleDeprovisioning manages the deprovisioning job lifecycle for ClusterOrder.
+// Waits for provision job termination if needed, then triggers deprovision job.
+func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// If provider not configured, skip (webhook fallback)
+	if r.ProvisioningProvider == nil {
+		return ctrl.Result{}, nil
+	}
+
+	// Check if deprovision job already exists
+	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+
+	// If no deprovision job exists, trigger one
+	if latestDeprovisionJob == nil {
+		log.Info("triggering deprovision job")
+		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
+		if err != nil {
+			var rateLimitErr *provisioning.RateLimitError
+			if errors.As(err, &rateLimitErr) {
+				log.Info("deprovision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
+				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to trigger deprovision: %w", err)
+		}
+
+		// Handle different deprovision actions
+		switch result.Action {
+		case provisioning.DeprovisionSkipped:
+			log.Info("deprovisioning skipped by provider")
+			return ctrl.Result{}, nil
+
+		case provisioning.DeprovisionWaiting:
+			log.Info("waiting for provision job to terminate before deprovisioning")
+			// Update provision job status if provided
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+				}
+			}
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+		case provisioning.DeprovisionTriggered:
+			log.Info("deprovision job triggered", "jobID", result.JobID)
+			// Update provision job status if provided
+			if result.ProvisionJobStatus != nil {
+				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				if latestProvisionJob != nil {
+					updatedJob := *latestProvisionJob
+					updatedJob.State = result.ProvisionJobStatus.State
+					updatedJob.Message = result.ProvisionJobStatus.Message
+					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+				}
+			}
+			// Append deprovision job
+			instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
+				JobID:     result.JobID,
+				Type:      v1alpha1.JobTypeDeprovision,
+				State:     v1alpha1.JobStatePending,
+				Message:   "Deprovision job triggered",
+				Timestamp: metav1.Now(),
+			}, r.MaxJobHistory)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+	}
+
+	// Poll existing deprovision job status
+	if !latestDeprovisionJob.State.IsTerminal() {
+		log.Info("polling deprovision job status", "jobID", latestDeprovisionJob.JobID, "currentState", latestDeprovisionJob.State)
+		status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, instance, latestDeprovisionJob.JobID)
+		if err != nil {
+			log.Error(err, "failed to get deprovision status", "jobID", latestDeprovisionJob.JobID)
+			// Don't block on polling errors, just requeue
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+
+		// Update job status if changed
+		if status.State != latestDeprovisionJob.State || status.Message != latestDeprovisionJob.Message {
+			log.Info("deprovision job status changed", "jobID", latestDeprovisionJob.JobID, "oldState", latestDeprovisionJob.State, "newState", status.State)
+			updatedJob := *latestDeprovisionJob
+			updatedJob.State = status.State
+			updatedJob.Message = status.Message
+			helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+		}
+
+		// Continue polling if still running
+		if !status.State.IsTerminal() {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+	}
+
+	// Job is terminal, ready to proceed with deletion
 	return ctrl.Result{}, nil
 }
 
