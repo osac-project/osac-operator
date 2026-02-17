@@ -59,6 +59,21 @@ func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *E
 	}
 }
 
+// getAAPFinalizerName returns the AAP finalizer name for the resource type.
+func getAAPFinalizerName(resource client.Object) string {
+	switch resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return "osac.openshift.io/computeinstance-aap"
+	case *v1alpha1.ClusterOrder:
+		return "osac.openshift.io/clusterorder-aap"
+	case *v1alpha1.HostPool:
+		return "osac.openshift.io/hostpool-aap"
+	default:
+		// For test mocks or unknown types, use ComputeInstance finalizer as default
+		return "osac.openshift.io/computeinstance-aap"
+	}
+}
+
 // generateEDAJobID generates a unique job ID by scanning existing jobs and incrementing the counter.
 // Returns IDs in the format "eda-webhook-N" where N is an incrementing counter.
 func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
@@ -103,11 +118,11 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 	}
 
 	// Generate unique job ID
-	instance, ok := resource.(*v1alpha1.ComputeInstance)
-	if !ok {
-		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	jobs, err := getJobsFromResource(resource)
+	if err != nil {
+		return nil, err
 	}
-	jobID := generateEDAJobID(instance.Status.Jobs)
+	jobID := generateEDAJobID(jobs)
 
 	return &ProvisionResult{
 		JobID:        jobID,
@@ -134,8 +149,9 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	log := ctrllog.FromContext(ctx)
 
 	// EDA only deprovisions if AAP finalizer exists (set by playbook during provision)
-	if !controllerutil.ContainsFinalizer(resource, "osac.openshift.io/computeinstance-aap") {
-		log.Info("no AAP finalizer, skipping EDA deprovisioning")
+	aapFinalizer := getAAPFinalizerName(resource)
+	if !controllerutil.ContainsFinalizer(resource, aapFinalizer) {
+		log.Info("no AAP finalizer, skipping EDA deprovisioning", "finalizer", aapFinalizer)
 		return &DeprovisionResult{
 			Action:                 DeprovisionSkipped,
 			BlockDeletionOnFailure: false,
@@ -163,11 +179,11 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	}
 
 	// Generate unique job ID
-	instance, ok := resource.(*v1alpha1.ComputeInstance)
-	if !ok {
-		return nil, fmt.Errorf("resource is not a ComputeInstance")
+	jobs, err := getJobsFromResource(resource)
+	if err != nil {
+		return nil, err
 	}
-	jobID := generateEDAJobID(instance.Status.Jobs)
+	jobID := generateEDAJobID(jobs)
 
 	return &DeprovisionResult{
 		Action:                 DeprovisionTriggered,
@@ -181,7 +197,9 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 // Returns Succeeded when finalizer is removed, Running while it still exists.
 func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	// Check if AAP finalizer has been removed (signals playbook completion)
-	if !controllerutil.ContainsFinalizer(resource, "osac.openshift.io/computeinstance-aap") {
+	aapFinalizer := getAAPFinalizerName(resource)
+
+	if !controllerutil.ContainsFinalizer(resource, aapFinalizer) {
 		return ProvisionStatus{
 			JobID:   jobID,
 			State:   v1alpha1.JobStateSucceeded,

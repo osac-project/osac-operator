@@ -39,6 +39,76 @@ func NewAAPProvider(client AAPClient, provisionTemplate, deprovisionTemplate str
 	}
 }
 
+// getJobsFromResource extracts the jobs array from any supported resource type.
+func getJobsFromResource(resource client.Object) ([]v1alpha1.JobStatus, error) {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return r.Status.Jobs, nil
+	case *v1alpha1.ClusterOrder:
+		return r.Status.Jobs, nil
+	case *v1alpha1.HostPool:
+		return r.Status.Jobs, nil
+	default:
+		return nil, fmt.Errorf("unsupported resource type: %T", resource)
+	}
+}
+
+// isResourceReady returns true if the resource is in a Ready/Running state.
+func isResourceReady(resource client.Object) bool {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseRunning
+	case *v1alpha1.ClusterOrder:
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseReady
+	case *v1alpha1.HostPool:
+		return r.Status.Phase == v1alpha1.HostPoolPhaseReady
+	default:
+		return false
+	}
+}
+
+// isResourceFailed returns true if the resource is in a Failed state.
+func isResourceFailed(resource client.Object) bool {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseFailed
+	case *v1alpha1.ClusterOrder:
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseFailed
+	case *v1alpha1.HostPool:
+		return r.Status.Phase == v1alpha1.HostPoolPhaseFailed
+	default:
+		return false
+	}
+}
+
+// isResourceDeleting returns true if the resource is in a Deleting state.
+func isResourceDeleting(resource client.Object) bool {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting
+	case *v1alpha1.ClusterOrder:
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting
+	case *v1alpha1.HostPool:
+		return r.Status.Phase == v1alpha1.HostPoolPhaseDeleting
+	default:
+		return false
+	}
+}
+
+// getResourcePhase returns the phase as a string for logging.
+func getResourcePhase(resource client.Object) string {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return string(r.Status.Phase)
+	case *v1alpha1.ClusterOrder:
+		return string(r.Status.Phase)
+	case *v1alpha1.HostPool:
+		return string(r.Status.Phase)
+	default:
+		return "unknown"
+	}
+}
+
 // TriggerProvision triggers provisioning via AAP API.
 // Autodetects whether the template is a job_template or workflow_job_template.
 func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
@@ -106,10 +176,8 @@ func (p *AAPProvider) GetProvisionStatus(ctx context.Context, resource client.Ob
 
 // TriggerDeprovision attempts to start deprovisioning for a resource.
 func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
-	instance := resource.(*v1alpha1.ComputeInstance)
-
 	// Check if provision job needs to be terminated first
-	ready, provisionStatus, err := p.isReadyForDeprovision(ctx, instance)
+	ready, provisionStatus, err := p.isReadyForDeprovision(ctx, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +208,17 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 // - ready: true if ready to deprovision, false if need to wait for provision job cancellation
 // - currentProvisionStatus: the actual provision job status from AAP (used to update CR status)
 // - error: any error encountered during the check
-func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alpha1.ComputeInstance) (bool, *ProvisionStatus, error) {
+func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client.Object) (bool, *ProvisionStatus, error) {
 	log := ctrllog.FromContext(ctx)
 
+	// Get jobs from resource
+	jobs, err := getJobsFromResource(resource)
+	if err != nil {
+		return false, nil, err
+	}
+
 	// Find latest provision job
-	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := v1alpha1.FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
 
 	// No provision job - ready to proceed
 	if latestProvisionJob == nil {
@@ -157,41 +231,42 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, instance *v1alp
 	// Check if this is an EDA job ID (provider switch scenario)
 	// EDA job IDs start with "eda-webhook-", AAP job IDs are numeric
 	if IsEDAJobID(latestProvisionJob.JobID) {
-		log.Info("detected EDA provision job (provider switch scenario), checking instance phase", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		phase := getResourcePhase(resource)
+		log.Info("detected EDA provision job (provider switch scenario), checking resource phase", "jobID", latestProvisionJob.JobID, "phase", phase)
 		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
-		// Check the ComputeInstance phase to determine if provisioning is complete
+		// Check the resource phase to determine if provisioning is complete
 
-		// Running or Failed - provision is done, ready to deprovision
-		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseRunning {
-			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		// Ready/Running or Failed - provision is done, ready to deprovision
+		if isResourceReady(resource) {
+			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", phase)
 			return true, nil, nil
 		}
-		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseFailed {
-			log.Info("EDA provision failed, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		if isResourceFailed(resource) {
+			log.Info("EDA provision failed, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", phase)
 			return true, nil, nil
 		}
 
 		// Deleting phase - check if deprovision job already exists
-		if instance.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting {
+		if isResourceDeleting(resource) {
 			// Check if deprovision job exists
-			latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+			latestDeprovisionJob := v1alpha1.FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
 			if latestDeprovisionJob == nil {
 				// No deprovision job yet - this is the initial deletion, ready to create deprovision job
-				log.Info("EDA provision complete, deletion initiated, ready to create deprovision job", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+				log.Info("EDA provision complete, deletion initiated, ready to create deprovision job", "jobID", latestProvisionJob.JobID, "phase", phase)
 				return true, nil, nil
 			}
 			// Deprovision job already exists - not ready (already in progress)
-			log.Info("EDA provision complete, deprovision job already exists", "jobID", latestProvisionJob.JobID, "deprovisionJobID", latestDeprovisionJob.JobID, "phase", instance.Status.Phase)
+			log.Info("EDA provision complete, deprovision job already exists", "jobID", latestProvisionJob.JobID, "deprovisionJobID", latestDeprovisionJob.JobID, "phase", phase)
 			return false, nil, nil
 		}
 
-		// Starting phase - still provisioning, not ready
-		log.Info("EDA provision still in progress", "jobID", latestProvisionJob.JobID, "phase", instance.Status.Phase)
+		// Starting/Progressing phase - still provisioning, not ready
+		log.Info("EDA provision still in progress", "jobID", latestProvisionJob.JobID, "phase", phase)
 		return false, nil, nil
 	}
 
 	// AAP job - query status from AAP API
-	status, err := p.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
+	status, err := p.GetProvisionStatus(ctx, resource, latestProvisionJob.JobID)
 	if err != nil {
 		var notFoundErr *aap.NotFoundError
 		if errors.As(err, &notFoundErr) {

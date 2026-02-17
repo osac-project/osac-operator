@@ -74,16 +74,32 @@ const (
 	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
+	// ClusterOrder EDA webhook environment variables
+	envClusterOrderProvisionWebhook   = "OSAC_CLUSTER_ORDER_PROVISION_WEBHOOK"
+	envClusterOrderDeprovisionWebhook = "OSAC_CLUSTER_ORDER_DEPROVISION_WEBHOOK"
+
+	// HostPool EDA webhook environment variables
+	envHostPoolProvisionWebhook   = "OSAC_HOSTPOOL_PROVISION_WEBHOOK"
+	envHostPoolDeprovisionWebhook = "OSAC_HOSTPOOL_DEPROVISION_WEBHOOK"
+
 	// Provider selection
 	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
 
-	// AAP configuration
+	// AAP configuration (shared or per-resource-type)
 	envAAPURL                 = "OSAC_AAP_URL"
 	envAAPToken               = "OSAC_AAP_TOKEN"
 	envAAPProvisionTemplate   = "OSAC_AAP_PROVISION_TEMPLATE"
 	envAAPDeprovisionTemplate = "OSAC_AAP_DEPROVISION_TEMPLATE"
 	envAAPStatusPollInterval  = "OSAC_AAP_STATUS_POLL_INTERVAL"
 	envAAPInsecureSkipVerify  = "OSAC_AAP_INSECURE_SKIP_VERIFY"
+
+	// ClusterOrder AAP templates (overrides for resource-specific templates)
+	envClusterOrderAAPProvisionTemplate   = "OSAC_CLUSTER_ORDER_AAP_PROVISION_TEMPLATE"
+	envClusterOrderAAPDeprovisionTemplate = "OSAC_CLUSTER_ORDER_AAP_DEPROVISION_TEMPLATE"
+
+	// HostPool AAP templates (overrides for resource-specific templates)
+	envHostPoolAAPProvisionTemplate   = "OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE"
+	envHostPoolAAPDeprovisionTemplate = "OSAC_HOSTPOOL_AAP_DEPROVISION_TEMPLATE"
 
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
@@ -319,10 +335,39 @@ func createProvider(
 	}
 }
 
+// createProviderFromEnv creates a provisioning provider by reading shared env vars
+// and optional per-resource-type template overrides.
+func createProviderFromEnv(
+	provisionWebhookEnv, deprovisionWebhookEnv string,
+	templateOverrideProvisionEnv, templateOverrideDeprovisionEnv string,
+	minimumRequestInterval time.Duration,
+) (provisioning.ProvisioningProvider, time.Duration, error) {
+	providerTypeStr := os.Getenv(envProvisioningProvider)
+	providerType := provisioning.ProviderType(providerTypeStr)
+	if providerType == "" {
+		return nil, 0, nil
+	}
+	provisionWebhook := os.Getenv(provisionWebhookEnv)
+	deprovisionWebhook := os.Getenv(deprovisionWebhookEnv)
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+	provisionTemplate := helpers.GetEnvWithDefault(templateOverrideProvisionEnv, os.Getenv(envAAPProvisionTemplate))
+	deprovisionTemplate := helpers.GetEnvWithDefault(templateOverrideDeprovisionEnv, os.Getenv(envAAPDeprovisionTemplate))
+	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
+	return createProvider(
+		providerType,
+		provisionWebhook, deprovisionWebhook,
+		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+		aapInsecureSkipVerify,
+		minimumRequestInterval,
+	)
+}
+
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
 	mgr mcmanager.Manager, grpcConn *grpc.ClientConn, minimumRequestInterval time.Duration,
+	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	if grpcConn != nil {
@@ -335,6 +380,14 @@ func setupClusterControllers(
 			return fmt.Errorf("feedback controller: %w", err)
 		}
 	}
+	provider, statusPollInterval, err := createProviderFromEnv(
+		envClusterOrderProvisionWebhook, envClusterOrderDeprovisionWebhook,
+		envClusterOrderAAPProvisionTemplate, envClusterOrderAAPDeprovisionTemplate,
+		minimumRequestInterval,
+	)
+	if err != nil {
+		return fmt.Errorf("create clusterorder provisioning provider: %w", err)
+	}
 	if err := (controller.NewClusterOrderReconciler(
 		localMgr.GetClient(),
 		localMgr.GetScheme(),
@@ -342,6 +395,9 @@ func setupClusterControllers(
 		os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK"),
 		os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		provider,
+		statusPollInterval,
+		maxJobHistory,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("cluster order controller: %w", err)
 	}
@@ -352,6 +408,7 @@ func setupClusterControllers(
 // the HostPool Feedback controller.
 func setupHostPoolControllers(
 	mgr mcmanager.Manager, grpcConn *grpc.ClientConn, minimumRequestInterval time.Duration,
+	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	if grpcConn != nil {
@@ -364,6 +421,14 @@ func setupHostPoolControllers(
 			return fmt.Errorf("hostpool feedback controller: %w", err)
 		}
 	}
+	provider, statusPollInterval, err := createProviderFromEnv(
+		envHostPoolProvisionWebhook, envHostPoolDeprovisionWebhook,
+		envHostPoolAAPProvisionTemplate, envHostPoolAAPDeprovisionTemplate,
+		minimumRequestInterval,
+	)
+	if err != nil {
+		return fmt.Errorf("create hostpool provisioning provider: %w", err)
+	}
 	if err := (controller.NewHostPoolReconciler(
 		localMgr.GetClient(),
 		localMgr.GetScheme(),
@@ -371,6 +436,9 @@ func setupHostPoolControllers(
 		os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK"),
 		os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		provider,
+		statusPollInterval,
+		maxJobHistory,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("hostpool controller: %w", err)
 	}
@@ -733,13 +801,13 @@ func main() {
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if ctrlFlags.Cluster {
-		if err := setupClusterControllers(mgr, grpcConn, minimumRequestInterval); err != nil {
+		if err := setupClusterControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup cluster controllers")
 			os.Exit(1)
 		}
 	}
 	if ctrlFlags.HostPool {
-		if err := setupHostPoolControllers(mgr, grpcConn, minimumRequestInterval); err != nil {
+		if err := setupHostPoolControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup hostpool controllers")
 			os.Exit(1)
 		}
