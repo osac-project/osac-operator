@@ -36,7 +36,10 @@ var _ = Describe("EDAProvider", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		webhookClient = &mockWebhookClient{}
-		provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
+		provider = provisioning.NewEDAProvider(
+			webhookClient,
+			"http://create-url", "http://delete-url",
+		)
 	})
 
 	Describe("TriggerProvision", func() {

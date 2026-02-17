@@ -44,14 +44,18 @@ type WebhookClient interface {
 
 // EDAProvider implements ProvisioningProvider using EDA webhooks.
 // It maintains backward compatibility with the existing webhook-based approach.
+// Each controller creates its own EDA provider with its specific webhook URLs.
 type EDAProvider struct {
 	webhookClient WebhookClient
 	createURL     string
 	deleteURL     string
 }
 
-// NewEDAProvider creates a new EDA provider.
-func NewEDAProvider(webhookClient WebhookClient, createURL, deleteURL string) *EDAProvider {
+// NewEDAProvider creates a new EDA provider with provision/deprovision webhook URLs.
+func NewEDAProvider(
+	webhookClient WebhookClient,
+	createURL, deleteURL string,
+) *EDAProvider {
 	return &EDAProvider{
 		webhookClient: webhookClient,
 		createURL:     createURL,
@@ -98,8 +102,9 @@ func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
 // Generates a unique job ID by scanning existing jobs.
 // Returns RateLimitError if the request is rate-limited.
 func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
-	if p.createURL == "" {
-		return nil, fmt.Errorf("create webhook URL not configured")
+	createURL := p.createURL
+	if createURL == "" {
+		return nil, fmt.Errorf("create webhook URL not configured for resource type %T", resource)
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
@@ -107,7 +112,7 @@ func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Obje
 		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
-	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.createURL, webhookResource)
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, createURL, webhookResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to trigger create webhook: %w", err)
 	}
@@ -159,8 +164,9 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	}
 
 	// Trigger webhook
-	if p.deleteURL == "" {
-		return nil, fmt.Errorf("delete webhook URL not configured")
+	deleteURL := p.deleteURL
+	if deleteURL == "" {
+		return nil, fmt.Errorf("delete webhook URL not configured for resource type %T", resource)
 	}
 
 	webhookResource, ok := resource.(webhook.Resource)
@@ -168,7 +174,7 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		return nil, fmt.Errorf("resource does not implement webhook.Resource interface")
 	}
 
-	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, p.deleteURL, webhookResource)
+	remainingTime, err := p.webhookClient.TriggerWebhook(ctx, deleteURL, webhookResource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to trigger delete webhook: %w", err)
 	}

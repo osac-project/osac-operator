@@ -266,21 +266,15 @@ func createEDAProvider(
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
 	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
-	config := provisioning.ProviderConfig{
-		ProviderType:       provisioning.ProviderTypeEDA,
-		WebhookClient:      webhookClient,
-		ProvisionWebhook:   provisionWebhook,
-		DeprovisionWebhook: deprovisionWebhook,
-	}
 
-	provider, err := provisioning.NewProvider(config)
-	if err != nil {
-		return nil, 0, err
-	}
+	provider := provisioning.NewEDAProvider(
+		webhookClient,
+		provisionWebhook, deprovisionWebhook,
+	)
 
-	setupLog.Info("using EDA webhook provider for ComputeInstance",
-		"provisionURL", provisionWebhook,
-		"deprovisionURL", deprovisionWebhook)
+	setupLog.Info("using EDA webhook provider",
+		"provisionWebhook", provisionWebhook,
+		"deprovisionWebhook", deprovisionWebhook)
 
 	return provider, provisioning.DefaultStatusPollInterval, nil
 }
