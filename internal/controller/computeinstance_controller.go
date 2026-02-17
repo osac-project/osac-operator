@@ -31,13 +31,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac/osac-operator/api/v1alpha1"
 	"github.com/osac/osac-operator/internal/provisioning"
@@ -49,6 +51,11 @@ const (
 	DefaultMaxJobHistory = 10
 )
 
+// clusterLister is satisfied by providers (e.g. kubeconfig) that list discovered cluster names.
+type clusterLister interface {
+	ListClusters() []string
+}
+
 // ComputeInstanceReconciler reconciles a ComputeInstance object
 type ComputeInstanceReconciler struct {
 	client.Client
@@ -59,11 +66,13 @@ type ComputeInstanceReconciler struct {
 	StatusPollInterval time.Duration
 	// MaxJobHistory defines how many jobs to keep in status.jobs array
 	MaxJobHistory int
+	// Manager is set when watching VirtualMachine on a remote cluster (e.g. kubeconfig provider).
+	// When nil, VM watch and findKubeVirtVMs use the local client.
+	Manager mcmanager.Manager
 }
 
 func NewComputeInstanceReconciler(
-	client client.Client,
-	scheme *runtime.Scheme,
+	mgr mcmanager.Manager,
 	computeInstanceNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
@@ -83,8 +92,8 @@ func NewComputeInstanceReconciler(
 	}
 
 	return &ComputeInstanceReconciler{
-		Client:                   client,
-		Scheme:                   scheme,
+		Client:                   mgr.GetLocalManager().GetClient(),
+		Scheme:                   mgr.GetLocalManager().GetScheme(),
 		ComputeInstanceNamespace: computeInstanceNamespace,
 		ProvisioningProvider:     provisioningProvider,
 		StatusPollInterval:       statusPollInterval,
@@ -134,7 +143,7 @@ func updateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	instance := &v1alpha1.ComputeInstance{}
@@ -155,9 +164,9 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		res, err = r.handleUpdate(ctx, req.Request, instance)
 	} else {
-		res, err = r.handleDelete(ctx, req, instance)
+		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
@@ -196,7 +205,7 @@ func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -209,21 +218,36 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.ComputeInstance{}, builder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace))).
+	// Watch VMs on remote cluster if provider is set
+	watchVMsOnRemoteCluster := r.Manager.GetProvider() != nil
+
+	forOpts := []mcbuilder.ForOption{
+		mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+		mcbuilder.WithEngageWithLocalCluster(true),
+		mcbuilder.WithEngageWithProviderClusters(false),
+	}
+	vmWatchOpts := []mcbuilder.WatchesOption{
+		mcbuilder.WithPredicates(labelPredicate),
+		mcbuilder.WithEngageWithLocalCluster(!watchVMsOnRemoteCluster),
+		mcbuilder.WithEngageWithProviderClusters(watchVMsOnRemoteCluster),
+	}
+	tenantWatchOpts := []mcbuilder.WatchesOption{
+		mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+		mcbuilder.WithEngageWithLocalCluster(true),
+		mcbuilder.WithEngageWithProviderClusters(false),
+	}
+
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.ComputeInstance{}, forOpts...).
 		Watches(
 			&kubevirtv1.VirtualMachine{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToComputeInstance),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToComputeInstance),
+			vmWatchOpts...,
 		).
 		Watches(
 			&v1alpha1.Tenant{},
-			handler.EnqueueRequestForOwner(
-				mgr.GetScheme(),
-				mgr.GetRESTMapper(),
-				&v1alpha1.ComputeInstance{},
-			),
-			builder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+			mchandler.EnqueueRequestForOwner(&v1alpha1.ComputeInstance{}),
+			tenantWatchOpts...,
 		).
 		Complete(r)
 }
@@ -512,7 +536,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 }
 
-func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
@@ -543,7 +567,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAccepted, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
-	kv, err := r.findKubeVirtVMs(ctx, instance, tenant.Status.Namespace)
+	kv, err := r.findKubeVirtVMs(ctx, tenant, instance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -555,7 +579,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	}
 
 	// Handle restart request
-	if result, err := r.handleRestartRequest(ctx, instance); err != nil || result.RequeueAfter > 0 {
+	if result, err := r.handleRestartRequest(ctx, tenant, instance); err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
 
@@ -591,7 +615,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	return r.handleProvisioning(ctx, instance)
 }
 
-func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting compute instance")
 
@@ -665,11 +689,34 @@ func (r *ComputeInstanceReconciler) initializeStatusCondition(instance *v1alpha1
 	instance.SetStatusCondition(conditionType, status, "", reason)
 }
 
-func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, instance *v1alpha1.ComputeInstance, nsName string) (*kubevirtv1.VirtualMachine, error) {
+// getVMClusterName returns the name of the cluster used for VirtualMachine operations.
+// Returns "local" when no provider or no clusters; otherwise the first cluster from the provider.
+func (r *ComputeInstanceReconciler) getVMClusterName() string {
+	if r.Manager == nil {
+		return localClusterName
+	}
+	provider := r.Manager.GetProvider()
+	if provider == nil {
+		return localClusterName
+	}
+	lister, ok := provider.(clusterLister)
+	if !ok || len(lister.ListClusters()) == 0 {
+		return localClusterName
+	}
+	return lister.ListClusters()[0]
+}
+
+func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, tenant *v1alpha1.Tenant, instance *v1alpha1.ComputeInstance) (*kubevirtv1.VirtualMachine, error) {
 	log := ctrllog.FromContext(ctx)
 
+	cli, err := getClusterClient(ctx, r.Manager, tenant.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "failed to get VM client")
+		return nil, err
+	}
+
 	var kubeVirtVMList kubevirtv1.VirtualMachineList
-	if err := r.List(ctx, &kubeVirtVMList, client.InNamespace(nsName), labelSelectorFromComputeInstanceInstance(instance)); err != nil {
+	if err := cli.List(ctx, &kubeVirtVMList, client.InNamespace(tenant.Status.Namespace), labelSelectorFromComputeInstanceInstance(instance)); err != nil {
 		log.Error(err, "failed to list KubeVirt VMs")
 		return nil, err
 	}

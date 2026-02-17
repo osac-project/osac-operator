@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
 	"github.com/osac/osac-operator/internal/provisioning"
@@ -83,9 +84,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Scheme:               k8sClient.Scheme(),
 					ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
 					StatusPollInterval:   100 * time.Millisecond,
+					Manager:              nil, // single-cluster test
 				}
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
+				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+					Request: reconcile.Request{NamespacedName: typeNamespacedName},
 				})
 				return err
 			}).Should(Succeed())
@@ -97,10 +99,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
 				StatusPollInterval:   100 * time.Millisecond,
+				Manager:              nil, // single-cluster test
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: typeNamespacedName},
 			})
 			Expect(err).NotTo(HaveOccurred())
 
@@ -143,8 +146,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		BeforeEach(func() {
 			reconciler = &ComputeInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Manager: nil, // single-cluster test
 			}
 		})
 
@@ -300,8 +304,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		BeforeEach(func() {
 			reconciler = &ComputeInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Manager: nil, // single-cluster test
 			}
 		})
 

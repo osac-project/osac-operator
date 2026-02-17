@@ -28,4 +28,7 @@ const (
 
 	// cloudkitPrefix is the prefix used to identify cloudkit resources
 	cloudkitPrefix string = "cloudkit.openshift.io"
+
+	// localClusterName is the name of the local cluster
+	localClusterName string = "local"
 )
