@@ -29,10 +29,6 @@ import (
 	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
 	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
-	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
->>>>>>> 32ca27e (Remove syncRunStrategy() controller logic per PR review)
 )
 
 // ComputeInstanceFeedbackReconciler sends updates to the fulfillment service.

@@ -56,7 +56,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Name:      resourceName,
 						Namespace: namespaceName,
 						Annotations: map[string]string{
-							cloudkitTenantAnnotation: tenantName,
+							osacTenantAnnotation: tenantName,
 						},
 					},
 					Spec: newTestComputeInstanceSpec("test_template"),
@@ -117,7 +117,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(tenant.Spec.Name).To(Equal(tenantName))
 
 			By("Verifying tenant has correct labels")
-			Expect(tenant.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", cloudkitAppName))
+			Expect(tenant.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", osacAppName))
 
 			By("Verifying tenant has owner reference to ComputeInstance")
 			Expect(tenant.OwnerReferences).NotTo(BeEmpty())
@@ -128,7 +128,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vm.Finalizers).To(ContainElement(cloudkitComputeInstanceFinalizer))
+			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
 
 			By("Verifying tenant reference is set on ComputeInstance status")
 			Expect(vm.Status.TenantReference).NotTo(BeNil())
@@ -302,7 +302,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-current",
 					Namespace: "default",
 					Annotations: map[string]string{
-						cloudkitAAPReconciledConfigVersionAnnotation: expectedVersion,
+						osacAAPReconciledConfigVersionAnnotation: expectedVersion,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("template-1"),
@@ -354,7 +354,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-update",
 					Namespace: "default",
 					Annotations: map[string]string{
-						cloudkitAAPReconciledConfigVersionAnnotation: "version-1",
+						osacAAPReconciledConfigVersionAnnotation: "version-1",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("template-1"),
@@ -366,7 +366,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(vm.Status.ReconciledConfigVersion).To(Equal("version-1"))
 
 			// Update annotation
-			vm.Annotations[cloudkitAAPReconciledConfigVersionAnnotation] = "version-2"
+			vm.Annotations[osacAAPReconciledConfigVersionAnnotation] = "version-2"
 
 			// Second call
 			err = reconciler.handleReconciledConfigVersion(ctx, vm)

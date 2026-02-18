@@ -7,28 +7,28 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("ensureBackwardCompatibility", func() {
-	var instance *cloudkitv1alpha1.ComputeInstance
+	var instance *osacv1alpha1.ComputeInstance
 
 	BeforeEach(func() {
-		instance = &cloudkitv1alpha1.ComputeInstance{
+		instance = &osacv1alpha1.ComputeInstance{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-instance",
 				Namespace: "test-namespace",
 			},
-			Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+			Spec: osacv1alpha1.ComputeInstanceSpec{
 				TemplateID: "test-template",
-				Image: cloudkitv1alpha1.ImageSpec{
-					SourceType: cloudkitv1alpha1.ImageSourceTypeRegistry,
+				Image: osacv1alpha1.ImageSpec{
+					SourceType: osacv1alpha1.ImageSourceTypeRegistry,
 					SourceRef:  "quay.io/fedora/fedora-coreos:stable",
 				},
 				Cores:       4,
 				MemoryGiB:   8,
-				BootDisk:    cloudkitv1alpha1.DiskSpec{SizeGiB: 30},
-				RunStrategy: cloudkitv1alpha1.RunStrategyAlways,
+				BootDisk:    osacv1alpha1.DiskSpec{SizeGiB: 30},
+				RunStrategy: osacv1alpha1.RunStrategyAlways,
 			},
 		}
 	})
