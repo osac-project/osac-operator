@@ -1,7 +1,7 @@
 # This rule is not used by the project osac-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the cloudkit.openshift.io.
+# Grants permissions to create, update, and delete resources within the osac.openshift.io.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -14,7 +14,7 @@ metadata:
   name: tenant-editor-role
 rules:
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - tenants
   verbs:
@@ -26,7 +26,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - tenants/status
   verbs:

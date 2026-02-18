@@ -1,7 +1,7 @@
 # This rule is not used by the project osac-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to view resources within the cloudkit.openshift.io.
+# Grants permissions to view resources within the osac.openshift.io.
 # This role is intended for users who need to monitor and view these resources
 # but should not be able to modify them.
 
@@ -14,7 +14,7 @@ metadata:
   name: hostpool-viewer-role
 rules:
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - hostpools
   verbs:
@@ -22,7 +22,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - cloudkit.openshift.io
+  - osac.openshift.io
   resources:
   - hostpools/status
   verbs:

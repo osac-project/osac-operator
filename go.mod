@@ -1,4 +1,4 @@
-module github.com/osac/osac-operator
+module github.com/osac-project/osac-operator
 
 go 1.25
 

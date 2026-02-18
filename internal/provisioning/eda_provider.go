@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/webhook"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/webhook"
 )
 
 const (
@@ -134,7 +134,7 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	log := ctrllog.FromContext(ctx)
 
 	// EDA only deprovisions if AAP finalizer exists (set by playbook during provision)
-	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
+	if !controllerutil.ContainsFinalizer(resource, "osac.openshift.io/computeinstance-aap") {
 		log.Info("no AAP finalizer, skipping EDA deprovisioning")
 		return &DeprovisionResult{
 			Action:                 DeprovisionSkipped,
@@ -181,7 +181,7 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 // Returns Succeeded when finalizer is removed, Running while it still exists.
 func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	// Check if AAP finalizer has been removed (signals playbook completion)
-	if !controllerutil.ContainsFinalizer(resource, "cloudkit.openshift.io/computeinstance-aap") {
+	if !controllerutil.ContainsFinalizer(resource, "osac.openshift.io/computeinstance-aap") {
 		return ProvisionStatus{
 			JobID:   jobID,
 			State:   v1alpha1.JobStateSucceeded,

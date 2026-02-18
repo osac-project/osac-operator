@@ -39,8 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 
@@ -126,9 +126,9 @@ func updateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
 	return true
 }
 
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=computeinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=computeinstances,verbs=get;list;watch
 
@@ -143,7 +143,7 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
+	val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]
 	if exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring ComputeInstance due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
@@ -200,7 +200,7 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
-				Key:      cloudkitComputeInstanceNameLabel,
+				Key:      osacComputeInstanceNameLabel,
 				Operator: metav1.LabelSelectorOpExists,
 			},
 		},
@@ -233,7 +233,7 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *ComputeInstanceReconciler) mapObjectToComputeInstance(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	computeInstanceName, exists := obj.GetLabels()[cloudkitComputeInstanceNameLabel]
+	computeInstanceName, exists := obj.GetLabels()[osacComputeInstanceNameLabel]
 	if !exists {
 		return nil
 	}
@@ -278,7 +278,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	log := ctrllog.FromContext(ctx)
 
 	// Check for ManagementStateManual annotation
-	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
+	val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]
 	if exists && val == ManagementStateManual {
 		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
@@ -381,7 +381,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	log := ctrllog.FromContext(ctx)
 
 	// Check for ManagementStateManual annotation
-	val, exists := instance.Annotations[cloudkitComputeInstanceManagementStateAnnotation]
+	val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]
 	if exists && val == ManagementStateManual {
 		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
 		// For EDA: AAP playbook handles finalizer removal
@@ -518,7 +518,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	r.initializeStatusConditions(instance)
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 
-	if controllerutil.AddFinalizer(instance, cloudkitComputeInstanceFinalizer) {
+	if controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -598,7 +598,7 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Req
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
 
 	// Base finalizer has already been removed, cleanup complete
-	if !controllerutil.ContainsFinalizer(instance, cloudkitComputeInstanceFinalizer) {
+	if !controllerutil.ContainsFinalizer(instance, osacComputeInstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
@@ -615,7 +615,7 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Req
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer
-	if controllerutil.RemoveFinalizer(instance, cloudkitComputeInstanceFinalizer) {
+	if controllerutil.RemoveFinalizer(instance, osacComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -740,13 +740,13 @@ func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Conte
 	return nil
 }
 
-// handleReconciledConfigVersion copies the annotation cloudkitAAPReconciledConfigVersionAnnotation to status.ReconciledConfigVersion.
+// handleReconciledConfigVersion copies the annotation osacAAPReconciledConfigVersionAnnotation to status.ReconciledConfigVersion.
 // If the annotation doesn't exist, it clears status.ReconciledConfigVersion.
 func (r *ComputeInstanceReconciler) handleReconciledConfigVersion(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
 	log := ctrllog.FromContext(ctx)
 
 	// Copy the reconciled config version from annotation if it exists
-	if version, exists := instance.Annotations[cloudkitAAPReconciledConfigVersionAnnotation]; exists {
+	if version, exists := instance.Annotations[osacAAPReconciledConfigVersionAnnotation]; exists {
 		instance.Status.ReconciledConfigVersion = version
 		log.V(1).Info("copied reconciled config version from annotation", "version", version)
 	} else {

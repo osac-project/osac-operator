@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/osac/osac-operator/internal/aap"
+	"github.com/osac-project/osac-operator/internal/aap"
 )
 
 // ProviderConfig contains configuration for creating a provisioning provider.

@@ -19,19 +19,19 @@ package controller
 import (
 	"fmt"
 
-	v1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
+	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 const (
 	defaultHostPoolName      string = "hostpool"
-	defaultHostPoolNamespace string = "cloudkit-hostpool-orders"
+	defaultHostPoolNamespace string = "osac-hostpool-orders"
 )
 
 var (
-	cloudkitHostPoolNameLabel                 string = fmt.Sprintf("%s/hostpool", cloudkitPrefix)
-	cloudkitHostPoolIDLabel                   string = fmt.Sprintf("%s/hostpool-uuid", cloudkitPrefix)
-	hostPoolFinalizer                         string = fmt.Sprintf("%s/finalizer", cloudkitPrefix)
-	cloudkitHostPoolManagementStateAnnotation string = fmt.Sprintf("%s/management-state", cloudkitPrefix)
+	osacHostPoolNameLabel                 string = fmt.Sprintf("%s/hostpool", osacPrefix)
+	osacHostPoolIDLabel                   string = fmt.Sprintf("%s/hostpool-uuid", osacPrefix)
+	hostPoolFinalizer                     string = fmt.Sprintf("%s/finalizer", osacPrefix)
+	osacHostPoolManagementStateAnnotation string = fmt.Sprintf("%s/management-state", osacPrefix)
 )
 
 func generateHostPoolNamespaceName(instance *v1alpha1.HostPool) string {

@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 // NewHostPoolComponentFn is the type of a function that creates a required component
@@ -84,9 +84,9 @@ func NewHostPoolReconciler(
 	}
 }
 
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=hostpools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=hostpools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=hostpools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=hostpools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=hostpools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=hostpools/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -100,7 +100,7 @@ func (r *HostPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	val, exists := instance.Annotations[cloudkitHostPoolManagementStateAnnotation]
+	val, exists := instance.Annotations[osacHostPoolManagementStateAnnotation]
 	if exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring HostPool due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
@@ -143,7 +143,7 @@ func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
-				Key:      cloudkitHostPoolNameLabel,
+				Key:      osacHostPoolNameLabel,
 				Operator: metav1.LabelSelectorOpExists,
 			},
 		},
@@ -167,7 +167,7 @@ func (r *HostPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *HostPoolReconciler) mapObjectToHostPool(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	hostPoolName, exists := obj.GetLabels()[cloudkitHostPoolNameLabel]
+	hostPoolName, exists := obj.GetLabels()[osacHostPoolNameLabel]
 	if !exists {
 		return nil
 	}
@@ -295,7 +295,7 @@ func (r *HostPoolReconciler) handleDelete(ctx context.Context, req ctrl.Request,
 	if ns != nil {
 		// Call webhook to delete host pool resources
 		if url := r.DeleteHostPoolWebhook; url != "" {
-			val, exists := instance.Annotations[cloudkitHostPoolManagementStateAnnotation]
+			val, exists := instance.Annotations[osacHostPoolManagementStateAnnotation]
 			if exists && val == ManagementStateManual {
 				log.Info("not triggering delete webhook due to management-state annotation", "url", url, "management-state", val)
 			} else {

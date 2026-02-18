@@ -17,15 +17,15 @@ managed:
   enabled: true
   override:
   - file_option: go_package_prefix
-    value: github.com/osac/osac-operator/internal/api
+    value: github.com/osac-project/osac-operator/internal/api
   disable:
   - module: buf.build/googleapis/googleapis
   - module: buf.build/grpc-ecosystem/grpc-gateway
 
 inputs:
 
-- module: buf.build/innabox/fulfillment-api:v0.0.29
-- module: buf.build/innabox/private-api:v0.0.38
+- module: buf.build/osac/fulfillment-api:v0.0.29
+- module: buf.build/osac/private-api:v0.0.38
 
 plugins:
 

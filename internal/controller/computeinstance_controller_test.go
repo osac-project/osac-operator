@@ -27,8 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/provisioning"
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
 var _ = Describe("ComputeInstance Controller", func() {
@@ -43,21 +43,21 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Name:      resourceName,
 			Namespace: namespaceName,
 		}
-		computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+		computeInstance := &osacv1alpha1.ComputeInstance{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind ComputeInstance")
 			err := k8sClient.Get(ctx, typeNamespacedName, computeInstance)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &cloudkitv1alpha1.ComputeInstance{
+				resource := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: namespaceName,
 						Annotations: map[string]string{
-							cloudkitTenantAnnotation: tenantName,
+							osacTenantAnnotation: tenantName,
 						},
 					},
-					Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+					Spec: osacv1alpha1.ComputeInstanceSpec{
 						TemplateID: "test_template",
 					},
 				}
@@ -106,7 +106,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			By("Checking that a tenant was created")
 			expectedTenantName := getTenantObjectName(tenantName)
-			tenant := &cloudkitv1alpha1.Tenant{}
+			tenant := &osacv1alpha1.Tenant{}
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      expectedTenantName,
 				Namespace: namespaceName,
@@ -117,7 +117,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(tenant.Spec.Name).To(Equal(tenantName))
 
 			By("Verifying tenant has correct labels")
-			Expect(tenant.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", cloudkitAppName))
+			Expect(tenant.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", osacAppName))
 
 			By("Verifying tenant has owner reference to ComputeInstance")
 			Expect(tenant.OwnerReferences).NotTo(BeEmpty())
@@ -125,10 +125,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			// verify that finalizer is set
 			By("Verifying the finalizer is set on the ComputeInstance resource")
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vm.Finalizers).To(ContainElement(cloudkitComputeInstanceFinalizer))
+			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
 
 			By("Verifying tenant reference is set on ComputeInstance status")
 			Expect(vm.Status.TenantReference).NotTo(BeNil())
@@ -149,12 +149,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should compute and store a version of the spec", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-hash",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value"}`,
 				},
@@ -166,12 +166,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should be idempotent - same spec produces same version", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-idempotent",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value"}`,
 				},
@@ -197,23 +197,23 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce different versions for different specs", func() {
-			vm1 := &cloudkitv1alpha1.ComputeInstance{
+			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-1",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value1"}`,
 				},
 			}
 
-			vm2 := &cloudkitv1alpha1.ComputeInstance{
+			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-2",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value2"}`,
 				},
@@ -229,22 +229,22 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce different versions for different template IDs", func() {
-			vm1 := &cloudkitv1alpha1.ComputeInstance{
+			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-template-1",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-1",
 				},
 			}
 
-			vm2 := &cloudkitv1alpha1.ComputeInstance{
+			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-template-2",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-2",
 				},
 			}
@@ -259,23 +259,23 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce same version regardless of order of calls", func() {
-			vm1 := &cloudkitv1alpha1.ComputeInstance{
+			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-1",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value"}`,
 				},
 			}
 
-			vm2 := &cloudkitv1alpha1.ComputeInstance{
+			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-2",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID:         "template-1",
 					TemplateParameters: `{"key": "value"}`,
 				},
@@ -307,15 +307,15 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		It("should copy annotation to status when annotation exists", func() {
 			expectedVersion := "test-version-value-12345"
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-current",
 					Namespace: "default",
 					Annotations: map[string]string{
-						cloudkitAAPReconciledConfigVersionAnnotation: expectedVersion,
+						osacAAPReconciledConfigVersionAnnotation: expectedVersion,
 					},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-1",
 				},
 			}
@@ -326,16 +326,16 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should clear status when annotation does not exist", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-ci-no-annotation",
 					Namespace:   "default",
 					Annotations: map[string]string{},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-1",
 				},
-				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
 			}
@@ -346,15 +346,15 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should clear status when annotations map is nil", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-nil-annotations",
 					Namespace: "default",
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-1",
 				},
-				Status: cloudkitv1alpha1.ComputeInstanceStatus{
+				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
 			}
@@ -365,15 +365,15 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should update status when annotation value changes", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-update",
 					Namespace: "default",
 					Annotations: map[string]string{
-						cloudkitAAPReconciledConfigVersionAnnotation: "version-1",
+						osacAAPReconciledConfigVersionAnnotation: "version-1",
 					},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "template-1",
 				},
 			}
@@ -384,7 +384,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(vm.Status.ReconciledConfigVersion).To(Equal("version-1"))
 
 			// Update annotation
-			vm.Annotations[cloudkitAAPReconciledConfigVersionAnnotation] = "version-2"
+			vm.Annotations[osacAAPReconciledConfigVersionAnnotation] = "version-2"
 
 			// Second call
 			err = reconciler.handleReconciledConfigVersion(ctx, vm)
@@ -396,24 +396,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 	Context("Helper functions", func() {
 		Describe("findJobByID", func() {
 			It("should return nil when jobs slice is empty", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{}
+				jobs := []osacv1alpha1.JobStatus{}
 				result := findJobByID(jobs, "job-123")
 				Expect(result).To(BeNil())
 			})
 
 			It("should return nil when job ID is not found", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					},
 					{
 						JobID:     "job-2",
-						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Type:      osacv1alpha1.JobTypeDeprovision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStateRunning,
+						State:     osacv1alpha1.JobStateRunning,
 					},
 				}
 				result := findJobByID(jobs, "job-999")
@@ -421,26 +421,26 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should return pointer to job when found", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 						Message:   "First job",
 					},
 					{
 						JobID:     "job-2",
-						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Type:      osacv1alpha1.JobTypeDeprovision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStateRunning,
+						State:     osacv1alpha1.JobStateRunning,
 						Message:   "Second job",
 					},
 				}
 				result := findJobByID(jobs, "job-2")
 				Expect(result).NotTo(BeNil())
 				Expect(result.JobID).To(Equal("job-2"))
-				Expect(result.State).To(Equal(cloudkitv1alpha1.JobStateRunning))
+				Expect(result.State).To(Equal(osacv1alpha1.JobStateRunning))
 				Expect(result.Message).To(Equal("Second job"))
 			})
 		})
@@ -455,12 +455,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should append job to empty slice", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{}
-				newJob := cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{}
+				newJob := osacv1alpha1.JobStatus{
 					JobID:     "job-1",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     cloudkitv1alpha1.JobStatePending,
+					State:     osacv1alpha1.JobStatePending,
 				}
 				result := reconciler.appendJob(jobs, newJob)
 				Expect(result).To(HaveLen(1))
@@ -468,19 +468,19 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should append job when under max history", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					},
 				}
-				newJob := cloudkitv1alpha1.JobStatus{
+				newJob := osacv1alpha1.JobStatus{
 					JobID:     "job-2",
-					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Type:      osacv1alpha1.JobTypeDeprovision,
 					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     cloudkitv1alpha1.JobStateRunning,
+					State:     osacv1alpha1.JobStateRunning,
 				}
 				result := reconciler.appendJob(jobs, newJob)
 				Expect(result).To(HaveLen(2))
@@ -490,31 +490,31 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			It("should trim old jobs when exceeding max history", func() {
 				baseTime := time.Now().UTC()
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					},
 					{
 						JobID:     "job-2",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     cloudkitv1alpha1.JobStateRunning,
+						State:     osacv1alpha1.JobStateRunning,
 					},
 					{
 						JobID:     "job-3",
-						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Type:      osacv1alpha1.JobTypeDeprovision,
 						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     cloudkitv1alpha1.JobStateSucceeded,
+						State:     osacv1alpha1.JobStateSucceeded,
 					},
 				}
-				newJob := cloudkitv1alpha1.JobStatus{
+				newJob := osacv1alpha1.JobStatus{
 					JobID:     "job-4",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     cloudkitv1alpha1.JobStatePending,
+					State:     osacv1alpha1.JobStatePending,
 				}
 				// MaxJobHistory is 3, so adding 4th job should remove job-1
 				result := reconciler.appendJob(jobs, newJob)
@@ -526,42 +526,42 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			It("should keep trimming as jobs are added", func() {
 				baseTime := time.Now().UTC()
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					},
 					{
 						JobID:     "job-2",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     cloudkitv1alpha1.JobStateRunning,
+						State:     osacv1alpha1.JobStateRunning,
 					},
 					{
 						JobID:     "job-3",
-						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Type:      osacv1alpha1.JobTypeDeprovision,
 						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     cloudkitv1alpha1.JobStateSucceeded,
+						State:     osacv1alpha1.JobStateSucceeded,
 					},
 				}
 				// Add job-4 (removes job-1)
-				jobs = reconciler.appendJob(jobs, cloudkitv1alpha1.JobStatus{
+				jobs = reconciler.appendJob(jobs, osacv1alpha1.JobStatus{
 					JobID:     "job-4",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     cloudkitv1alpha1.JobStatePending,
+					State:     osacv1alpha1.JobStatePending,
 				})
 				Expect(jobs).To(HaveLen(3))
 				Expect(jobs[0].JobID).To(Equal("job-2"))
 
 				// Add job-5 (removes job-2)
-				jobs = reconciler.appendJob(jobs, cloudkitv1alpha1.JobStatus{
+				jobs = reconciler.appendJob(jobs, osacv1alpha1.JobStatus{
 					JobID:     "job-5",
-					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Type:      osacv1alpha1.JobTypeDeprovision,
 					Timestamp: metav1.NewTime(baseTime.Add(4 * time.Second)),
-					State:     cloudkitv1alpha1.JobStateRunning,
+					State:     osacv1alpha1.JobStateRunning,
 				})
 				Expect(jobs).To(HaveLen(3))
 				Expect(jobs[0].JobID).To(Equal("job-3"))
@@ -573,15 +573,15 @@ var _ = Describe("ComputeInstance Controller", func() {
 				reconciler := &ComputeInstanceReconciler{
 					MaxJobHistory: DefaultMaxJobHistory, // Use default (10)
 				}
-				jobs := []cloudkitv1alpha1.JobStatus{}
+				jobs := []osacv1alpha1.JobStatus{}
 				// Add 15 jobs
 				baseTime := time.Now().UTC()
 				for i := 1; i <= 15; i++ {
-					newJob := cloudkitv1alpha1.JobStatus{
+					newJob := osacv1alpha1.JobStatus{
 						JobID:     "job-" + string(rune('0'+i)),
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Second)),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					}
 					jobs = reconciler.appendJob(jobs, newJob)
 				}
@@ -592,33 +592,33 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		Describe("updateJob", func() {
 			It("should return false when job ID not found", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 					},
 				}
-				updatedJob := cloudkitv1alpha1.JobStatus{
+				updatedJob := osacv1alpha1.JobStatus{
 					JobID:     "job-999",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     cloudkitv1alpha1.JobStateSucceeded,
+					State:     osacv1alpha1.JobStateSucceeded,
 				}
 				result := updateJob(jobs, updatedJob)
 				Expect(result).To(BeFalse())
 				// Original job should be unchanged
-				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
 			})
 
 			It("should return false when jobs slice is empty", func() {
-				jobs := []cloudkitv1alpha1.JobStatus{}
-				updatedJob := cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{}
+				updatedJob := osacv1alpha1.JobStatus{
 					JobID:     "job-1",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     cloudkitv1alpha1.JobStateSucceeded,
+					State:     osacv1alpha1.JobStateSucceeded,
 				}
 				result := updateJob(jobs, updatedJob)
 				Expect(result).To(BeFalse())
@@ -626,99 +626,99 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			It("should update job and return true when found", func() {
 				baseTime := time.Now().UTC()
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 						Message:   "Initial message",
 					},
 				}
 				updatedTime := baseTime.Add(5 * time.Second)
-				updatedJob := cloudkitv1alpha1.JobStatus{
+				updatedJob := osacv1alpha1.JobStatus{
 					JobID:     "job-1",
-					Type:      cloudkitv1alpha1.JobTypeProvision,
+					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(updatedTime),
-					State:     cloudkitv1alpha1.JobStateSucceeded,
+					State:     osacv1alpha1.JobStateSucceeded,
 					Message:   "Updated message",
 				}
 				result := updateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
 				// Job should be fully updated
 				Expect(jobs[0].JobID).To(Equal("job-1"))
-				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
+				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
 				Expect(jobs[0].Message).To(Equal("Updated message"))
 				Expect(jobs[0].Timestamp.Time).To(Equal(updatedTime))
 			})
 
 			It("should update correct job when multiple jobs exist", func() {
 				baseTime := time.Now().UTC()
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:     "job-1",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 						Message:   "First job",
 					},
 					{
 						JobID:     "job-2",
-						Type:      cloudkitv1alpha1.JobTypeDeprovision,
+						Type:      osacv1alpha1.JobTypeDeprovision,
 						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     cloudkitv1alpha1.JobStateRunning,
+						State:     osacv1alpha1.JobStateRunning,
 						Message:   "Second job",
 					},
 					{
 						JobID:     "job-3",
-						Type:      cloudkitv1alpha1.JobTypeProvision,
+						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     cloudkitv1alpha1.JobStatePending,
+						State:     osacv1alpha1.JobStatePending,
 						Message:   "Third job",
 					},
 				}
-				updatedJob := cloudkitv1alpha1.JobStatus{
+				updatedJob := osacv1alpha1.JobStatus{
 					JobID:     "job-2",
-					Type:      cloudkitv1alpha1.JobTypeDeprovision,
+					Type:      osacv1alpha1.JobTypeDeprovision,
 					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     cloudkitv1alpha1.JobStateSucceeded,
+					State:     osacv1alpha1.JobStateSucceeded,
 					Message:   "Second job completed",
 				}
 				result := updateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
 				// Only job-2 should be updated
-				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
 				Expect(jobs[0].Message).To(Equal("First job"))
-				Expect(jobs[1].State).To(Equal(cloudkitv1alpha1.JobStateSucceeded))
+				Expect(jobs[1].State).To(Equal(osacv1alpha1.JobStateSucceeded))
 				Expect(jobs[1].Message).To(Equal("Second job completed"))
-				Expect(jobs[2].State).To(Equal(cloudkitv1alpha1.JobStatePending))
+				Expect(jobs[2].State).To(Equal(osacv1alpha1.JobStatePending))
 				Expect(jobs[2].Message).To(Equal("Third job"))
 			})
 
 			It("should update all fields of the job", func() {
 				baseTime := time.Now().UTC()
-				jobs := []cloudkitv1alpha1.JobStatus{
+				jobs := []osacv1alpha1.JobStatus{
 					{
 						JobID:                  "job-1",
-						Type:                   cloudkitv1alpha1.JobTypeProvision,
+						Type:                   osacv1alpha1.JobTypeProvision,
 						Timestamp:              metav1.NewTime(baseTime),
-						State:                  cloudkitv1alpha1.JobStatePending,
+						State:                  osacv1alpha1.JobStatePending,
 						Message:                "Initial",
 						BlockDeletionOnFailure: false,
 					},
 				}
-				updatedJob := cloudkitv1alpha1.JobStatus{
+				updatedJob := osacv1alpha1.JobStatus{
 					JobID:                  "job-1",
-					Type:                   cloudkitv1alpha1.JobTypeDeprovision, // Changed type
+					Type:                   osacv1alpha1.JobTypeDeprovision, // Changed type
 					Timestamp:              metav1.NewTime(baseTime.Add(time.Minute)),
-					State:                  cloudkitv1alpha1.JobStateFailed,
+					State:                  osacv1alpha1.JobStateFailed,
 					Message:                "Failed with error",
 					BlockDeletionOnFailure: true,
 				}
 				result := updateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
-				Expect(jobs[0].Type).To(Equal(cloudkitv1alpha1.JobTypeDeprovision))
-				Expect(jobs[0].State).To(Equal(cloudkitv1alpha1.JobStateFailed))
+				Expect(jobs[0].Type).To(Equal(osacv1alpha1.JobTypeDeprovision))
+				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
 				Expect(jobs[0].Message).To(Equal("Failed with error"))
 				Expect(jobs[0].BlockDeletionOnFailure).To(BeTrue())
 			})

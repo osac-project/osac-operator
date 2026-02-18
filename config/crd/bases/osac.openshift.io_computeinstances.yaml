@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: computeinstances.cloudkit.openshift.io
+  name: computeinstances.osac.openshift.io
 spec:
-  group: cloudkit.openshift.io
+  group: osac.openshift.io
   names:
     kind: ComputeInstance
     listKind: ComputeInstanceList
@@ -146,7 +146,7 @@ spec:
                 description: |-
                   Jobs tracks the history of provision and deprovision operations
                   Ordered chronologically, with latest operations at the end
-                  Limited to the last N jobs (configurable via CLOUDKIT_MAX_JOB_HISTORY, default 10)
+                  Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job

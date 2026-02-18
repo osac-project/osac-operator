@@ -4,5 +4,5 @@ resources:
 - manager.yaml
 images:
 - name: controller
-  newName: ghcr.io/osac/osac-operator
+  newName: ghcr.io/osac-project/osac-operator
   newTag: latest

@@ -18,41 +18,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cloudkit.openshift.io
-  resources:
-  - clusterorders
-  - computeinstances
-  - hostpools
-  - tenants
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cloudkit.openshift.io
-  resources:
-  - clusterorders/finalizers
-  - computeinstances/finalizers
-  - hostpools/finalizers
-  - tenants/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - cloudkit.openshift.io
-  resources:
-  - clusterorders/status
-  - computeinstances/status
-  - hostpools/status
-  - tenants/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - hypershift.openshift.io
   resources:
   - hostedclusters
@@ -81,6 +46,41 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  - computeinstances
+  - hostpools
+  - tenants
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/finalizers
+  - computeinstances/finalizers
+  - hostpools/finalizers
+  - tenants/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/status
+  - computeinstances/status
+  - hostpools/status
+  - tenants/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

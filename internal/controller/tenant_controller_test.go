@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -98,7 +98,7 @@ var _ = Describe("Tenant Controller", func() {
 			}).Should(Succeed())
 
 			By("checking that the finalizer was added")
-			Expect(tenant.Finalizers).To(ContainElement("cloudkit.openshift.io/tenant"))
+			Expect(tenant.Finalizers).To(ContainElement("osac.openshift.io/tenant"))
 
 			By("checking that the namespace was created")
 			Expect(tenant.Status.Namespace).NotTo(BeEmpty())

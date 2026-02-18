@@ -1,4 +1,4 @@
-apiVersion: cloudkit.openshift.io/v1alpha1
+apiVersion: osac.openshift.io/v1alpha1
 kind: HostPool
 metadata:
   labels:

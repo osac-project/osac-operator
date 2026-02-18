@@ -31,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	cloudkitv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 )
 
 // mockComputeInstancesClient is a mock implementation of ComputeInstancesClient for testing.
@@ -95,7 +95,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		resourceName      = "test-ci"
 		vmNamespace       = "default"
 		ciID              = "test-ci-id"
-		computeInstanceNS = "cloudkit-computeinstance"
+		computeInstanceNS = "osac-computeinstance"
 	)
 
 	var (
@@ -148,12 +148,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 	Context("When reconciling a resource without the VM ID label", func() {
 		BeforeEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
 				},
 			}
@@ -161,7 +161,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		AfterEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			if err == nil {
 				vm.Finalizers = nil
@@ -182,9 +182,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should remove feedback finalizer from CR without CI ID label being deleted", func() {
 			// Add the feedback finalizer and trigger deletion
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Finalizers = []string{cloudkitComputeInstanceFeedbackFinalizer}
+			vm.Finalizers = []string{osacComputeInstanceFeedbackFinalizer}
 			Expect(k8sClient.Update(ctx, vm)).To(Succeed())
 
 			// Delete triggers DeletionTimestamp
@@ -199,7 +199,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 
 			// Verify CR is gone (finalizer removed, GC proceeded)
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 			Expect(mockClient.signalCalled).To(BeFalse())
@@ -208,16 +208,16 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 	Context("When reconciling a resource that is being deleted", func() {
 		BeforeEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						cloudkitComputeInstanceIDLabel: ciID,
+						osacComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{cloudkitComputeInstanceFeedbackFinalizer},
+					Finalizers: []string{osacComputeInstanceFeedbackFinalizer},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
 				},
 			}
@@ -225,7 +225,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 			// Set the phase to Deleting (as the main controller would do in handleDelete)
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			// Delete the CR (sets DeletionTimestamp, CR stays because of finalizer)
@@ -245,7 +245,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		AfterEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			if err == nil {
 				// Force delete by removing finalizers
@@ -277,7 +277,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.signalID).To(Equal(ciID))
 
 			// CR should be gone (finalizer removed, GC proceeds)
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
@@ -294,7 +294,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.signalCalled).To(BeTrue())
 
 			// Finalizer should still be removed despite Signal error
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
@@ -312,23 +312,23 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				Namespace: computeInstanceNS,
 			}
 
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      deletingResourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						cloudkitComputeInstanceIDLabel: ciID,
+						osacComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{cloudkitComputeInstanceFinalizer, cloudkitComputeInstanceFeedbackFinalizer},
+					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
 				},
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
@@ -347,7 +347,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		AfterEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err := k8sClient.Get(ctx, deletingNamespacedName, vm)
 			if err == nil {
 				vm.Finalizers = nil
@@ -367,9 +367,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.signalCalled).To(BeFalse())
 
 			// Finalizer should still be present
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeTrue())
+			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeTrue())
 		})
 	})
 
@@ -384,23 +384,23 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				Namespace: computeInstanceNS,
 			}
 
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      deletingResourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						cloudkitComputeInstanceIDLabel: ciID,
+						osacComputeInstanceIDLabel: ciID,
 					},
-					Finalizers: []string{cloudkitComputeInstanceFinalizer},
+					Finalizers: []string{osacComputeInstanceFinalizer},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
 				},
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
@@ -419,7 +419,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		AfterEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err := k8sClient.Get(ctx, deletingNamespacedName, vm)
 			if err == nil {
 				vm.Finalizers = nil
@@ -436,9 +436,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 
 			// Verify feedback finalizer was NOT added
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeFalse())
+			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeFalse())
 			// Signal should NOT be called (our finalizer isn't present)
 			Expect(mockClient.signalCalled).To(BeFalse())
 		})
@@ -450,15 +450,15 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			mockClient.updateCalled = false
 			mockClient.lastUpdate = nil
 
-			vm := &cloudkitv1alpha1.ComputeInstance{
+			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 					Labels: map[string]string{
-						cloudkitComputeInstanceIDLabel: ciID,
+						osacComputeInstanceIDLabel: ciID,
 					},
 				},
-				Spec: cloudkitv1alpha1.ComputeInstanceSpec{
+				Spec: osacv1alpha1.ComputeInstanceSpec{
 					TemplateID: "test_template",
 				},
 			}
@@ -466,17 +466,17 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Update status separately since Status is a subresource - need to get fresh copy
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseRunning
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
 			vm.Status.Conditions = []metav1.Condition{
 				{
-					Type:               string(cloudkitv1alpha1.ComputeInstanceConditionAccepted),
+					Type:               string(osacv1alpha1.ComputeInstanceConditionAccepted),
 					Status:             metav1.ConditionFalse,
 					Reason:             "Accepted",
 					Message:            "VM is accepted",
 					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 				},
 				{
-					Type:               string(cloudkitv1alpha1.ComputeInstanceConditionProgressing),
+					Type:               string(osacv1alpha1.ComputeInstanceConditionProgressing),
 					Status:             metav1.ConditionTrue,
 					Reason:             "Progressing",
 					Message:            "VM is progressing",
@@ -499,7 +499,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		AfterEach(func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			if err == nil {
 				// Remove finalizers so the CR can be deleted
@@ -518,9 +518,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 
 			// Verify feedback finalizer was added
-			updated := &cloudkitv1alpha1.ComputeInstance{}
+			updated := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, cloudkitComputeInstanceFeedbackFinalizer)).To(BeTrue())
+			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should successfully sync conditions and phase", func() {
@@ -558,9 +558,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should sync Starting phase", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseStarting
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -573,9 +573,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should sync Failed phase", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseFailed
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseFailed
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -588,9 +588,9 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 
 		It("should sync Deleting phase", func() {
-			vm := &cloudkitv1alpha1.ComputeInstance{}
+			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = cloudkitv1alpha1.ComputeInstancePhaseDeleting
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -635,7 +635,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should sync lastRestartedAt when set in K8s CR", func() {
 			// Get the ComputeInstance and update its status with lastRestartedAt
-			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 
 			// Use time without nanoseconds to match protobuf precision
@@ -658,7 +658,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should not set lastRestartedAt when nil in K8s CR", func() {
 			// Get the ComputeInstance - lastRestartedAt should be nil by default
-			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 			Expect(computeInstance.Status.LastRestartedAt).To(BeNil())
 
@@ -676,12 +676,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should sync RestartInProgress condition when set to True", func() {
 			// Get the ComputeInstance and add RestartInProgress condition
-			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 
 			restartInProgressMessage := "Restart initiated at 2026-02-01T10:20:58Z"
 			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
-				Type:               string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress),
+				Type:               string(osacv1alpha1.ComputeInstanceConditionRestartInProgress),
 				Status:             metav1.ConditionTrue,
 				Reason:             ReasonRestartInProgress,
 				Message:            restartInProgressMessage,
@@ -711,12 +711,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should sync RestartFailed condition when set to True", func() {
 			// Get the ComputeInstance and add RestartFailed condition
-			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 
 			restartFailedMessage := "No VirtualMachine reference found"
 			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
-				Type:               string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed),
+				Type:               string(osacv1alpha1.ComputeInstanceConditionRestartFailed),
 				Status:             metav1.ConditionTrue,
 				Reason:             ReasonNoVMReference,
 				Message:            restartFailedMessage,
@@ -746,13 +746,13 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 		It("should not crash when restart conditions are not present", func() {
 			// RestartInProgress and RestartFailed conditions should not be present by default
-			computeInstance := &cloudkitv1alpha1.ComputeInstance{}
+			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
 
 			// Verify conditions don't include restart conditions
 			for _, cond := range computeInstance.Status.Conditions {
-				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartInProgress)))
-				Expect(cond.Type).NotTo(Equal(string(cloudkitv1alpha1.ComputeInstanceConditionRestartFailed)))
+				Expect(cond.Type).NotTo(Equal(string(osacv1alpha1.ComputeInstanceConditionRestartInProgress)))
+				Expect(cond.Type).NotTo(Equal(string(osacv1alpha1.ComputeInstanceConditionRestartFailed)))
 			}
 
 			request := reconcile.Request{

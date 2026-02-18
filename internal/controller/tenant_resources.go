@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/samber/lo"
 )
 
@@ -133,8 +133,8 @@ func ensureCommonLabelsForTenant(instance *v1alpha1.Tenant, obj client.Object) {
 
 func commonLabelsFromTenant(instance *v1alpha1.Tenant) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name": cloudkitAppName,
-		cloudkitTenantRefLabel:   instance.GetName(),
-		cloudkitProjectRefLabel:  instance.GetNamespace(),
+		"app.kubernetes.io/name": osacAppName,
+		osacTenantRefLabel:       instance.GetName(),
+		osacProjectRefLabel:      instance.GetNamespace(),
 	}
 }

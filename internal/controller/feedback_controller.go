@@ -28,9 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
+	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 )
 
 // FeedbackReconciler sends updates to the fulfillment service.
@@ -80,11 +80,11 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 
 	// Get the identifier of the cluster from the labels. If this isn't present it means that the object wasn't
 	// created by the fulfillment service, so we ignore it.
-	clusterID, ok := object.Labels[cloudkitClusterOrderIDLabel]
+	clusterID, ok := object.Labels[osacClusterOrderIDLabel]
 	if !ok {
 		r.logger.Info(
 			"There is no label containing the cluster identifier, will ignore it",
-			"label", cloudkitClusterOrderIDLabel,
+			"label", osacClusterOrderIDLabel,
 		)
 		return
 	}

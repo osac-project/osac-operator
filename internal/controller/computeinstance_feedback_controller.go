@@ -26,9 +26,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	ckv1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac/osac-operator/internal/api/private/v1"
-	sharedv1 "github.com/osac/osac-operator/internal/api/shared/v1"
+	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/private/v1"
+	sharedv1 "github.com/osac-project/osac-operator/internal/api/shared/v1"
 )
 
 // ComputeInstanceFeedbackReconciler sends updates to the fulfillment service.
@@ -83,19 +83,19 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 
 	// Step 2: Get the compute instance ID from labels. CRs without this label
 	// weren't created by the fulfillment service, so we ignore them.
-	ciID, ok := object.Labels[cloudkitComputeInstanceIDLabel]
+	ciID, ok := object.Labels[osacComputeInstanceIDLabel]
 	if !ok {
 		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
-		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
 			log.Info("CR without CI ID label is being deleted, removing feedback finalizer")
-			if controllerutil.RemoveFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 			}
 			return result, err
 		}
 		log.Info(
 			"There is no label containing the compute instance identifier, will ignore it",
-			"label", cloudkitComputeInstanceIDLabel,
+			"label", osacComputeInstanceIDLabel,
 		)
 		return result, err
 	}
@@ -134,7 +134,7 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 	// Step 6: Handle finalizer removal and signal for deletions. This must
 	// happen after step 5 so the DELETING state is persisted before the CR
 	// is garbage collected.
-	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
 		if len(object.GetFinalizers()) == 1 {
 			// We're the last finalizer. Remove it to trigger CR garbage
 			// collection, then signal the fulfillment service to immediately
@@ -145,7 +145,7 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 				"Feedback finalizer is last remaining, removing finalizer and signaling",
 				"ciID", ciID,
 			)
-			if controllerutil.RemoveFinalizer(object, cloudkitComputeInstanceFeedbackFinalizer) {
+			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 				if err != nil {
 					return result, err
@@ -218,7 +218,7 @@ func (r *ComputeInstanceFeedbackReconciler) saveComputeInstance(ctx context.Cont
 // handleUpdate ensures our finalizer is present and syncs the CR state to the
 // fulfillment service. Called when the CR is not being deleted.
 func (t *computeInstanceFeedbackReconcilerTask) handleUpdate(ctx context.Context) error {
-	if controllerutil.AddFinalizer(t.object, cloudkitComputeInstanceFeedbackFinalizer) {
+	if controllerutil.AddFinalizer(t.object, osacComputeInstanceFeedbackFinalizer) {
 		if err := t.r.hubClient.Update(ctx, t.object); err != nil {
 			return err
 		}
@@ -385,7 +385,7 @@ func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kin
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncIPAddress() {
-	ipAddress, ok := t.object.Annotations[cloudkitVirualMachineFloatingIPAddressAnnotation]
+	ipAddress, ok := t.object.Annotations[osacVirualMachineFloatingIPAddressAnnotation]
 	if ok && ipAddress != "" {
 		t.ci.GetStatus().SetIpAddress(ipAddress)
 	}

@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 func (r *HostPoolReconciler) newHostPoolNamespace(ctx context.Context, instance *v1alpha1.HostPool) (*appResource, error) {
@@ -86,14 +86,14 @@ func ensureCommonLabelsForHostPool(instance *v1alpha1.HostPool, obj client.Objec
 func commonLabelsFromHostPool(instance *v1alpha1.HostPool) map[string]string {
 	key := client.ObjectKeyFromObject(instance)
 	return map[string]string{
-		"app.kubernetes.io/name":  cloudkitAppName,
-		cloudkitHostPoolNameLabel: key.Name,
+		"app.kubernetes.io/name": osacAppName,
+		osacHostPoolNameLabel:    key.Name,
 	}
 }
 
 func labelSelectorFromHostPoolInstance(instance *v1alpha1.HostPool) client.MatchingLabels {
 	return client.MatchingLabels{
-		cloudkitHostPoolNameLabel: instance.GetName(),
+		osacHostPoolNameLabel: instance.GetName(),
 	}
 }
 

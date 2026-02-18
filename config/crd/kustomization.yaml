@@ -2,10 +2,10 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/cloudkit.openshift.io_clusterorders.yaml
-- bases/cloudkit.openshift.io_hostpools.yaml
-- bases/cloudkit.openshift.io_computeinstances.yaml
-- bases/cloudkit.openshift.io_tenants.yaml
+- bases/osac.openshift.io_clusterorders.yaml
+- bases/osac.openshift.io_hostpools.yaml
+- bases/osac.openshift.io_computeinstances.yaml
+- bases/osac.openshift.io_tenants.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

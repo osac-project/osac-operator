@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 func (r *ClusterOrderReconciler) newNamespace(ctx context.Context, instance *v1alpha1.ClusterOrder) (*appResource, error) {
@@ -144,7 +144,7 @@ func ensureCommonLabels(instance *v1alpha1.ClusterOrder, obj client.Object) {
 func commonLabelsFromOrder(instance *v1alpha1.ClusterOrder) map[string]string {
 	key := client.ObjectKeyFromObject(instance)
 	return map[string]string{
-		"app.kubernetes.io/name":      cloudkitAppName,
-		cloudkitClusterOrderNameLabel: key.Name,
+		"app.kubernetes.io/name":  osacAppName,
+		osacClusterOrderNameLabel: key.Name,
 	}
 }

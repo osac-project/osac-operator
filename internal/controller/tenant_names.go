@@ -22,21 +22,21 @@ import (
 	"hash/fnv"
 	"strings"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 var (
-	// cloudkitTenantRefLabel the label used to reference the tenant object
-	cloudkitTenantRefLabel string = fmt.Sprintf("%s/tenant-ref", cloudkitPrefix)
+	// osacTenantRefLabel the label used to reference the tenant object
+	osacTenantRefLabel string = fmt.Sprintf("%s/tenant-ref", osacPrefix)
 
-	// cloudkitProjectRefLabel is the label used to reference the project in which the tenant obehct lives
-	cloudkitProjectRefLabel string = fmt.Sprintf("%s/project", cloudkitPrefix)
+	// osacProjectRefLabel is the label used to reference the project in which the tenant obehct lives
+	osacProjectRefLabel string = fmt.Sprintf("%s/project", osacPrefix)
 
 	// tenantFinalizer is the finalizer used to clean up the tenant
-	tenantFinalizer string = fmt.Sprintf("%s/tenant", cloudkitPrefix)
+	tenantFinalizer string = fmt.Sprintf("%s/tenant", osacPrefix)
 
-	// cloudkitTenantAnnotation is the annotation used to reference the tenant name
-	cloudkitTenantAnnotation string = fmt.Sprintf("%s/tenant", cloudkitPrefix)
+	// osacTenantAnnotation is the annotation used to reference the tenant name
+	osacTenantAnnotation string = fmt.Sprintf("%s/tenant", osacPrefix)
 
 	// udnName is the default name of the user defined network created inside tenant's namespace
 	udnName = "udn"

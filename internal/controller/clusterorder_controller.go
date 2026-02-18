@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 // NewComponentFn is the type of a function that creates a required component
@@ -95,9 +95,9 @@ func NewClusterOrderReconciler(
 	}
 }
 
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=clusterorders,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=clusterorders/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cloudkit.openshift.io,resources=clusterorders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
@@ -113,7 +113,7 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	val, exists := instance.Annotations[cloudkitManagementStateAnnotation]
+	val, exists := instance.Annotations[osacManagementStateAnnotation]
 	if exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring ClusterOrder due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
@@ -156,7 +156,7 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	labelPredicate, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
-				Key:      cloudkitClusterOrderNameLabel,
+				Key:      osacClusterOrderNameLabel,
 				Operator: metav1.LabelSelectorOpExists,
 			},
 		},
@@ -200,7 +200,7 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	clusterOrderName, exists := obj.GetLabels()[cloudkitClusterOrderNameLabel]
+	clusterOrderName, exists := obj.GetLabels()[osacClusterOrderNameLabel]
 	if !exists {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Reques
 	r.initializeStatusConditions(instance)
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
 
-	if controllerutil.AddFinalizer(instance, cloudkitFinalizer) {
+	if controllerutil.AddFinalizer(instance, osacFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -286,7 +286,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ ctrl.Reques
 	}
 
 	if url := r.CreateClusterWebhook; url != "" {
-		val, exists := instance.Annotations[cloudkitManagementStateAnnotation]
+		val, exists := instance.Annotations[osacManagementStateAnnotation]
 		if exists && val == ManagementStateManual {
 			log.Info("not triggering create webhook due to management-state annotation", "url", url, "management-state", val)
 		} else {
@@ -481,8 +481,8 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Reques
 	} else {
 		// If we get his far, we are no longer monitoring any kubernetes resources.
 		// Allow kubernetes to delete the clusterorder.
-		if controllerutil.ContainsFinalizer(instance, cloudkitFinalizer) {
-			if controllerutil.RemoveFinalizer(instance, cloudkitFinalizer) {
+		if controllerutil.ContainsFinalizer(instance, osacFinalizer) {
+			if controllerutil.RemoveFinalizer(instance, osacFinalizer) {
 				if err := r.Update(ctx, instance); err != nil {
 					return ctrl.Result{}, err
 				}
@@ -493,7 +493,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Reques
 	// We always trigger the delete webhook, since this is responsible both for
 	// cleaning up the kubernetres resources and the underlying infrastructure.
 	if url := r.DeleteClusterWebhook; url != "" {
-		val, exists := instance.Annotations[cloudkitManagementStateAnnotation]
+		val, exists := instance.Annotations[osacManagementStateAnnotation]
 		if exists && val == ManagementStateManual {
 			log.Info("not triggering delete webhook due to management-state annotation", "url", url, "management-state", val)
 		} else {
@@ -573,6 +573,6 @@ func (r *ClusterOrderReconciler) initializeStatusCondition(instance *v1alpha1.Cl
 
 func labelSelectorFromInstance(instance *v1alpha1.ClusterOrder) client.MatchingLabels {
 	return client.MatchingLabels{
-		cloudkitClusterOrderNameLabel: instance.GetName(),
+		osacClusterOrderNameLabel: instance.GetName(),
 	}
 }

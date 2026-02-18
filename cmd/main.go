@@ -49,11 +49,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	v1alpha1 "github.com/osac/osac-operator/api/v1alpha1"
-	"github.com/osac/osac-operator/internal/aap"
-	"github.com/osac/osac-operator/internal/controller"
-	"github.com/osac/osac-operator/internal/helpers"
-	"github.com/osac/osac-operator/internal/provisioning"
+	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/aap"
+	"github.com/osac-project/osac-operator/internal/controller"
+	"github.com/osac-project/osac-operator/internal/helpers"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -64,21 +64,21 @@ var (
 
 const (
 	// EDA webhook environment variables
-	envComputeInstanceProvisionWebhook   = "CLOUDKIT_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
-	envComputeInstanceDeprovisionWebhook = "CLOUDKIT_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
+	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
+	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
 	// Provider selection
-	envProvisioningProvider = "CLOUDKIT_PROVISIONING_PROVIDER"
+	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
 
 	// AAP configuration
-	envAAPURL                 = "CLOUDKIT_AAP_URL"
-	envAAPToken               = "CLOUDKIT_AAP_TOKEN"
-	envAAPProvisionTemplate   = "CLOUDKIT_AAP_PROVISION_TEMPLATE"
-	envAAPDeprovisionTemplate = "CLOUDKIT_AAP_DEPROVISION_TEMPLATE"
-	envAAPStatusPollInterval  = "CLOUDKIT_AAP_STATUS_POLL_INTERVAL"
+	envAAPURL                 = "OSAC_AAP_URL"
+	envAAPToken               = "OSAC_AAP_TOKEN"
+	envAAPProvisionTemplate   = "OSAC_AAP_PROVISION_TEMPLATE"
+	envAAPDeprovisionTemplate = "OSAC_AAP_DEPROVISION_TEMPLATE"
+	envAAPStatusPollInterval  = "OSAC_AAP_STATUS_POLL_INTERVAL"
 
 	// Job history configuration
-	envMaxJobHistory = "CLOUDKIT_MAX_JOB_HISTORY"
+	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 )
 
 // parsePollInterval parses a poll interval from environment variable with fallback to default.
@@ -238,19 +238,19 @@ func main() {
 	flag.StringVar(
 		&grpcTokenFile,
 		"fulfillment-server-token-file",
-		os.Getenv("CLOUDKIT_FULFILLMENT_TOKEN_FILE"),
+		os.Getenv("OSAC_FULFILLMENT_TOKEN_FILE"),
 		"Path of the file containing the token for gRPC authentication to the fulfillment service.",
 	)
 	flag.StringVar(
 		&fulfillmentServerAddress,
 		"fulfillment-server-address",
-		os.Getenv("CLOUDKIT_FULFILLMENT_SERVER_ADDRESS"),
+		os.Getenv("OSAC_FULFILLMENT_SERVER_ADDRESS"),
 		"Address of the fulfillment server.",
 	)
 	flag.DurationVar(
 		&minimumRequestInterval,
 		"minimum-request-interval",
-		helpers.GetEnvWithDefault("CLOUDKIT_MINIMUM_REQUEST_INTERVAL", time.Duration(0)),
+		helpers.GetEnvWithDefault("OSAC_MINIMUM_REQUEST_INTERVAL", time.Duration(0)),
 		"Minimum amount of time between calls to the same webook url",
 	)
 	opts := zap.Options{
@@ -328,7 +328,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	computeInstanceNamespace := os.Getenv("CLOUDKIT_COMPUTE_INSTANCE_NAMESPACE")
+	computeInstanceNamespace := os.Getenv("OSAC_COMPUTE_INSTANCE_NAMESPACE")
 
 	// Create the gRPC connection:
 	var grpcConn *grpc.ClientConn
@@ -344,7 +344,7 @@ func main() {
 			ctrl.Log.WithName("feedback"),
 			mgr.GetClient(),
 			grpcConn,
-			os.Getenv("CLOUDKIT_CLUSTER_ORDER_NAMESPACE"),
+			os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
 		)).SetupWithManager(mgr); err != nil {
 			setupLog.Error(
 				err,
@@ -359,7 +359,7 @@ func main() {
 			ctrl.Log.WithName("feedback"),
 			mgr.GetClient(),
 			grpcConn,
-			os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
+			os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
 		)).SetupWithManager(mgr); err != nil {
 			setupLog.Error(
 				err,
@@ -389,9 +389,9 @@ func main() {
 	if err = (controller.NewClusterOrderReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		os.Getenv("CLOUDKIT_CLUSTER_CREATE_WEBHOOK"),
-		os.Getenv("CLOUDKIT_CLUSTER_DELETE_WEBHOOK"),
-		os.Getenv("CLOUDKIT_CLUSTER_ORDER_NAMESPACE"),
+		os.Getenv("OSAC_CLUSTER_CREATE_WEBHOOK"),
+		os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK"),
+		os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
 		minimumRequestInterval,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterOrder")
@@ -401,9 +401,9 @@ func main() {
 	if err = (controller.NewHostPoolReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		os.Getenv("CLOUDKIT_HOSTPOOL_CREATE_WEBHOOK"),
-		os.Getenv("CLOUDKIT_HOSTPOOL_DELETE_WEBHOOK"),
-		os.Getenv("CLOUDKIT_HOSTPOOL_ORDER_NAMESPACE"),
+		os.Getenv("OSAC_HOSTPOOL_CREATE_WEBHOOK"),
+		os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK"),
+		os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
 		minimumRequestInterval,
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HostPool")

@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
 // getTenant gets the tenant object from the cluster
@@ -46,7 +46,7 @@ func (r *ComputeInstanceReconciler) getTenant(ctx context.Context, instance *v1a
 
 // createOrUpdateTenant creates or updates the tenant object in the cluster in the namespace where the compute instance lives
 func (r *ComputeInstanceReconciler) createOrUpdateTenant(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
-	tenantName, exists := instance.GetAnnotations()[cloudkitTenantAnnotation]
+	tenantName, exists := instance.GetAnnotations()[osacTenantAnnotation]
 	if !exists || tenantName == "" {
 		return fmt.Errorf("tenant name not found")
 	}
@@ -56,7 +56,7 @@ func (r *ComputeInstanceReconciler) createOrUpdateTenant(ctx context.Context, in
 			Name:      getTenantObjectName(tenantName),
 			Namespace: instance.GetNamespace(),
 			Labels: map[string]string{
-				"app.kubernetes.io/name": cloudkitAppName,
+				"app.kubernetes.io/name": osacAppName,
 			},
 		},
 		Spec: v1alpha1.TenantSpec{
@@ -88,6 +88,6 @@ func getTenantObjectName(tenantName string) string {
 
 func labelSelectorFromComputeInstanceInstance(instance *v1alpha1.ComputeInstance) client.MatchingLabels {
 	return client.MatchingLabels{
-		cloudkitComputeInstanceNameLabel: instance.GetName(),
+		osacComputeInstanceNameLabel: instance.GetName(),
 	}
 }

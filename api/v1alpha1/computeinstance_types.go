@@ -149,7 +149,7 @@ type ComputeInstanceStatus struct {
 
 	// Jobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
-	// Limited to the last N jobs (configurable via CLOUDKIT_MAX_JOB_HISTORY, default 10)
+	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
 	Jobs []JobStatus `json:"jobs,omitempty"`
 }
