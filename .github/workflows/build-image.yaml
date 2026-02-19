@@ -81,6 +81,7 @@ jobs:
       # Build and push Docker image with Buildx (don't push on PR)
       # https://github.com/docker/build-push-action
       - name: Build and push Docker image
+        id: build-operator
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -88,3 +89,79 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # Extract the commit SHA tag for manifest generation
+      - name: Extract commit SHA tag
+        id: sha-tag
+        if: github.event_name != 'pull_request'
+        run: |
+          # Extract the sha tag from the metadata output
+          FULL_SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep -E "sha-[0-9a-f]{7}" | head -n1)
+          SHA_TAG=$(echo "$FULL_SHA_TAG" | sed "s/.*://")
+          echo "sha-tag=$SHA_TAG" >> $GITHUB_OUTPUT
+          echo "full-sha-tag=$FULL_SHA_TAG" >> $GITHUB_OUTPUT
+          echo "manifest-tag=$SHA_TAG-manifests" >> $GITHUB_OUTPUT
+          echo "Using SHA tag: $SHA_TAG"
+          echo "Full SHA tag: $FULL_SHA_TAG"
+          echo "Manifest tag: $SHA_TAG-manifests"
+
+      # Set up Go for kustomize operations
+      - name: Set up Go for manifest generation
+        if: github.event_name != 'pull_request'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      # Generate manifests with kustomize pointing to the SHA-tagged image
+      - name: Generate manifests with kustomize
+        if: github.event_name != 'pull_request'
+        run: |
+          # Install kustomize
+          make kustomize
+
+          # Create dist directory
+          mkdir -p dist
+
+          # Set the manager image to the SHA-tagged version
+          cd config/manager && ../../bin/kustomize edit set image controller=${{ steps.sha-tag.outputs.full-sha-tag }}
+
+          # Generate the complete manifest
+          cd ../..
+          ./bin/kustomize build config/default > dist/install.yaml
+
+          echo "Generated manifest with image: ${{ steps.sha-tag.outputs.full-sha-tag }}"
+          echo "Manifest content preview:"
+          head -20 dist/install.yaml
+
+      # Create Dockerfile for manifest container
+      - name: Create manifest container Dockerfile
+        if: github.event_name != 'pull_request'
+        run: |
+          cat > Dockerfile.manifests << 'EOF'
+          FROM scratch
+          COPY dist/install.yaml /manifests/install.yaml
+          EOF
+
+          echo "Created Dockerfile.manifests:"
+          cat Dockerfile.manifests
+
+      # Extract metadata for manifest container
+      - name: Extract manifest container metadata
+        id: meta-manifests
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.sha-tag.outputs.manifest-tag }}
+
+      # Build and push manifest container
+      - name: Build and push manifest container
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.manifests
+          push: true
+          tags: ${{ steps.meta-manifests.outputs.tags }}
+          labels: ${{ steps.meta-manifests.outputs.labels }}
