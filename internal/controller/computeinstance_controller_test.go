@@ -31,6 +31,8 @@ import (
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
+const testTemplateParams = `{"key": "value"}`
+
 var _ = Describe("ComputeInstance Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
@@ -57,9 +59,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 							osacTenantAnnotation: tenantName,
 						},
 					},
-					Spec: osacv1alpha1.ComputeInstanceSpec{
-						TemplateID: "test_template",
-					},
+					Spec: newTestComputeInstanceSpec("test_template"),
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -149,15 +149,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should compute and store a version of the spec", func() {
+			spec := newTestComputeInstanceSpec("template-1")
+			spec.TemplateParameters = testTemplateParams
 			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-hash",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec,
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm)
@@ -166,15 +165,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should be idempotent - same spec produces same version", func() {
+			spec := newTestComputeInstanceSpec("template-1")
+			spec.TemplateParameters = testTemplateParams
 			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-idempotent",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec,
 			}
 
 			// First call
@@ -197,26 +195,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce different versions for different specs", func() {
+			spec1 := newTestComputeInstanceSpec("template-1")
+			spec1.TemplateParameters = `{"key": "value1"}`
 			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value1"}`,
-				},
+				Spec: spec1,
 			}
 
+			spec2 := newTestComputeInstanceSpec("template-1")
+			spec2.TemplateParameters = `{"key": "value2"}`
 			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value2"}`,
-				},
+				Spec: spec2,
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm1)
@@ -234,9 +230,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-template-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			vm2 := &osacv1alpha1.ComputeInstance{
@@ -244,9 +238,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-template-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-2",
-				},
+				Spec: newTestComputeInstanceSpec("template-2"),
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm1)
@@ -259,26 +251,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce same version regardless of order of calls", func() {
+			spec1 := newTestComputeInstanceSpec("template-1")
+			spec1.TemplateParameters = testTemplateParams
 			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec1,
 			}
 
+			spec2 := newTestComputeInstanceSpec("template-1")
+			spec2.TemplateParameters = testTemplateParams
 			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec2,
 			}
 
 			// Call on vm1 first
@@ -315,9 +305,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacAAPReconciledConfigVersionAnnotation: expectedVersion,
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			err := reconciler.handleReconciledConfigVersion(ctx, vm)
@@ -332,9 +320,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Namespace:   "default",
 					Annotations: map[string]string{},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
@@ -351,9 +337,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-nil-annotations",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
@@ -373,9 +357,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacAAPReconciledConfigVersionAnnotation: "version-1",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			// First call

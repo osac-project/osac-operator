@@ -294,6 +294,11 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
 	if latestProvisionJob == nil || latestProvisionJob.JobID == "" {
+		// Ensure backward compatibility by populating templateParameters from explicit fields
+		if err := ensureBackwardCompatibility(instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		// No job yet, trigger provisioning
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
@@ -394,6 +399,11 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 
 	// Trigger deprovisioning - provider decides internally if ready
 	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
+		// Ensure backward compatibility by populating templateParameters from explicit fields
+		if err := ensureBackwardCompatibility(instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
 
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
@@ -754,5 +764,74 @@ func (r *ComputeInstanceReconciler) handleReconciledConfigVersion(ctx context.Co
 		instance.Status.ReconciledConfigVersion = ""
 	}
 
+	return nil
+}
+
+// ensureBackwardCompatibility populates templateParameters from new explicit fields.
+// This is the intended mechanism for templates to receive parameters - templates consume templateParameters,
+// while users can provide values via either explicit fields OR templateParameters directly.
+//
+// The function generates templateParameters in the format expected by templates:
+//   - cpu_cores: from spec.cores
+//   - memory: from spec.memoryGiB (converted to "XGi" format)
+//   - disk_size: from spec.bootDisk.sizeGiB (converted to "XGi" format)
+//   - image_source: from spec.image.sourceRef
+//   - ssh_public_key: from spec.sshKey
+//   - user_data_secret_ref: from spec.userDataSecretRef.name
+//   - additional_disks: from spec.additionalDisks (JSON-encoded)
+//   - exposed_ports: hardcoded to "22/tcp" for backward compatibility with existing templates
+//
+// If templateParameters is already set, it is left unchanged (user-provided values take precedence).
+func ensureBackwardCompatibility(instance *v1alpha1.ComputeInstance) error {
+	// Skip if templateParameters is already set (user-provided or legacy CR)
+	if instance.Spec.TemplateParameters != "" {
+		return nil
+	}
+
+	// Build parameters from new explicit fields
+	params := make(map[string]any)
+
+	// Map new field names to old parameter names expected by templates
+	if instance.Spec.Cores > 0 {
+		params["cpu_cores"] = fmt.Sprintf("%d", instance.Spec.Cores)
+	}
+
+	if instance.Spec.MemoryGiB > 0 {
+		params["memory"] = fmt.Sprintf("%dGi", instance.Spec.MemoryGiB)
+	}
+
+	if instance.Spec.BootDisk.SizeGiB > 0 {
+		params["disk_size"] = fmt.Sprintf("%dGi", instance.Spec.BootDisk.SizeGiB)
+	}
+
+	if instance.Spec.Image.SourceRef != "" {
+		params["image_source"] = instance.Spec.Image.SourceRef
+	}
+
+	if instance.Spec.SSHKey != "" {
+		params["ssh_public_key"] = instance.Spec.SSHKey
+	}
+
+	if instance.Spec.UserDataSecretRef != nil {
+		params["user_data_secret_ref"] = instance.Spec.UserDataSecretRef.Name
+	}
+
+	if len(instance.Spec.AdditionalDisks) > 0 {
+		params["additional_disks"] = instance.Spec.AdditionalDisks
+	}
+
+	// Always include exposed_ports for backward compatibility with existing templates.
+	// All existing CIs created via fulfillment API include this parameter.
+	// TODO: This can be removed once all templates are updated to use explicit fields.
+	params["exposed_ports"] = "22/tcp"
+
+	// Only set templateParameters if we have any parameters
+	if len(params) > 0 {
+		jsonBytes, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to marshal templateParameters: %w", err)
+		}
+		instance.Spec.TemplateParameters = string(jsonBytes)
+	}
 	return nil
 }
