@@ -35,7 +35,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 
 	Context("when templateParameters is not set", func() {
 		It("should populate templateParameters from new fields", func() {
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			Expect(instance.Spec.TemplateParameters).ToNot(BeEmpty())
 
@@ -53,7 +53,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should include ssh_public_key if sshKey is set", func() {
 			instance.Spec.SSHKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -65,7 +65,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should not include ssh_public_key if sshKey is empty", func() {
 			instance.Spec.SSHKey = ""
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -77,7 +77,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should always include exposed_ports", func() {
 			instance.Spec.SSHKey = ""
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -90,7 +90,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should format memory with Gi suffix", func() {
 			instance.Spec.MemoryGiB = 16
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -102,7 +102,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should format disk_size with Gi suffix", func() {
 			instance.Spec.BootDisk.SizeGiB = 100
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -117,7 +117,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 			instance.Spec.BootDisk.SizeGiB = 1
 			instance.Spec.SSHKey = ""
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -135,7 +135,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 			existingParams := `{"custom_param": "custom_value"}`
 			instance.Spec.TemplateParameters = existingParams
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			// Should remain unchanged
 			Expect(instance.Spec.TemplateParameters).To(Equal(existingParams))
@@ -146,7 +146,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 			instance.Spec.TemplateParameters = userParams
 			instance.Spec.Cores = 4 // Different from user-provided value
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			// User-provided values should take precedence
 			Expect(instance.Spec.TemplateParameters).To(Equal(userParams))
@@ -157,7 +157,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should map cores to cpu_cores", func() {
 			instance.Spec.Cores = 2
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -170,7 +170,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should map memoryGiB to memory", func() {
 			instance.Spec.MemoryGiB = 4
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -183,7 +183,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should map bootDisk.sizeGiB to disk_size", func() {
 			instance.Spec.BootDisk.SizeGiB = 50
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -196,7 +196,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should map image.sourceRef to image_source", func() {
 			instance.Spec.Image.SourceRef = "custom.registry.io/image:tag"
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
@@ -210,7 +210,7 @@ var _ = Describe("ensureBackwardCompatibility", func() {
 		It("should map sshKey to ssh_public_key", func() {
 			instance.Spec.SSHKey = "test-key"
 
-			ensureBackwardCompatibility(instance)
+			Expect(ensureBackwardCompatibility(instance)).To(Succeed())
 
 			var params map[string]string
 			err := json.Unmarshal([]byte(instance.Spec.TemplateParameters), &params)
