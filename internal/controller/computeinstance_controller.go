@@ -98,6 +98,7 @@ func NewComputeInstanceReconciler(
 		ProvisioningProvider:     provisioningProvider,
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
+		Manager:                  mgr,
 	}
 }
 
@@ -691,18 +692,24 @@ func (r *ComputeInstanceReconciler) initializeStatusCondition(instance *v1alpha1
 
 // getVMClusterName returns the name of the cluster used for VirtualMachine operations.
 // Returns "local" when no provider or no clusters; otherwise the first cluster from the provider.
-func (r *ComputeInstanceReconciler) getVMClusterName() string {
+func (r *ComputeInstanceReconciler) getVMClusterName(ctx context.Context) string {
+	log := ctrllog.FromContext(ctx)
+
 	if r.Manager == nil {
+		log.Info("no manager, using local cluster")
 		return localClusterName
 	}
 	provider := r.Manager.GetProvider()
 	if provider == nil {
+		log.Info("no provider, using local cluster")
 		return localClusterName
 	}
 	lister, ok := provider.(clusterLister)
 	if !ok || len(lister.ListClusters()) == 0 {
+		log.Info("no clusters, using local cluster")
 		return localClusterName
 	}
+	log.Info("using cluster", "cluster", lister.ListClusters()[0])
 	return lister.ListClusters()[0]
 }
 
