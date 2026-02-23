@@ -68,6 +68,9 @@ const (
 
 	// ComputeInstancePhaseDeleting means there has been a request to delete the ComputeInstance
 	ComputeInstancePhaseDeleting ComputeInstancePhaseType = "Deleting"
+
+	// ComputeInstancePhaseUpdating means the compute instance is being updated
+	ComputeInstancePhaseUpdating ComputeInstancePhaseType = "Updating"
 )
 
 // ComputeInstanceConditionType is a valid value for .status.conditions.type
@@ -113,7 +116,7 @@ type ComputeInstanceStatus struct {
 	// Phase provides a single-value overview of the state of the ComputeInstance
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting
+	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting;Updating
 	Phase ComputeInstancePhaseType `json:"phase,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ComputeInstance

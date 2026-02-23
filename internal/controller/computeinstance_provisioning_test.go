@@ -230,6 +230,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 		})
 
 		It("should mark as failed when job fails", func() {
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
 			instance.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-999",

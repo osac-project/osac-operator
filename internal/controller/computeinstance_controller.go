@@ -366,9 +366,9 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		return ctrl.Result{}, nil
 	}
 
-	// Job failed
+	// Job failed — resolve phase through state machine (Starting/Updating -> Failed)
 	log.Error(nil, "provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+	instance.Status.Phase = resolvePhase(instance, &updatedJob)
 	return ctrl.Result{}, nil
 }
 
@@ -516,7 +516,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 
 	if controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
@@ -567,28 +566,21 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	instance.Status.Phase = resolvePhase(instance, latestProvisionJob)
+
+	switch instance.Status.Phase {
+	case v1alpha1.ComputeInstancePhaseRunning:
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+		return ctrl.Result{}, nil
 
-		// If we're tracking a provision job that hasn't reached terminal state, continue polling
-		// This ensures job status fields are accurate and reflect the final job outcome
-		latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
-		if r.ProvisioningProvider != nil && latestProvisionJob != nil {
-			if !latestProvisionJob.State.IsTerminal() {
-				log.Info("VM ready but provision job not terminal, continuing to poll", "jobID", latestProvisionJob.JobID, "state", latestProvisionJob.State)
-				return r.handleProvisioning(ctx, instance)
-			}
-		}
+	case v1alpha1.ComputeInstancePhaseStarting, v1alpha1.ComputeInstancePhaseUpdating:
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
+		return r.handleProvisioning(ctx, instance)
 
+	default:
 		return ctrl.Result{}, nil
 	}
-
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
-
-	// Handle provisioning via provider abstraction
-	return r.handleProvisioning(ctx, instance)
 }
 
 func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {

@@ -257,6 +257,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 			DeferCleanup(k8sClient.Delete, ctx, instance)
 
+			// Set phase to Starting (as handleUpdate would do via resolvePhase)
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
+
 			// Trigger the job
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())

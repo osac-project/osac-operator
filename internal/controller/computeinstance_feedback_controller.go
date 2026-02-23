@@ -340,6 +340,8 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 		t.syncPhaseRunning()
 	case ckv1alpha1.ComputeInstancePhaseDeleting:
 		t.syncPhaseDeleting()
+	case ckv1alpha1.ComputeInstancePhaseUpdating:
+		t.syncPhaseUpdating()
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info(
@@ -364,6 +366,12 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhaseRunning() {
 
 func (t *computeInstanceFeedbackReconcilerTask) syncPhaseDeleting() {
 	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseUpdating() {
+	// TODO: Replace with privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UPDATING
+	// once the private API proto is regenerated from the BSR.
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState(5))
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {
