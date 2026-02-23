@@ -211,6 +211,7 @@ spec:
                 - Running
                 - Failed
                 - Deleting
+                - Updating
                 type: string
               reconciledConfigVersion:
                 description: ReconciledConfigVersion is the version (hash) of the
