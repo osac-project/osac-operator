@@ -290,16 +290,16 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		return ctrl.Result{}, nil
 	}
 
-	// Check if we already have a provision job
+	// Check if we need to trigger a (new) provision job
 	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if latestProvisionJob == nil || latestProvisionJob.JobID == "" {
-		// Ensure backward compatibility by populating templateParameters from explicit fields
+	if r.needsProvisionJob(instance, latestProvisionJob) {
+		// Regenerate templateParameters from current spec fields
+		instance.Spec.TemplateParameters = ""
 		if err := ensureBackwardCompatibility(instance); err != nil {
 			return ctrl.Result{}, err
 		}
 
-		// No job yet, trigger provisioning
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
 		if err != nil {
@@ -727,6 +727,18 @@ func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMach
 func kvVMHasConditionWithStatus(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType, status corev1.ConditionStatus) bool {
 	c := kvVMGetCondition(vm, cond)
 	return c != nil && c.Status == status
+}
+
+// needsProvisionJob returns true when we should trigger a new provision job.
+// This is the case when no job exists yet, or when the spec has changed since the last successful provision.
+func (r *ComputeInstanceReconciler) needsProvisionJob(instance *v1alpha1.ComputeInstance, latestJob *v1alpha1.JobStatus) bool {
+	if latestJob == nil || latestJob.JobID == "" {
+		return true
+	}
+	if !latestJob.State.IsTerminal() {
+		return false
+	}
+	return instance.Status.DesiredConfigVersion != instance.Status.ReconciledConfigVersion
 }
 
 // handleDesiredConfigVersion computes a version (hash) of the spec (using FNV-1a) and stores it as hexadecimal in status.DesiredConfigVersion.
