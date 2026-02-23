@@ -201,7 +201,10 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	}
 
 	return mcbuilder.ControllerManagedBy(mgr).
-		For(&v1alpha1.Tenant{}, mcbuilder.WithPredicates(tenantNamespacePredicate(r.tenantNamespace))).
+		For(&v1alpha1.Tenant{}, mcbuilder.WithPredicates(tenantNamespacePredicate(r.tenantNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Named("tenant").
 		Watches(
 			&corev1.Namespace{},

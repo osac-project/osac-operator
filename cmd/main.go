@@ -329,14 +329,47 @@ func main() {
 		// LeaderElectionReleaseOnCancel: true,
 	}
 
+	// TODO: Add provider scheme and provider
+	// https://github.com/kubernetes-sigs/multicluster-runtime/blob/1df3cffe603bbfc59f2c3a88961061b638fdb135/examples/sync-local-to-remote/main.go#L80C1-L99C3
+	// // Build a schema for provider clusters. The provider will use this
+	// // schema to build the clients for each cluster, hence it needs
+	// // every type that should be interacted with through the provider
+	// // clusters.
+	// providerScheme := runtime.NewScheme()
+	// if err := corev1.AddToScheme(providerScheme); err != nil {
+	// 	return fmt.Errorf("error adding corev1 to provider scheme: %w", err)
+	// }
+
+	// provider, err := file.New(file.Options{
+	// 	KubeconfigFiles: kubeconfigFiles,
+	// 	ClusterOptions: []cluster.Option{
+	// 		func(o *cluster.Options) {
+	// 			o.Scheme = providerScheme
+	// 		},
+	// 	},
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("error setting up file provider: %w", err)
+	// }
+
 	var mgr mcmanager.Manager
 	var err error
 	remoteClusterSecretNamespace := os.Getenv("REMOTE_CLUSTER_SECRET_NAMESPACE")
 	if remoteClusterSecretNamespace != "" {
 		setupLog.Info("remote cluster enabled via kubeconfig provider", "namespace", remoteClusterSecretNamespace)
+
+		virtScheme := runtime.NewScheme()
+		utilruntime.Must(clientgoscheme.AddToScheme(virtScheme))
+		utilruntime.Must(kubevirtv1.AddToScheme(virtScheme))
+		utilruntime.Must(ovnv1.AddToScheme(virtScheme))
+
 		kubeconfigProvider := kubeconfigprovider.New(kubeconfigprovider.Options{
-			Namespace:      remoteClusterSecretNamespace,
-			ClusterOptions: []cluster.Option{func(o *cluster.Options) { o.Scheme = scheme }},
+			Namespace: remoteClusterSecretNamespace,
+			ClusterOptions: []cluster.Option{
+				func(o *cluster.Options) {
+					o.Scheme = virtScheme
+				},
+			},
 		})
 		mgr, err = mcmanager.New(ctrl.GetConfigOrDie(), kubeconfigProvider, managerOpts)
 		if err != nil {

@@ -61,7 +61,7 @@ func (r *ComputeInstanceReconciler) createOrUpdateTenant(ctx context.Context, in
 		},
 		Spec: v1alpha1.TenantSpec{
 			Name:        tenantName,
-			ClusterName: r.getVMClusterName(),
+			ClusterName: r.getVMClusterName(ctx),
 		},
 	}
 
