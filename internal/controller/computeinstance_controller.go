@@ -545,6 +545,16 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// If the tenant is being deleted, wait for deletion to complete before creating a new one.
+	// This can happen when a previous ComputeInstance owned the tenant via ownerReference
+	// and its deletion triggered garbage collection on the shared tenant.
+	if tenant != nil && tenant.DeletionTimestamp != nil {
+		log.Info("tenant is being deleted, waiting for deletion to complete", "tenant", tenant.GetName())
+		instance.SetTenantReferenceName("")
+		instance.SetTenantReferenceNamespace("")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	// If the tenant doesn't exist, create it and requeue
 	if tenant == nil {
 		if err := r.createOrUpdateTenant(ctx, instance); err != nil {

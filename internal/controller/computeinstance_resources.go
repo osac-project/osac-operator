@@ -51,9 +51,22 @@ func (r *ComputeInstanceReconciler) createOrUpdateTenant(ctx context.Context, in
 		return fmt.Errorf("tenant name not found")
 	}
 
+	tenantObjectName := getTenantObjectName(tenantName)
+
+	// Check if a tenant with this name already exists and is being deleted.
+	// This can happen when a previous ComputeInstance owned the tenant and its deletion
+	// triggered garbage collection. We must wait for the old tenant to be fully removed
+	// before creating a new one with the same name.
+	existing := &v1alpha1.Tenant{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: instance.GetNamespace(), Name: tenantObjectName}, existing); err == nil {
+		if existing.DeletionTimestamp != nil {
+			return fmt.Errorf("tenant %s is being deleted, will retry", tenantObjectName)
+		}
+	}
+
 	tenant := &v1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getTenantObjectName(tenantName),
+			Name:      tenantObjectName,
 			Namespace: instance.GetNamespace(),
 			Labels: map[string]string{
 				"app.kubernetes.io/name": osacAppName,
