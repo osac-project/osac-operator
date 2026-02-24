@@ -100,7 +100,6 @@ type ComputeInstanceSpec struct {
 	// MemoryGiB is the memory in gibibytes
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=1024
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="memoryGiB is immutable"
 	MemoryGiB int32 `json:"memoryGiB"`
 

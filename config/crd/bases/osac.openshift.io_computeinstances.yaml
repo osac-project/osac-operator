@@ -132,7 +132,6 @@ spec:
               memoryGiB:
                 description: MemoryGiB is the memory in gibibytes
                 format: int32
-                maximum: 1024
                 minimum: 1
                 type: integer
                 x-kubernetes-validations:
