@@ -682,4 +682,113 @@ var _ = Describe("AAPProvider", func() {
 			Expect(provider.Name()).To(Equal(string(provisioning.ProviderTypeAAP)))
 		})
 	})
+
+	Describe("Multi-resource type support", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				return &aap.LaunchJobTemplateResponse{JobID: 100}, nil
+			}
+		})
+
+		It("should trigger provision for ClusterOrder", func() {
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "cluster-template",
+				},
+			}
+			result, err := provider.TriggerProvision(ctx, clusterOrder)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("100"))
+			Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
+		})
+
+		It("should trigger provision for HostPool", func() {
+			hostPool := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-host-pool",
+					Namespace: "default",
+				},
+			}
+			result, err := provider.TriggerProvision(ctx, hostPool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("100"))
+			Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
+		})
+
+		It("should trigger deprovision for ClusterOrder", func() {
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseReady,
+				},
+			}
+			result, err := provider.TriggerDeprovision(ctx, clusterOrder)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+			Expect(result.JobID).To(Equal("100"))
+		})
+
+		It("should trigger deprovision for HostPool", func() {
+			hostPool := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-host-pool",
+					Namespace: "default",
+				},
+				Status: v1alpha1.HostPoolStatus{
+					Phase: v1alpha1.HostPoolPhaseReady,
+				},
+			}
+			result, err := provider.TriggerDeprovision(ctx, hostPool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+			Expect(result.JobID).To(Equal("100"))
+		})
+
+		It("should get provision status for ClusterOrder", func() {
+			aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
+				return &aap.Job{
+					ID:     42,
+					Status: "successful",
+				}, nil
+			}
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+			}
+			status, err := provider.GetProvisionStatus(ctx, clusterOrder, "42")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+		})
+
+		It("should get provision status for HostPool", func() {
+			aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
+				return &aap.Job{
+					ID:     42,
+					Status: "successful",
+				}, nil
+			}
+			hostPool := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-host-pool",
+					Namespace: "default",
+				},
+			}
+			status, err := provider.GetProvisionStatus(ctx, hostPool, "42")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+		})
+	})
 })
