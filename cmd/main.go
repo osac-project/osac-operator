@@ -408,7 +408,7 @@ func main() {
 	providerTypeStr := os.Getenv(envProvisioningProvider)
 	providerType := provisioning.ProviderType(providerTypeStr)
 
-	// For backward compatibility: if CLOUDKIT_PROVISIONING_PROVIDER not set, check legacy per-CR vars
+	// For backward compatibility: if OSAC_PROVISIONING_PROVIDER not set, check legacy per-CR vars
 	// But generally, one provider instance serves all CRs
 	var sharedProvider provisioning.ProvisioningProvider
 	var statusPollInterval time.Duration
@@ -419,10 +419,10 @@ func main() {
 		// Read all webhook URLs for EDA provider (one per resource type)
 		computeInstanceProvisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
 		computeInstanceDeprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
-		clusterOrderProvisionWebhook := os.Getenv("CLOUDKIT_CLUSTER_CREATE_WEBHOOK")
-		clusterOrderDeprovisionWebhook := os.Getenv("CLOUDKIT_CLUSTER_DELETE_WEBHOOK")
-		hostPoolProvisionWebhook := os.Getenv("CLOUDKIT_HOSTPOOL_CREATE_WEBHOOK")
-		hostPoolDeprovisionWebhook := os.Getenv("CLOUDKIT_HOSTPOOL_DELETE_WEBHOOK")
+		clusterOrderProvisionWebhook := os.Getenv("OSAC_CLUSTER_CREATE_WEBHOOK")
+		clusterOrderDeprovisionWebhook := os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK")
+		hostPoolProvisionWebhook := os.Getenv("OSAC_HOSTPOOL_CREATE_WEBHOOK")
+		hostPoolDeprovisionWebhook := os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK")
 
 		// Read AAP templates (shared across all resource types)
 		provisionTemplate := os.Getenv(envAAPProvisionTemplate)
