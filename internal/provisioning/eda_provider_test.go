@@ -386,4 +386,131 @@ var _ = Describe("EDAProvider", func() {
 			})
 		})
 	})
+
+	Describe("Multi-resource type support", func() {
+		BeforeEach(func() {
+			// Configure with URLs for all resource types
+			provider = provisioning.NewEDAProvider(
+				webhookClient,
+				"http://ci-create", "http://ci-delete",
+				"http://co-create", "http://co-delete",
+				"http://hp-create", "http://hp-delete",
+			)
+		})
+
+		It("should use ClusterOrder webhook URL for provision", func() {
+			webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+				Expect(url).To(Equal("http://co-create"))
+				return 0, nil
+			}
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+			}
+			result, err := provider.TriggerProvision(ctx, clusterOrder)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("eda-webhook-1"))
+		})
+
+		It("should use HostPool webhook URL for provision", func() {
+			webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+				Expect(url).To(Equal("http://hp-create"))
+				return 0, nil
+			}
+			hostPool := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-host-pool",
+					Namespace: "default",
+				},
+			}
+			result, err := provider.TriggerProvision(ctx, hostPool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("eda-webhook-1"))
+		})
+
+		It("should use correct finalizer name for ClusterOrder deprovision", func() {
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-cluster-order",
+					Namespace:  "default",
+					Finalizers: []string{"osac.openshift.io/clusterorder-aap"},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseReady,
+				},
+			}
+			webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+				Expect(url).To(Equal("http://co-delete"))
+				return 0, nil
+			}
+			result, err := provider.TriggerDeprovision(ctx, clusterOrder)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+		})
+
+		It("should use correct finalizer name for HostPool deprovision", func() {
+			hostPool := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-host-pool",
+					Namespace:  "default",
+					Finalizers: []string{"osac.openshift.io/hostpool-aap"},
+				},
+				Status: v1alpha1.HostPoolStatus{
+					Phase: v1alpha1.HostPoolPhaseReady,
+				},
+			}
+			webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
+				Expect(url).To(Equal("http://hp-delete"))
+				return 0, nil
+			}
+			result, err := provider.TriggerDeprovision(ctx, hostPool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+		})
+
+		It("should skip deprovision when ClusterOrder has no AAP finalizer", func() {
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+			}
+			result, err := provider.TriggerDeprovision(ctx, clusterOrder)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionSkipped))
+		})
+
+		It("should return error for unsupported resource type on provision", func() {
+			provider = provisioning.NewEDAProvider(
+				webhookClient,
+				"http://ci-create", "http://ci-delete",
+				"", "", "", "",
+			)
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+				},
+			}
+			_, err := provider.TriggerProvision(ctx, clusterOrder)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not configured"))
+		})
+
+		It("should detect ClusterOrder finalizer removal for deprovision status", func() {
+			clusterOrder := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster-order",
+					Namespace: "default",
+					// No AAP finalizer present = removed
+				},
+			}
+			status, err := provider.GetDeprovisionStatus(ctx, clusterOrder, "job-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(status.Message).To(Equal("AAP playbook completed (finalizer removed)"))
+		})
+	})
 })
