@@ -384,7 +384,7 @@ func (r *HostPoolReconciler) handleDelete(ctx context.Context, req reconcile.Req
 			log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil
 	}
 
 	// Allow kubernetes to delete the hostpool

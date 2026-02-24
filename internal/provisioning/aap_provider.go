@@ -54,58 +54,58 @@ func getJobsFromResource(resource client.Object) ([]v1alpha1.JobStatus, error) {
 }
 
 // isResourceReady returns true if the resource is in a Ready/Running state.
-func isResourceReady(resource client.Object) bool {
+func isResourceReady(resource client.Object) (bool, error) {
 	switch r := resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return r.Status.Phase == v1alpha1.ComputeInstancePhaseRunning
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseRunning, nil
 	case *v1alpha1.ClusterOrder:
-		return r.Status.Phase == v1alpha1.ClusterOrderPhaseReady
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseReady, nil
 	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseReady
+		return r.Status.Phase == v1alpha1.HostPoolPhaseReady, nil
 	default:
-		return false
+		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
 }
 
 // isResourceFailed returns true if the resource is in a Failed state.
-func isResourceFailed(resource client.Object) bool {
+func isResourceFailed(resource client.Object) (bool, error) {
 	switch r := resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return r.Status.Phase == v1alpha1.ComputeInstancePhaseFailed
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseFailed, nil
 	case *v1alpha1.ClusterOrder:
-		return r.Status.Phase == v1alpha1.ClusterOrderPhaseFailed
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseFailed, nil
 	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseFailed
+		return r.Status.Phase == v1alpha1.HostPoolPhaseFailed, nil
 	default:
-		return false
+		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
 }
 
 // isResourceDeleting returns true if the resource is in a Deleting state.
-func isResourceDeleting(resource client.Object) bool {
+func isResourceDeleting(resource client.Object) (bool, error) {
 	switch r := resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return r.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting
+		return r.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting, nil
 	case *v1alpha1.ClusterOrder:
-		return r.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting
+		return r.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting, nil
 	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseDeleting
+		return r.Status.Phase == v1alpha1.HostPoolPhaseDeleting, nil
 	default:
-		return false
+		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
 }
 
 // getResourcePhase returns the phase as a string for logging.
-func getResourcePhase(resource client.Object) string {
+func getResourcePhase(resource client.Object) (string, error) {
 	switch r := resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return string(r.Status.Phase)
+		return string(r.Status.Phase), nil
 	case *v1alpha1.ClusterOrder:
-		return string(r.Status.Phase)
+		return string(r.Status.Phase), nil
 	case *v1alpha1.HostPool:
-		return string(r.Status.Phase)
+		return string(r.Status.Phase), nil
 	default:
-		return "unknown"
+		return "", fmt.Errorf("unsupported resource type: %T", resource)
 	}
 }
 
@@ -231,23 +231,32 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 	// Check if this is an EDA job ID (provider switch scenario)
 	// EDA job IDs start with "eda-webhook-", AAP job IDs are numeric
 	if IsEDAJobID(latestProvisionJob.JobID) {
-		phase := getResourcePhase(resource)
+		phase, err := getResourcePhase(resource)
+		if err != nil {
+			return false, nil, err
+		}
 		log.Info("detected EDA provision job (provider switch scenario), checking resource phase", "jobID", latestProvisionJob.JobID, "phase", phase)
 		// EDA jobs can't be queried via AAP API or cancelled by AAP provider
 		// Check the resource phase to determine if provisioning is complete
 
 		// Ready/Running or Failed - provision is done, ready to deprovision
-		if isResourceReady(resource) {
+		if ready, err := isResourceReady(resource); err != nil {
+			return false, nil, err
+		} else if ready {
 			log.Info("EDA provision succeeded, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", phase)
 			return true, nil, nil
 		}
-		if isResourceFailed(resource) {
+		if failed, err := isResourceFailed(resource); err != nil {
+			return false, nil, err
+		} else if failed {
 			log.Info("EDA provision failed, ready to deprovision", "jobID", latestProvisionJob.JobID, "phase", phase)
 			return true, nil, nil
 		}
 
 		// Deleting phase - check if deprovision job already exists
-		if isResourceDeleting(resource) {
+		if deleting, err := isResourceDeleting(resource); err != nil {
+			return false, nil, err
+		} else if deleting {
 			// Check if deprovision job exists
 			latestDeprovisionJob := v1alpha1.FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
 			if latestDeprovisionJob == nil {
