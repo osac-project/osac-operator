@@ -24,6 +24,8 @@ managed:
 
 inputs:
 
+# TODO(MGMT-22638): Update to new BSR versions once fulfillment-api and
+# fulfillment-service PRs are merged and new versions are published to BSR.
 - module: buf.build/osac/fulfillment-api:v0.0.29
 - module: buf.build/osac/private-api:v0.0.38
 

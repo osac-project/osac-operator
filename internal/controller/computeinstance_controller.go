@@ -634,12 +634,6 @@ func (r *ComputeInstanceReconciler) initializeStatusConditions(instance *v1alpha
 	)
 	r.initializeStatusCondition(
 		instance,
-		v1alpha1.ComputeInstanceConditionDeleting,
-		metav1.ConditionFalse,
-		v1alpha1.ReasonInitialized,
-	)
-	r.initializeStatusCondition(
-		instance,
 		v1alpha1.ComputeInstanceConditionProgressing,
 		metav1.ConditionTrue,
 		v1alpha1.ReasonInitialized,

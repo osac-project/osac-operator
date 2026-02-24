@@ -83,9 +83,6 @@ const (
 	// ComputeInstanceConditionAvailable means the compute instance is available
 	ComputeInstanceConditionAvailable ComputeInstanceConditionType = "Available"
 
-	// ComputeInstanceConditionDeleting means the compute instance is being deleted
-	ComputeInstanceConditionDeleting ComputeInstanceConditionType = "Deleting"
-
 	// ComputeInstanceConditionRestartInProgress indicates a restart is in progress
 	ComputeInstanceConditionRestartInProgress ComputeInstanceConditionType = "RestartInProgress"
 
