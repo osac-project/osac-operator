@@ -20,6 +20,15 @@ spec:
     - jsonPath: .spec.templateID
       name: Template
       type: string
+    - jsonPath: .spec.cores
+      name: Cores
+      type: integer
+    - jsonPath: .spec.memoryGiB
+      name: Memory
+      type: integer
+    - jsonPath: .spec.runStrategy
+      name: RunStrategy
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -48,9 +57,89 @@ spec:
           spec:
             description: spec defines the desired state of ComputeInstance
             properties:
+              additionalDisks:
+                description: AdditionalDisks are supplementary disks
+                items:
+                  description: DiskSpec defines disk configuration
+                  properties:
+                    sizeGiB:
+                      description: SizeGiB is the size of the disk in gibibytes
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    storageClass:
+                      description: |-
+                        StorageClass is the Kubernetes storage class to use for this disk
+                        If not specified, the default storage class will be used
+                      type: string
+                  required:
+                  - sizeGiB
+                  type: object
+                type: array
+                x-kubernetes-validations:
+                - message: additionalDisks is immutable
+                  rule: self == oldSelf
+              bootDisk:
+                description: BootDisk is the primary boot disk
+                properties:
+                  sizeGiB:
+                    description: SizeGiB is the size of the disk in gibibytes
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  storageClass:
+                    description: |-
+                      StorageClass is the Kubernetes storage class to use for this disk
+                      If not specified, the default storage class will be used
+                    type: string
+                required:
+                - sizeGiB
+                type: object
+                x-kubernetes-validations:
+                - message: bootDisk is immutable
+                  rule: self == oldSelf
+              cores:
+                description: Cores is the number of CPU cores
+                format: int32
+                maximum: 128
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: cores is immutable
+                  rule: self == oldSelf
+              image:
+                description: Image defines the VM image configuration
+                properties:
+                  sourceRef:
+                    description: |-
+                      SourceRef is the OCI image reference for the VM
+                      Example: "quay.io/fedora/fedora-coreos:stable"
+                    minLength: 1
+                    type: string
+                  sourceType:
+                    description: SourceType specifies the type of image source (currently
+                      only "registry" supported)
+                    enum:
+                    - registry
+                    type: string
+                required:
+                - sourceRef
+                - sourceType
+                type: object
+                x-kubernetes-validations:
+                - message: image is immutable
+                  rule: self == oldSelf
+              memoryGiB:
+                description: MemoryGiB is the memory in gibibytes
+                format: int32
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: memoryGiB is immutable
+                  rule: self == oldSelf
               restartRequestedAt:
                 description: |-
-                  RestartRequestedAt is a timestamp signal to request a VM restart.
+                  RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 
                   Set this field to the current time (usually NOW) to request a restart.
                   The controller will execute the restart if this timestamp is greater than
@@ -64,6 +153,18 @@ spec:
                   scheduled maintenance windows if needed.
                 format: date-time
                 type: string
+              runStrategy:
+                description: RunStrategy controls VM running state (MUTABLE)
+                enum:
+                - Always
+                - Halted
+                type: string
+              sshKey:
+                description: SSHKey is the SSH public key
+                type: string
+                x-kubernetes-validations:
+                - message: sshKey is immutable
+                  rule: self == oldSelf
               templateID:
                 description: TemplateID is the unique identifier of the compute instance
                   template to use when creating this compute instance
@@ -71,10 +172,34 @@ spec:
                 type: string
               templateParameters:
                 description: |-
-                  TemplateParameters is a JSON-encoded map of the parameter values for the
-                  selected compute instance template.
+                  TemplateParameters allows passing additional template-specific parameters as JSON-encoded key-value pairs.
+                  This complements the explicit fields (cores, memoryGiB, etc.) and is used for:
+                  - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
+                  - Custom parameters defined by specific templates
                 type: string
+              userDataSecretRef:
+                description: UserDataSecretRef references cloud-init user data
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: userDataSecretRef is immutable
+                  rule: self == oldSelf
             required:
+            - bootDisk
+            - cores
+            - image
+            - memoryGiB
+            - runStrategy
             - templateID
             type: object
           status:

@@ -290,11 +290,10 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		return ctrl.Result{}, nil
 	}
 
-	// Check if we already have a provision job
+	// Check if we need to trigger a (new) provision job
 	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if latestProvisionJob == nil || latestProvisionJob.JobID == "" {
-		// No job yet, trigger provisioning
+	if r.needsProvisionJob(instance, latestProvisionJob) {
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
 		if err != nil {
@@ -367,7 +366,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	// Job failed
-	log.Error(nil, "provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
+	log.Info("provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
 	instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
 	return ctrl.Result{}, nil
 }
@@ -497,7 +496,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	// Check policy stored in job status
 	if latestDeprovisionJob.BlockDeletionOnFailure {
 		// Block deletion to prevent orphaned resources
-		log.Error(nil, "deprovision job failed, blocking deletion to prevent orphaned resources",
+		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
 			"jobID", latestDeprovisionJob.JobID,
 			"state", status.State,
 			"message", updatedJob.Message)
@@ -515,13 +514,20 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	r.initializeStatusConditions(instance)
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-
 	if controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Initialize status after the finalizer update, because r.Update() overwrites
+	// the in-memory status with the server response (status subresource is separate).
+	r.initializeStatusConditions(instance)
+	// Only set Starting phase for first-time provisioning.
+	// If the instance was already successfully provisioned (has a ReconciledConfigVersion),
+	// keep the current phase to avoid regressing from Running to Starting during re-provisioning.
+	if instance.Status.ReconciledConfigVersion == "" {
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 	}
 
 	// Get the tenant
@@ -530,15 +536,28 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// If the tenant is being deleted, wait for deletion to complete before creating a new one.
+	// This can happen when a previous ComputeInstance owned the tenant via ownerReference
+	// and its deletion triggered garbage collection on the shared tenant.
+	if tenant != nil && tenant.DeletionTimestamp != nil {
+		log.Info("tenant is being deleted, waiting for deletion to complete", "tenant", tenant.GetName())
+		instance.SetTenantReferenceName("")
+		instance.SetTenantReferenceNamespace("")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	// If the tenant doesn't exist, create it and requeue
 	if tenant == nil {
-		return ctrl.Result{}, r.createOrUpdateTenant(ctx, instance)
+		if err := r.createOrUpdateTenant(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// If the tenant is not ready, requeue
 	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
 		log.Info("tenant is not ready, requeueing", "tenant", tenant.GetName())
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAccepted, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
@@ -584,7 +603,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+	// Only regress to Starting for first-time provisioning; keep Running during re-provisioning
+	if instance.Status.ReconciledConfigVersion == "" {
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+	}
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProgressing, metav1.ConditionTrue, "Applying configuration", v1alpha1.ReasonAsExpected)
 
 	// Handle provisioning via provider abstraction
@@ -652,7 +674,7 @@ func (r *ComputeInstanceReconciler) initializeStatusConditions(instance *v1alpha
 	)
 }
 
-// initializeStatusCondition initializes a condition, but only it is not already initialized.
+// initializeStatusCondition initializes a condition, but only if it is not already initialized.
 func (r *ComputeInstanceReconciler) initializeStatusCondition(instance *v1alpha1.ComputeInstance,
 	conditionType v1alpha1.ComputeInstanceConditionType, status metav1.ConditionStatus, reason string) {
 	if instance.Status.Conditions == nil {
@@ -717,6 +739,18 @@ func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMach
 func kvVMHasConditionWithStatus(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType, status corev1.ConditionStatus) bool {
 	c := kvVMGetCondition(vm, cond)
 	return c != nil && c.Status == status
+}
+
+// needsProvisionJob returns true when we should trigger a new provision job.
+// This is the case when no job exists yet, or when the spec has changed since the last successful provision.
+func (r *ComputeInstanceReconciler) needsProvisionJob(instance *v1alpha1.ComputeInstance, latestJob *v1alpha1.JobStatus) bool {
+	if latestJob == nil || latestJob.JobID == "" {
+		return true
+	}
+	if !latestJob.State.IsTerminal() {
+		return false
+	}
+	return instance.Status.DesiredConfigVersion != instance.Status.ReconciledConfigVersion
 }
 
 // handleDesiredConfigVersion computes a version (hash) of the spec (using FNV-1a) and stores it as hexadecimal in status.DesiredConfigVersion.

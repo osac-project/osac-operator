@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,6 +31,8 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
+
+const testTemplateParams = `{"key": "value"}`
 
 var _ = Describe("ComputeInstance Controller", func() {
 	Context("When reconciling a resource", func() {
@@ -57,9 +60,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 							osacTenantAnnotation: tenantName,
 						},
 					},
-					Spec: osacv1alpha1.ComputeInstanceSpec{
-						TemplateID: "test_template",
-					},
+					Spec: newTestComputeInstanceSpec("test_template"),
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -149,15 +150,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should compute and store a version of the spec", func() {
+			spec := newTestComputeInstanceSpec("template-1")
+			spec.TemplateParameters = testTemplateParams
 			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-hash",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec,
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm)
@@ -166,15 +166,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should be idempotent - same spec produces same version", func() {
+			spec := newTestComputeInstanceSpec("template-1")
+			spec.TemplateParameters = testTemplateParams
 			vm := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-idempotent",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec,
 			}
 
 			// First call
@@ -197,26 +196,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce different versions for different specs", func() {
+			spec1 := newTestComputeInstanceSpec("template-1")
+			spec1.TemplateParameters = `{"key": "value1"}`
 			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value1"}`,
-				},
+				Spec: spec1,
 			}
 
+			spec2 := newTestComputeInstanceSpec("template-1")
+			spec2.TemplateParameters = `{"key": "value2"}`
 			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-diff-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value2"}`,
-				},
+				Spec: spec2,
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm1)
@@ -234,9 +231,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-template-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			vm2 := &osacv1alpha1.ComputeInstance{
@@ -244,9 +239,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-template-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-2",
-				},
+				Spec: newTestComputeInstanceSpec("template-2"),
 			}
 
 			err := reconciler.handleDesiredConfigVersion(ctx, vm1)
@@ -259,26 +252,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 
 		It("should produce same version regardless of order of calls", func() {
+			spec1 := newTestComputeInstanceSpec("template-1")
+			spec1.TemplateParameters = testTemplateParams
 			vm1 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-1",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec1,
 			}
 
+			spec2 := newTestComputeInstanceSpec("template-1")
+			spec2.TemplateParameters = testTemplateParams
 			vm2 := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-order-2",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template-1",
-					TemplateParameters: `{"key": "value"}`,
-				},
+				Spec: spec2,
 			}
 
 			// Call on vm1 first
@@ -315,9 +306,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacAAPReconciledConfigVersionAnnotation: expectedVersion,
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			err := reconciler.handleReconciledConfigVersion(ctx, vm)
@@ -332,9 +321,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Namespace:   "default",
 					Annotations: map[string]string{},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
@@ -351,9 +338,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      "test-ci-nil-annotations",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					ReconciledConfigVersion: "some-old-version",
 				},
@@ -373,9 +358,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacAAPReconciledConfigVersionAnnotation: "version-1",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "template-1",
-				},
+				Spec: newTestComputeInstanceSpec("template-1"),
 			}
 
 			// First call
@@ -578,7 +561,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				baseTime := time.Now().UTC()
 				for i := 1; i <= 15; i++ {
 					newJob := osacv1alpha1.JobStatus{
-						JobID:     "job-" + string(rune('0'+i)),
+						JobID:     fmt.Sprintf("job-%d", i),
 						Type:      osacv1alpha1.JobTypeProvision,
 						Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Second)),
 						State:     osacv1alpha1.JobStatePending,
@@ -722,6 +705,305 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(jobs[0].Message).To(Equal("Failed with error"))
 				Expect(jobs[0].BlockDeletionOnFailure).To(BeTrue())
 			})
+		})
+
+		Describe("needsProvisionJob", func() {
+			var reconciler *ComputeInstanceReconciler
+
+			BeforeEach(func() {
+				reconciler = &ComputeInstanceReconciler{}
+			})
+
+			It("should return true when no job exists", func() {
+				instance := &osacv1alpha1.ComputeInstance{}
+				Expect(reconciler.needsProvisionJob(instance, nil)).To(BeTrue())
+			})
+
+			It("should return true when job has empty ID", func() {
+				instance := &osacv1alpha1.ComputeInstance{}
+				job := &osacv1alpha1.JobStatus{JobID: ""}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeTrue())
+			})
+
+			It("should return false when job is still running", func() {
+				instance := &osacv1alpha1.ComputeInstance{}
+				job := &osacv1alpha1.JobStatus{
+					JobID: "job-1",
+					State: osacv1alpha1.JobStateRunning,
+				}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeFalse())
+			})
+
+			It("should return false when job is pending", func() {
+				instance := &osacv1alpha1.ComputeInstance{}
+				job := &osacv1alpha1.JobStatus{
+					JobID: "job-1",
+					State: osacv1alpha1.JobStatePending,
+				}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeFalse())
+			})
+
+			It("should return false when job succeeded and config versions match", func() {
+				instance := &osacv1alpha1.ComputeInstance{
+					Status: osacv1alpha1.ComputeInstanceStatus{
+						DesiredConfigVersion:    "abc123",
+						ReconciledConfigVersion: "abc123",
+					},
+				}
+				job := &osacv1alpha1.JobStatus{
+					JobID: "job-1",
+					State: osacv1alpha1.JobStateSucceeded,
+				}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeFalse())
+			})
+
+			It("should return true when job succeeded but config versions differ", func() {
+				instance := &osacv1alpha1.ComputeInstance{
+					Status: osacv1alpha1.ComputeInstanceStatus{
+						DesiredConfigVersion:    "new-version",
+						ReconciledConfigVersion: "old-version",
+					},
+				}
+				job := &osacv1alpha1.JobStatus{
+					JobID: "job-1",
+					State: osacv1alpha1.JobStateSucceeded,
+				}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeTrue())
+			})
+
+			It("should return true when job failed and config versions differ", func() {
+				instance := &osacv1alpha1.ComputeInstance{
+					Status: osacv1alpha1.ComputeInstanceStatus{
+						DesiredConfigVersion:    "new-version",
+						ReconciledConfigVersion: "old-version",
+					},
+				}
+				job := &osacv1alpha1.JobStatus{
+					JobID: "job-1",
+					State: osacv1alpha1.JobStateFailed,
+				}
+				Expect(reconciler.needsProvisionJob(instance, job)).To(BeTrue())
+			})
+		})
+	})
+
+	Context("Phase regression prevention", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+		}
+
+		It("should set Starting phase on first-time provisioning", func() {
+			const resourceName = "test-phase-first-provision"
+			const tenantName = "tenant-phase-first"
+			defer deleteCI(resourceName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := &ComputeInstanceReconciler{
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
+				StatusPollInterval:   100 * time.Millisecond,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+		})
+
+		It("should not regress phase to Starting when ReconciledConfigVersion is set", func() {
+			const resourceName = "test-phase-no-regress"
+			const tenantName = "tenant-phase-noregress"
+			defer deleteCI(resourceName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			// Simulate a previously provisioned instance by setting status
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			ci.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			ci.Status.ReconciledConfigVersion = "some-version"
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+
+			controllerReconciler := &ComputeInstanceReconciler{
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
+				StatusPollInterval:   100 * time.Millisecond,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			// Phase should NOT have regressed to Starting
+			Expect(ci.Status.Phase).NotTo(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+		})
+	})
+
+	Context("Tenant lifecycle", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+		}
+
+		deleteTenant := func(name string) {
+			tenant := &osacv1alpha1.Tenant{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, tenant); err == nil {
+				tenant.Finalizers = nil
+				_ = k8sClient.Update(ctx, tenant)
+				_ = k8sClient.Delete(ctx, tenant)
+			}
+		}
+
+		It("should clear tenant reference and requeue when tenant has DeletionTimestamp", func() {
+			const resourceName = "test-tenant-gc-clear"
+			const tenantName = "tenant-gc-clear"
+			tenantObjName := getTenantObjectName(tenantName)
+			defer deleteCI(resourceName)
+			defer deleteTenant(tenantObjName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := &ComputeInstanceReconciler{
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
+				StatusPollInterval:   100 * time.Millisecond,
+			}
+
+			// First reconcile: creates tenant and sets reference
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify tenant was created and reference was set
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			Expect(ci.Status.TenantReference.Name).NotTo(BeEmpty())
+
+			// Add finalizer to tenant to keep it in terminating state
+			tenant := &osacv1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenantObjName, Namespace: namespaceName}, tenant)).To(Succeed())
+			tenant.Finalizers = append(tenant.Finalizers, "osac.openshift.io/test")
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+
+			// Delete the tenant - it will be stuck in terminating due to finalizer
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+
+			// Reconcile again - should detect terminating tenant
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(10 * time.Second))
+
+			// Verify tenant reference was cleared
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			Expect(ci.Status.TenantReference.Name).To(BeEmpty())
+			Expect(ci.Status.TenantReference.Namespace).To(BeEmpty())
+		})
+
+		It("should not create tenant when existing tenant with same name is being deleted", func() {
+			const resourceName = "test-tenant-gc-block"
+			const tenantName = "tenant-gc-block"
+			tenantObjName := getTenantObjectName(tenantName)
+			defer deleteCI(resourceName)
+			defer deleteTenant(tenantObjName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+
+			// Pre-create a tenant with a finalizer, then delete it to put it in terminating state
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       tenantObjName,
+					Namespace:  namespaceName,
+					Finalizers: []string{"osac.openshift.io/test"},
+				},
+				Spec: osacv1alpha1.TenantSpec{
+					Name: tenantName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+
+			// Create a ComputeInstance that would use the same tenant name
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := &ComputeInstanceReconciler{
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)},
+				StatusPollInterval:   100 * time.Millisecond,
+			}
+
+			// Reconcile should fail because createOrUpdateTenant detects the terminating tenant
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("is being deleted"))
 		})
 	})
 })

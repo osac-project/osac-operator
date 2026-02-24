@@ -17,25 +17,117 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// ImageSourceType defines valid image source types
+// +kubebuilder:validation:Enum=registry
+type ImageSourceType string
+
+const (
+	// ImageSourceTypeRegistry indicates the image is from an OCI registry
+	ImageSourceTypeRegistry ImageSourceType = "registry"
+)
+
+// ImageSpec defines the VM image configuration
+type ImageSpec struct {
+	// SourceType specifies the type of image source (currently only "registry" supported)
+	// +kubebuilder:validation:Required
+	SourceType ImageSourceType `json:"sourceType"`
+
+	// SourceRef is the OCI image reference for the VM
+	// Example: "quay.io/fedora/fedora-coreos:stable"
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	SourceRef string `json:"sourceRef"`
+}
+
+// DiskSpec defines disk configuration
+type DiskSpec struct {
+	// SizeGiB is the size of the disk in gibibytes
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	SizeGiB int32 `json:"sizeGiB"`
+
+	// StorageClass is the Kubernetes storage class to use for this disk
+	// If not specified, the default storage class will be used
+	// +kubebuilder:validation:Optional
+	StorageClass string `json:"storageClass,omitempty"`
+}
+
+// RunStrategyType defines valid VM run strategies
+// +kubebuilder:validation:Enum=Always;Halted
+type RunStrategyType string
+
+const (
+	// RunStrategyAlways means the VM should always be running
+	RunStrategyAlways RunStrategyType = "Always"
+
+	// RunStrategyHalted means the VM should be stopped
+	RunStrategyHalted RunStrategyType = "Halted"
+)
+
 // ComputeInstanceSpec defines the desired state of ComputeInstance
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Pattern=^[a-zA-Z_][a-zA-Z0-9._]*$
-	TemplateID string `json:"templateID,omitempty"`
-	// TemplateParameters is a JSON-encoded map of the parameter values for the
-	// selected compute instance template.
+	TemplateID string `json:"templateID"`
+
+	// TemplateParameters allows passing additional template-specific parameters as JSON-encoded key-value pairs.
+	// This complements the explicit fields (cores, memoryGiB, etc.) and is used for:
+	// - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
+	// - Custom parameters defined by specific templates
 	// +kubebuilder:validation:Optional
 	TemplateParameters string `json:"templateParameters,omitempty"`
 
-	// RestartRequestedAt is a timestamp signal to request a VM restart.
+	// Image defines the VM image configuration
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image is immutable"
+	Image ImageSpec `json:"image"`
+
+	// Cores is the number of CPU cores
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cores is immutable"
+	Cores int32 `json:"cores"`
+
+	// MemoryGiB is the memory in gibibytes
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="memoryGiB is immutable"
+	MemoryGiB int32 `json:"memoryGiB"`
+
+	// BootDisk is the primary boot disk
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="bootDisk is immutable"
+	BootDisk DiskSpec `json:"bootDisk"`
+
+	// AdditionalDisks are supplementary disks
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="additionalDisks is immutable"
+	AdditionalDisks []DiskSpec `json:"additionalDisks,omitempty"`
+
+	// RunStrategy controls VM running state (MUTABLE)
+	// +kubebuilder:validation:Required
+	RunStrategy RunStrategyType `json:"runStrategy"`
+
+	// UserDataSecretRef references cloud-init user data
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="userDataSecretRef is immutable"
+	UserDataSecretRef *corev1.LocalObjectReference `json:"userDataSecretRef,omitempty"`
+
+	// SSHKey is the SSH public key
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sshKey is immutable"
+	SSHKey string `json:"sshKey,omitempty"`
+
+	// RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 	//
 	// Set this field to the current time (usually NOW) to request a restart.
 	// The controller will execute the restart if this timestamp is greater than
@@ -48,7 +140,6 @@ type ComputeInstanceSpec struct {
 	// External schedulers can set this field on a schedule to implement
 	// scheduled maintenance windows if needed.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	RestartRequestedAt *metav1.Time `json:"restartRequestedAt,omitempty"`
 }
@@ -158,6 +249,9 @@ type ComputeInstanceStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ci
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
+// +kubebuilder:printcolumn:name="Cores",type=integer,JSONPath=`.spec.cores`
+// +kubebuilder:printcolumn:name="Memory",type=integer,JSONPath=`.spec.memoryGiB`
+// +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
 // ComputeInstance is the Schema for the computeinstances API

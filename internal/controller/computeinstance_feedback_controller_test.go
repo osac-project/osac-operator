@@ -153,9 +153,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Name:      resourceName,
 					Namespace: computeInstanceNS,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 		})
@@ -217,9 +215,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 					Finalizers: []string{osacComputeInstanceFeedbackFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -321,9 +317,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -393,9 +387,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 					Finalizers: []string{osacComputeInstanceFinalizer},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
@@ -458,9 +450,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 						osacComputeInstanceIDLabel: ciID,
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 			// Update status separately since Status is a subresource - need to get fresh copy

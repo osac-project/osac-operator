@@ -183,9 +183,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 						osacTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -249,9 +247,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 						osacTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -291,9 +287,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 						osacTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -334,9 +328,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 						osacTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -375,9 +367,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 						osacTenantAnnotation: "test-tenant",
 					},
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID: "test_template",
-				},
+				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())

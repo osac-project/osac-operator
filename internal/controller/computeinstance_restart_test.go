@@ -44,15 +44,14 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 	Context("handleRestartRequest", func() {
 		It("should skip when RestartRequestedAt is nil", func() {
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = nil // No restart requested
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-no-restart",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: nil, // No restart requested
-				},
+				Spec: spec,
 			}
 
 			result, err := reconciler.handleRestartRequest(ctx, ci)
@@ -62,16 +61,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 		It("should process restart when RestartRequestedAt is set and LastRestartedAt is nil", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-first-restart",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					LastRestartedAt: nil, // First restart
 				},
@@ -91,15 +89,14 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 		It("should skip when RestartRequestedAt equals LastRestartedAt", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-equal-timestamps",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					LastRestartedAt: &now, // Already processed
 				},
@@ -113,15 +110,14 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		It("should skip when RestartRequestedAt is before LastRestartedAt", func() {
 			past := metav1.NewTime(time.Now().UTC().Add(-1 * time.Hour))
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &past // Old request
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-old-request",
 					Namespace: "default",
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &past, // Old request
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					LastRestartedAt: &now, // Already restarted more recently
 				},
@@ -135,16 +131,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		It("should process restart when RestartRequestedAt is after LastRestartedAt", func() {
 			past := metav1.NewTime(time.Now().UTC().Add(-1 * time.Hour))
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now // New request
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-new-request",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now, // New request
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					LastRestartedAt: &past, // Old restart
 				},
@@ -165,16 +160,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 	Context("performRestart", func() {
 		It("should set RestartFailed condition when VirtualMachineReference is nil", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-no-vm-ref",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 			}
 
 			// Create the resource in k8s so we can update status
@@ -206,16 +200,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 		It("should set RestartInProgress but NOT set lastRestartedAt", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-restart-initiated",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 			}
 
 			// Create the CI resource
@@ -265,16 +258,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 	Context("checkRestartCompletion", func() {
 		It("should not complete restart when VMI not found", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-vmi-not-found",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
 						KubeVirtVirtualMachineName: "non-existent-vmi",
@@ -291,16 +283,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 
 		It("should not complete restart when VMI created before restart request", func() {
 			now := metav1.NewTime(time.Now().UTC())
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &now
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-old-vmi",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &now,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
 						KubeVirtVirtualMachineName: "old-vmi",
@@ -343,16 +334,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		It("should complete restart when VMI created after restart request", func() {
 			// Set restart request time in the past so any VMI created "now" will be after it
 			restartRequestedAt := metav1.NewTime(time.Now().UTC().Add(-5 * time.Second))
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &restartRequestedAt
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-new-vmi",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &restartRequestedAt,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
 						KubeVirtVirtualMachineName: "new-vmi",
@@ -397,16 +387,15 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 		It("should check restart completion when RestartInProgress is true", func() {
 			// Set restart request time in the past so any VMI created "now" will be after it
 			restartRequestedAt := metav1.NewTime(time.Now().UTC().Add(-5 * time.Second))
+			spec := newTestComputeInstanceSpec("template_1")
+			spec.RestartRequestedAt = &restartRequestedAt
 			ci := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-ci-in-progress",
 					Namespace:  "default",
 					Generation: 1,
 				},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					TemplateID:         "template_1",
-					RestartRequestedAt: &restartRequestedAt,
-				},
+				Spec: spec,
 				Status: osacv1alpha1.ComputeInstanceStatus{
 					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
 						KubeVirtVirtualMachineName: "vmi-in-progress",

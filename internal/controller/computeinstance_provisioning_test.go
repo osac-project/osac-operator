@@ -101,9 +101,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 				Name:      "test-instance",
 				Namespace: "default",
 			},
-			Spec: osacv1alpha1.ComputeInstanceSpec{
-				TemplateID: "test_template",
-			},
+			Spec: newTestComputeInstanceSpec("test_template"),
 		}
 		reconciler = &ComputeInstanceReconciler{
 			Client:             k8sClient,
