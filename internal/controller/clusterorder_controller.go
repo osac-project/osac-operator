@@ -522,7 +522,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ ctrl.Reques
 			}
 		}
 	} else {
-		// If we get his far, we are no longer monitoring any kubernetes resources.
+		// If we get this far, we are no longer monitoring any kubernetes resources.
 		// Allow kubernetes to delete the clusterorder.
 		if controllerutil.ContainsFinalizer(instance, osacFinalizer) {
 			if controllerutil.RemoveFinalizer(instance, osacFinalizer) {

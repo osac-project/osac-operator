@@ -77,17 +77,16 @@ func NewEDAProvider(
 }
 
 // getWebhookURLs returns the appropriate create/delete webhook URLs for the resource type.
-func (p *EDAProvider) getWebhookURLs(resource client.Object) (createURL, deleteURL string) {
+func (p *EDAProvider) getWebhookURLs(resource client.Object) (createURL, deleteURL string, err error) {
 	switch resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return p.computeInstanceCreateURL, p.computeInstanceDeleteURL
+		return p.computeInstanceCreateURL, p.computeInstanceDeleteURL, nil
 	case *v1alpha1.ClusterOrder:
-		return p.clusterOrderCreateURL, p.clusterOrderDeleteURL
+		return p.clusterOrderCreateURL, p.clusterOrderDeleteURL, nil
 	case *v1alpha1.HostPool:
-		return p.hostPoolCreateURL, p.hostPoolDeleteURL
+		return p.hostPoolCreateURL, p.hostPoolDeleteURL, nil
 	default:
-		// Fallback to ComputeInstance URLs for unknown types
-		return p.computeInstanceCreateURL, p.computeInstanceDeleteURL
+		return "", "", fmt.Errorf("unsupported resource type: %T", resource)
 	}
 }
 
@@ -130,7 +129,10 @@ func generateEDAJobID(jobs []v1alpha1.JobStatus) string {
 // Generates a unique job ID by scanning existing jobs.
 // Returns RateLimitError if the request is rate-limited.
 func (p *EDAProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
-	createURL, _ := p.getWebhookURLs(resource)
+	createURL, _, err := p.getWebhookURLs(resource)
+	if err != nil {
+		return nil, err
+	}
 	if createURL == "" {
 		return nil, fmt.Errorf("create webhook URL not configured for resource type %T", resource)
 	}
@@ -192,7 +194,10 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	}
 
 	// Trigger webhook
-	_, deleteURL := p.getWebhookURLs(resource)
+	_, deleteURL, err := p.getWebhookURLs(resource)
+	if err != nil {
+		return nil, err
+	}
 	if deleteURL == "" {
 		return nil, fmt.Errorf("delete webhook URL not configured for resource type %T", resource)
 	}
