@@ -245,7 +245,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
+						Finalizers: []string{provisioning.ComputeInstanceAAPFinalizer},
 					},
 					Status: v1alpha1.ComputeInstanceStatus{
 						Jobs: []v1alpha1.JobStatus{
@@ -294,7 +294,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
+						Finalizers: []string{provisioning.ComputeInstanceAAPFinalizer},
 					},
 				}
 				webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
@@ -313,7 +313,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
+						Finalizers: []string{provisioning.ComputeInstanceAAPFinalizer},
 					},
 				}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "")
@@ -330,7 +330,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
+						Finalizers: []string{provisioning.ComputeInstanceAAPFinalizer},
 					},
 				}
 				provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
@@ -355,7 +355,7 @@ var _ = Describe("EDAProvider", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "test-instance",
 						Namespace:  "default",
-						Finalizers: []string{"osac.openshift.io/computeinstance-aap"},
+						Finalizers: []string{provisioning.ComputeInstanceAAPFinalizer},
 					},
 				}
 				status, err := provider.GetDeprovisionStatus(ctx, instance, "job-456")
@@ -432,7 +432,7 @@ var _ = Describe("EDAProvider", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-cluster-order",
 					Namespace:  "default",
-					Finalizers: []string{"osac.openshift.io/clusterorder-aap"},
+					Finalizers: []string{provisioning.ClusterOrderAAPFinalizer},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseReady,
@@ -452,7 +452,7 @@ var _ = Describe("EDAProvider", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "test-host-pool",
 					Namespace:  "default",
-					Finalizers: []string{"osac.openshift.io/hostpool-aap"},
+					Finalizers: []string{provisioning.HostPoolAAPFinalizer},
 				},
 				Status: v1alpha1.HostPoolStatus{
 					Phase: v1alpha1.HostPoolPhaseReady,
