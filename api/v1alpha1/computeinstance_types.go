@@ -37,13 +37,11 @@ const (
 type ImageSpec struct {
 	// SourceType specifies the type of image source (currently only "registry" supported)
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
 	SourceType ImageSourceType `json:"sourceType"`
 
 	// SourceRef is the OCI image reference for the VM
 	// Example: "quay.io/fedora/fedora-coreos:stable"
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MinLength=1
 	SourceRef string `json:"sourceRef"`
 }
@@ -52,14 +50,12 @@ type ImageSpec struct {
 type DiskSpec struct {
 	// SizeGiB is the size of the disk in gibibytes
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=integer
 	// +kubebuilder:validation:Minimum=1
 	SizeGiB int32 `json:"sizeGiB"`
 
 	// StorageClass is the Kubernetes storage class to use for this disk
 	// If not specified, the default storage class will be used
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
 	StorageClass string `json:"storageClass,omitempty"`
 }
 
@@ -79,7 +75,6 @@ const (
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Pattern=^[a-zA-Z_][a-zA-Z0-9._]*$
 	TemplateID string `json:"templateID"`
 
@@ -122,7 +117,6 @@ type ComputeInstanceSpec struct {
 
 	// RunStrategy controls VM running state (MUTABLE)
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
 	RunStrategy RunStrategyType `json:"runStrategy"`
 
 	// UserDataSecretRef references cloud-init user data
@@ -135,7 +129,7 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sshKey is immutable"
 	SSHKey string `json:"sshKey,omitempty"`
 
-	// RestartRequestedAt is a timestamp signal to request a VM restart.
+	// RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 	//
 	// Set this field to the current time (usually NOW) to request a restart.
 	// The controller will execute the restart if this timestamp is greater than
@@ -148,7 +142,6 @@ type ComputeInstanceSpec struct {
 	// External schedulers can set this field on a schedule to implement
 	// scheduled maintenance windows if needed.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	RestartRequestedAt *metav1.Time `json:"restartRequestedAt,omitempty"`
 }

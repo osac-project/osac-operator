@@ -140,7 +140,7 @@ spec:
                   rule: self == oldSelf
               restartRequestedAt:
                 description: |-
-                  RestartRequestedAt is a timestamp signal to request a VM restart.
+                  RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 
                   Set this field to the current time (usually NOW) to request a restart.
                   The controller will execute the restart if this timestamp is greater than
