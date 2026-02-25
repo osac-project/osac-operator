@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 )
@@ -90,40 +91,6 @@ func NewComputeInstanceReconciler(
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
 	}
-}
-
-// findJobByID finds a job by its ID in the jobs array.
-// Returns a pointer to the job if found, nil otherwise.
-// The returned pointer can be used to update the job in place.
-func findJobByID(jobs []v1alpha1.JobStatus, jobID string) *v1alpha1.JobStatus {
-	for i := range jobs {
-		if jobs[i].JobID == jobID {
-			return &jobs[i]
-		}
-	}
-	return nil
-}
-
-// appendJob adds a new job to the jobs array and trims to maxHistory.
-// Jobs are appended in chronological order (oldest first, newest last).
-func (r *ComputeInstanceReconciler) appendJob(jobs []v1alpha1.JobStatus, newJob v1alpha1.JobStatus) []v1alpha1.JobStatus {
-	jobs = append(jobs, newJob)
-	if len(jobs) > r.MaxJobHistory {
-		// Keep only the last MaxJobHistory jobs
-		jobs = jobs[len(jobs)-r.MaxJobHistory:]
-	}
-	return jobs
-}
-
-// updateJob updates an existing job by ID with new values.
-// Returns true if the job was found and updated, false otherwise.
-func updateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
-	job := findJobByID(jobs, updatedJob.JobID)
-	if job == nil {
-		return false
-	}
-	*job = updatedJob
-	return true
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
@@ -313,7 +280,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 				State:     v1alpha1.JobStateFailed,
 				Message:   fmt.Sprintf("Failed to trigger provisioning: %v", err),
 			}
-			instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+			instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
@@ -325,7 +292,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 			Message:                result.Message,
 			BlockDeletionOnFailure: false, // Provision failures don't block deletion
 		}
-		instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+		instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 		log.Info("provisioning job triggered", "jobID", result.JobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
@@ -336,7 +303,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		log.Error(err, "failed to get provision job status", "jobID", latestProvisionJob.JobID)
 		updatedJob := *latestProvisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		updateJob(instance.Status.Jobs, updatedJob)
+		helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
@@ -347,7 +314,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	if status.ErrorDetails != "" {
 		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
-	updateJob(instance.Status.Jobs, updatedJob)
+	helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
@@ -420,7 +387,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
 					updatedJob.Message = result.ProvisionJobStatus.Message
-					updateJob(instance.Status.Jobs, updatedJob)
+					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 					log.Info("updated provision job status while waiting for deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
 				}
 			}
@@ -441,7 +408,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
 					updatedJob.Message = result.ProvisionJobStatus.Message
-					updateJob(instance.Status.Jobs, updatedJob)
+					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 					log.Info("updated provision job status before starting deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
 				}
 			}
@@ -453,7 +420,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			instance.Status.Jobs = r.appendJob(instance.Status.Jobs, newJob)
+			instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
@@ -465,7 +432,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		updateJob(instance.Status.Jobs, updatedJob)
+		helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
@@ -476,7 +443,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	if status.ErrorDetails != "" {
 		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
 	}
-	updateJob(instance.Status.Jobs, updatedJob)
+	helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {

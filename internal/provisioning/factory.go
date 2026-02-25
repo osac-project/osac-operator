@@ -12,10 +12,14 @@ type ProviderConfig struct {
 	// ProviderType specifies which provider to create (ProviderTypeEDA or ProviderTypeAAP)
 	ProviderType ProviderType
 
-	// EDA provider configuration
-	WebhookClient      WebhookClient
-	ProvisionWebhook   string
-	DeprovisionWebhook string
+	// EDA provider configuration - webhook URLs per resource type
+	WebhookClient                     WebhookClient
+	ComputeInstanceProvisionWebhook   string
+	ComputeInstanceDeprovisionWebhook string
+	ClusterOrderProvisionWebhook      string
+	ClusterOrderDeprovisionWebhook    string
+	HostPoolProvisionWebhook          string
+	HostPoolDeprovisionWebhook        string
 
 	// AAP provider configuration
 	AAPClient           *aap.Client
@@ -30,10 +34,12 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 		if config.WebhookClient == nil {
 			return nil, fmt.Errorf("EDA provider requires WebhookClient")
 		}
-		if config.ProvisionWebhook == "" || config.DeprovisionWebhook == "" {
-			return nil, fmt.Errorf("EDA provider requires both ProvisionWebhook and DeprovisionWebhook")
-		}
-		return NewEDAProvider(config.WebhookClient, config.ProvisionWebhook, config.DeprovisionWebhook), nil
+		return NewEDAProvider(
+			config.WebhookClient,
+			config.ComputeInstanceProvisionWebhook, config.ComputeInstanceDeprovisionWebhook,
+			config.ClusterOrderProvisionWebhook, config.ClusterOrderDeprovisionWebhook,
+			config.HostPoolProvisionWebhook, config.HostPoolDeprovisionWebhook,
+		), nil
 
 	case ProviderTypeAAP:
 		if config.AAPClient == nil {

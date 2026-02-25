@@ -63,14 +63,14 @@ var (
 )
 
 const (
-	// EDA webhook environment variables
+	// ComputeInstance EDA webhook environment variables
 	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
-	// Provider selection
+	// Provider selection (shared across all resource types)
 	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
 
-	// AAP configuration
+	// AAP configuration (shared across all resource types)
 	envAAPURL                 = "OSAC_AAP_URL"
 	envAAPToken               = "OSAC_AAP_TOKEN"
 	envAAPProvisionTemplate   = "OSAC_AAP_PROVISION_TEMPLATE"
@@ -132,25 +132,27 @@ func init() {
 
 // createEDAProvider creates and validates EDA webhook provider configuration.
 func createEDAProvider(
-	provisionWebhook, deprovisionWebhook string,
+	computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook string,
+	clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook string,
+	hostPoolProvisionWebhook, hostPoolDeprovisionWebhook string,
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
 	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
-	config := provisioning.ProviderConfig{
-		ProviderType:       provisioning.ProviderTypeEDA,
-		WebhookClient:      webhookClient,
-		ProvisionWebhook:   provisionWebhook,
-		DeprovisionWebhook: deprovisionWebhook,
-	}
 
-	provider, err := provisioning.NewProvider(config)
-	if err != nil {
-		return nil, 0, err
-	}
+	provider := provisioning.NewEDAProvider(
+		webhookClient,
+		computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+		clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+		hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+	)
 
-	setupLog.Info("using EDA webhook provider for ComputeInstance",
-		"provisionURL", provisionWebhook,
-		"deprovisionURL", deprovisionWebhook)
+	setupLog.Info("using EDA webhook provider for all CRs",
+		"computeInstanceProvision", computeInstanceProvisionWebhook,
+		"computeInstanceDeprovision", computeInstanceDeprovisionWebhook,
+		"clusterOrderProvision", clusterOrderProvisionWebhook,
+		"clusterOrderDeprovision", clusterOrderDeprovisionWebhook,
+		"hostPoolProvision", hostPoolProvisionWebhook,
+		"hostPoolDeprovision", hostPoolDeprovisionWebhook)
 
 	return provider, provisioning.DefaultStatusPollInterval, nil
 }
@@ -186,13 +188,20 @@ func createAAPProvider(
 // createProvider creates a provisioning provider based on type.
 func createProvider(
 	providerType provisioning.ProviderType,
-	provisionWebhook, deprovisionWebhook string,
+	computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook string,
+	clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook string,
+	hostPoolProvisionWebhook, hostPoolDeprovisionWebhook string,
 	aapURL, aapToken, provisionTemplate, deprovisionTemplate string,
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
 	switch providerType {
 	case provisioning.ProviderTypeEDA:
-		return createEDAProvider(provisionWebhook, deprovisionWebhook, minimumRequestInterval)
+		return createEDAProvider(
+			computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+			clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+			hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+			minimumRequestInterval,
+		)
 
 	case provisioning.ProviderTypeAAP:
 		return createAAPProvider(aapURL, aapToken, provisionTemplate, deprovisionTemplate)
@@ -386,6 +395,58 @@ func main() {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
 
+	// Read shared provider configuration (used by all CRs)
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+
+	// Parse max job history (shared across all resources)
+	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
+	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
+
+	// Create shared provider for all CRs (ComputeInstance, ClusterOrder, HostPool)
+	// Provider type determines which provider to use (EDA or AAP)
+	providerTypeStr := os.Getenv(envProvisioningProvider)
+	providerType := provisioning.ProviderType(providerTypeStr)
+
+	// For backward compatibility: if OSAC_PROVISIONING_PROVIDER not set, check legacy per-CR vars
+	// But generally, one provider instance serves all CRs
+	var sharedProvider provisioning.ProvisioningProvider
+	var statusPollInterval time.Duration
+
+	if providerType != "" {
+		var err error
+
+		// Read all webhook URLs for EDA provider (one per resource type)
+		computeInstanceProvisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
+		computeInstanceDeprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
+		clusterOrderProvisionWebhook := os.Getenv("OSAC_CLUSTER_CREATE_WEBHOOK")
+		clusterOrderDeprovisionWebhook := os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK")
+		hostPoolProvisionWebhook := os.Getenv("OSAC_HOSTPOOL_CREATE_WEBHOOK")
+		hostPoolDeprovisionWebhook := os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK")
+
+		// Read AAP templates (shared across all resource types)
+		provisionTemplate := os.Getenv(envAAPProvisionTemplate)
+		deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
+
+		// Create shared provider for all CRs
+		sharedProvider, statusPollInterval, err = createProvider(
+			providerType,
+			computeInstanceProvisionWebhook, computeInstanceDeprovisionWebhook,
+			clusterOrderProvisionWebhook, clusterOrderDeprovisionWebhook,
+			hostPoolProvisionWebhook, hostPoolDeprovisionWebhook,
+			aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+			minimumRequestInterval,
+		)
+
+		if err != nil {
+			setupLog.Error(err, "failed to create shared provisioning provider")
+			os.Exit(1)
+		}
+		setupLog.Info("shared provider configured for all CRs", "type", providerType, "pollInterval", statusPollInterval)
+	} else {
+		setupLog.Info("provider not configured, controllers will use webhook fallback")
+	}
+
 	if err = (controller.NewClusterOrderReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
@@ -393,6 +454,9 @@ func main() {
 		os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK"),
 		os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterOrder")
 		os.Exit(1)
@@ -405,49 +469,22 @@ func main() {
 		os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK"),
 		os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
 		minimumRequestInterval,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HostPool")
 		os.Exit(1)
 	}
 
-	// Create the ComputeInstance reconciler with appropriate provider
-	// Read all configuration upfront
-	providerTypeStr := os.Getenv(envProvisioningProvider)
-	provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
-	deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
-	aapURL := os.Getenv(envAAPURL)
-	aapToken := os.Getenv(envAAPToken)
-	provisionTemplate := os.Getenv(envAAPProvisionTemplate)
-	deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
-
-	// Default to EDA if not specified (backward compatibility)
-	providerType := provisioning.ProviderType(providerTypeStr)
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeEDA
-	}
-
-	computeInstanceProvider, statusPollInterval, err := createProvider(
-		providerType,
-		provisionWebhook, deprovisionWebhook,
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-		minimumRequestInterval,
-	)
-	if err != nil {
-		setupLog.Error(err, "failed to create provisioning provider")
-		os.Exit(1)
-	}
-
-	// Parse max job history
-	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
-	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
-
+	// Create the ComputeInstance reconciler with shared provider
 	if err = (controller.NewComputeInstanceReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
 		computeInstanceNamespace,
-		computeInstanceProvider,
-		statusPollInterval,
-		maxJobHistory,
+		sharedProvider,     // Use shared provider instance
+		statusPollInterval, // Use shared poll interval
+		maxJobHistory,      // Use shared max job history
 	)).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ComputeInstance")
 		os.Exit(1)
