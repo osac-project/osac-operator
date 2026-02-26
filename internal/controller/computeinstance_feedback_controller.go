@@ -254,6 +254,8 @@ func (t *computeInstanceFeedbackReconcilerTask) syncConditions(ctx context.Conte
 	t.syncAvailable(ctx)
 	t.syncRestartInProgress(ctx)
 	t.syncRestartFailed(ctx)
+	t.syncProvisioned(ctx)
+	t.syncRestartRequired(ctx)
 }
 
 // syncConfigurationApplied synchronizes the CONFIGURATION_APPLIED VM condition from the ConfigurationApplied CR condition.
@@ -292,6 +294,24 @@ func (t *computeInstanceFeedbackReconcilerTask) syncRestartFailed(ctx context.Co
 	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED, crCondition)
 }
 
+// syncProvisioned synchronizes the PROVISIONED VM condition from the Provisioned CR condition.
+func (t *computeInstanceFeedbackReconcilerTask) syncProvisioned(ctx context.Context) {
+	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionProvisioned)
+	if crCondition == nil {
+		return
+	}
+	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED, crCondition)
+}
+
+// syncRestartRequired synchronizes the RESTART_REQUIRED VM condition from the RestartRequired CR condition.
+func (t *computeInstanceFeedbackReconcilerTask) syncRestartRequired(ctx context.Context) {
+	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartRequired)
+	if crCondition == nil {
+		return
+	}
+	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED, crCondition)
+}
+
 // syncVMConditionFromCR synchronizes a VM condition from a CR condition.
 func (t *computeInstanceFeedbackReconcilerTask) syncVMConditionFromCR(vmConditionType privatev1.ComputeInstanceConditionType, crCondition *metav1.Condition) {
 	vmCondition := t.findComputeInstanceCondition(vmConditionType)
@@ -325,6 +345,12 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 		t.syncPhaseRunning()
 	case ckv1alpha1.ComputeInstancePhaseDeleting:
 		t.syncPhaseDeleting()
+	case ckv1alpha1.ComputeInstancePhaseStopping:
+		t.syncPhaseStopping()
+	case ckv1alpha1.ComputeInstancePhaseStopped:
+		t.syncPhaseStopped()
+	case ckv1alpha1.ComputeInstancePhasePaused:
+		t.syncPhasePaused()
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info(
@@ -349,6 +375,18 @@ func (t *computeInstanceFeedbackReconcilerTask) syncPhaseRunning() {
 
 func (t *computeInstanceFeedbackReconcilerTask) syncPhaseDeleting() {
 	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStopping() {
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING)
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStopped() {
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncPhasePaused() {
+	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED)
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {
