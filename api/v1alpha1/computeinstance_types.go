@@ -159,6 +159,15 @@ const (
 
 	// ComputeInstancePhaseDeleting means there has been a request to delete the ComputeInstance
 	ComputeInstancePhaseDeleting ComputeInstancePhaseType = "Deleting"
+
+	// ComputeInstancePhaseStopping means the compute instance is in the process of being stopped
+	ComputeInstancePhaseStopping ComputeInstancePhaseType = "Stopping"
+
+	// ComputeInstancePhaseStopped means the compute instance is stopped
+	ComputeInstancePhaseStopped ComputeInstancePhaseType = "Stopped"
+
+	// ComputeInstancePhasePaused means the compute instance is paused
+	ComputeInstancePhasePaused ComputeInstancePhaseType = "Paused"
 )
 
 // ComputeInstanceConditionType is a valid value for .status.conditions.type
@@ -199,7 +208,7 @@ type ComputeInstanceStatus struct {
 	// Phase provides a single-value overview of the state of the ComputeInstance
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting
+	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting;Stopping;Stopped;Paused
 	Phase ComputeInstancePhaseType `json:"phase,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ComputeInstance
