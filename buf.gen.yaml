@@ -24,11 +24,8 @@ managed:
 
 inputs:
 
-# TODO: update fulfillment-api to the new BSR tag (after the fulfillment-api PR merges and
-# is tagged) and update private-api to the new BSR tag (after the fulfillment-service PR
-# merges and is tagged). Run buf generate after updating both tags.
-- module: buf.build/innabox/fulfillment-api:v0.0.31
-- module: buf.build/innabox/private-api:v0.0.40
+- module: buf.build/innabox/fulfillment-api:v0.0.32
+- module: buf.build/innabox/private-api:v0.0.41
 
 plugins:
 
