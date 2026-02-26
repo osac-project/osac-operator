@@ -186,6 +186,14 @@ const (
 
 	// ComputeInstanceConditionRestartFailed indicates a restart request has failed
 	ComputeInstanceConditionRestartFailed ComputeInstanceConditionType = "RestartFailed"
+
+	// ComputeInstanceConditionProvisioned means the infrastructure resources (compute, storage) have been allocated.
+	// True when the KubeVirt VirtualMachine exists and storage provisioning is complete.
+	ComputeInstanceConditionProvisioned ComputeInstanceConditionType = "Provisioned"
+
+	// ComputeInstanceConditionRestartRequired means the compute instance requires a restart for
+	// configuration changes to take effect. Synced from KubeVirt VM.Status.Conditions[RestartRequired].
+	ComputeInstanceConditionRestartRequired ComputeInstanceConditionType = "RestartRequired"
 )
 
 // VirtualMachineReferenceType contains a reference to the KubeVirt VirtualMachine CR created by this ComputeInstance
