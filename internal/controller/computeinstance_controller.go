@@ -385,7 +385,13 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 
 	// Job failed
 	log.Info("provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+	// Only set Failed phase if no VM exists yet (first-time provisioning failure).
+	// If the VM already exists (re-provisioning failure), the phase is driven by KubeVirt
+	// PrintableStatus and reflects the actual VM power state. The failed job is visible
+	// in status.jobs and ConfigurationApplied=False indicates config is not yet applied.
+	if instance.Status.VirtualMachineReference == nil {
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -547,12 +553,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Initialize status after the finalizer update, because r.Update() overwrites
 	// the in-memory status with the server response (status subresource is separate).
 	r.initializeStatusConditions(instance)
-	// Only set Starting phase for first-time provisioning.
-	// If the instance was already successfully provisioned (has a ReconciledConfigVersion),
-	// keep the current phase to avoid regressing from Running to Starting during re-provisioning.
-	if instance.Status.ReconciledConfigVersion == "" {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-	}
 
 	// Get the tenant (on local cluster)
 	tenant, err := r.getTenant(ctx, instance)
@@ -598,6 +598,13 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		if err := r.handleKubeVirtVM(ctx, instance, kv); err != nil {
 			return ctrl.Result{}, err
 		}
+		instance.Status.Phase = determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase)
+	} else {
+		// No KubeVirt VM exists yet: infrastructure is being provisioned.
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	}
 
 	// Handle restart request (VMI is on target cluster)
@@ -614,7 +621,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	}
 
 	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
+		// Phase is now driven by KubeVirt PrintableStatus, set above. Only update the condition.
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 		// If we're tracking a provision job that hasn't reached terminal state, continue polling
@@ -630,10 +637,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, nil
 	}
 
-	// Only regress to Starting for first-time provisioning; keep Running during re-provisioning
-	if instance.Status.ReconciledConfigVersion == "" {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-	}
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, "Applying configuration", v1alpha1.ReasonAsExpected)
 
 	// Handle provisioning via provider abstraction
@@ -687,6 +690,18 @@ func (r *ComputeInstanceReconciler) initializeStatusConditions(instance *v1alpha
 		metav1.ConditionFalse,
 		v1alpha1.ReasonInitialized,
 	)
+	r.initializeStatusCondition(
+		instance,
+		v1alpha1.ComputeInstanceConditionProvisioned,
+		metav1.ConditionFalse,
+		v1alpha1.ReasonInitialized,
+	)
+	r.initializeStatusCondition(
+		instance,
+		v1alpha1.ComputeInstanceConditionRestartRequired,
+		metav1.ConditionFalse,
+		v1alpha1.ReasonInitialized,
+	)
 }
 
 // initializeStatusCondition initializes a condition, but only if it is not already initialized.
@@ -730,9 +745,31 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	instance.SetVirtualMachineReferenceKubeVirtVirtualMachineName(name)
 	instance.SetVirtualMachineReferenceNamespace(kv.GetNamespace())
 
+	// Provisioned reflects whether compute AND storage resources are allocated.
+	// While PrintableStatus="Provisioning", KubeVirt is still creating DataVolumes
+	// (storage not yet ready). For all other states the VM CR exists and both compute
+	// and storage are allocated or in an operational state.
+	if kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusProvisioning {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "Provisioning infrastructure resources", v1alpha1.ReasonAsExpected)
+	} else {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	}
+
+	// Available mirrors VirtualMachine.Status.Ready, synced from the VirtualMachineInstance
+	// Ready condition (set by the virt-launcher pod's readiness probe).
 	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue) {
 		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName())
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	} else {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+	}
+
+	// RestartRequired mirrors KubeVirt's RestartRequired condition, which is set when
+	// CPU/memory/device changes have been applied to the VM spec but require a reboot.
+	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineRestartRequired, corev1.ConditionTrue) {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	} else {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	}
 
 	return nil
@@ -753,6 +790,60 @@ func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMach
 func kvVMHasConditionWithStatus(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType, status corev1.ConditionStatus) bool {
 	c := kvVMGetCondition(vm, cond)
 	return c != nil && c.Status == status
+}
+
+// determinePhaseFromPrintableStatus maps a KubeVirt VirtualMachine's PrintableStatus
+// to a ComputeInstancePhaseType.
+//
+// Transient startup states (Provisioning, WaitingForVolumeBinding) map to Starting
+// because they are normal steps in the VM creation sequence, not error conditions.
+//
+// Paused is checked via both PrintableStatus (KubeVirt v1.6.0+) and the VirtualMachinePaused
+// condition (older versions where PrintableStatus stayed "Running" when paused).
+//
+// Migrating and WaitingForReceiver map to Running because the source VM remains accessible
+// throughout live migration. OSAC does not trigger live migration but it can be infra-initiated.
+//
+// Unknown preserves currentPhase: the hypervisor host is temporarily unreachable and the VM
+// may still be healthy. The phase clears automatically when the host recovers.
+//
+// All remaining values (Terminating, CrashLoopBackOff, ErrorUnschedulable, ErrImagePull,
+// ImagePullBackOff, ErrorPvcNotFound, DataVolumeError) map to Failed.
+func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.VirtualMachine, currentPhase v1alpha1.ComputeInstancePhaseType) v1alpha1.ComputeInstancePhaseType {
+	switch kv.Status.PrintableStatus {
+	case kubevirtv1.VirtualMachineStatusProvisioning,
+		kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding,
+		kubevirtv1.VirtualMachineStatusStarting:
+		return v1alpha1.ComputeInstancePhaseStarting
+	case kubevirtv1.VirtualMachineStatusPaused:
+		return v1alpha1.ComputeInstancePhasePaused
+	case kubevirtv1.VirtualMachineStatusRunning:
+		// Defensive fallback for older KubeVirt versions where PrintableStatus stayed
+		// "Running" when the VM was paused.
+		if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachinePaused, corev1.ConditionTrue) {
+			return v1alpha1.ComputeInstancePhasePaused
+		}
+		return v1alpha1.ComputeInstancePhaseRunning
+	case kubevirtv1.VirtualMachineStatusMigrating,
+		kubevirtv1.VirtualMachineStatusWaitingForReceiver:
+		return v1alpha1.ComputeInstancePhaseRunning
+	case kubevirtv1.VirtualMachineStatusStopping:
+		return v1alpha1.ComputeInstancePhaseStopping
+	case kubevirtv1.VirtualMachineStatusStopped:
+		return v1alpha1.ComputeInstancePhaseStopped
+	case kubevirtv1.VirtualMachineStatusUnknown:
+		// Host is temporarily unreachable. Preserve the last known phase rather than
+		// asserting Failed. Clears automatically when the host recovers.
+		return currentPhase
+	default:
+		// Covers: Terminating, CrashLoopBackOff, ErrorUnschedulable, ErrImagePull,
+		// ImagePullBackOff, ErrorPvcNotFound, DataVolumeError.
+		// If a new KubeVirt PrintableStatus is introduced and falls here, update this switch.
+		log := ctrllog.FromContext(ctx)
+		log.Info("unhandled KubeVirt PrintableStatus, defaulting to Failed",
+			"printableStatus", kv.Status.PrintableStatus)
+		return v1alpha1.ComputeInstancePhaseFailed
+	}
 }
 
 // needsProvisionJob returns true when we should trigger a new provision job.
