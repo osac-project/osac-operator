@@ -223,7 +223,7 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(instance.Status.ReconciledConfigVersion).To(Equal("v1.2.3"))
 		})
 
-		It("should mark as failed when job fails", func() {
+		It("should set phase to Failed when job fails and no VM exists (first-time provisioning)", func() {
 			instance.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-999",
@@ -252,7 +252,49 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateFailed))
 			Expect(latestProvisionJob.Message).To(ContainSubstring("Job failed"))
 			Expect(latestProvisionJob.Message).To(ContainSubstring("Playbook execution failed"))
+			// No VM exists yet: phase is set to Failed to signal the provisioning failure.
 			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+		})
+
+		It("should preserve existing phase when job fails and VM already exists (re-provisioning)", func() {
+			// The VM exists from a previous successful provision. A re-provision job
+			// was triggered (e.g. spec changed) and has now failed. The phase should
+			// stay as reported by KubeVirt rather than being overridden to Failed,
+			// since the VM itself is still operational.
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			instance.Status.VirtualMachineReference = &osacv1alpha1.VirtualMachineReferenceType{
+				Namespace:                  "tenant-ns",
+				KubeVirtVirtualMachineName: "existing-vm",
+			}
+			instance.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "reprovision-failed-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStatePending,
+				},
+			}
+			provider := &mockProvisioningProvider{
+				getProvisionStatusFunc: func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{
+						JobID:        jobID,
+						State:        osacv1alpha1.JobStateFailed,
+						Message:      "Re-provisioning job failed",
+						ErrorDetails: "Playbook execution failed",
+					}, nil
+				},
+			}
+			reconciler.ProvisioningProvider = provider
+
+			result, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			latestProvisionJob := osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestProvisionJob).NotTo(BeNil())
+			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateFailed))
+			// VM still exists: phase is preserved as Running (driven by KubeVirt).
+			// The failed job is visible in status.jobs.
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
 		})
 
 		It("should handle status check error", func() {

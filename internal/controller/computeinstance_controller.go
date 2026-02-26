@@ -553,6 +553,11 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Initialize status after the finalizer update, because r.Update() overwrites
 	// the in-memory status with the server response (status subresource is separate).
 	r.initializeStatusConditions(instance)
+	// Initialize phase to Starting for brand-new CIs (Phase is empty until first set).
+	// Overridden by determinePhaseFromPrintableStatus() once a KubeVirt VM exists.
+	if instance.Status.Phase == "" {
+		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+	}
 
 	// Get the tenant (on local cluster)
 	tenant, err := r.getTenant(ctx, instance)
