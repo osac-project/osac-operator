@@ -336,6 +336,9 @@ spec:
                 - Running
                 - Failed
                 - Deleting
+                - Stopping
+                - Stopped
+                - Paused
                 type: string
               reconciledConfigVersion:
                 description: ReconciledConfigVersion is the version (hash) of the

@@ -23,12 +23,14 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -812,9 +814,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
 		})
 
-		It("should not regress phase to Starting when ReconciledConfigVersion is set", func() {
-			const resourceName = "test-phase-no-regress"
-			const tenantName = "tenant-phase-noregress"
+		It("should set Starting phase when no KubeVirt VM exists", func() {
+			const resourceName = "test-phase-no-kv"
+			const tenantName = "tenant-phase-nokv"
 			defer deleteCI(resourceName)
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
@@ -830,28 +832,158 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			// Simulate a previously provisioned instance by setting status
-			ci := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			ci.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
-			ci.Status.ReconciledConfigVersion = "some-version"
-			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
-			// Wait for manager cache to see the CI with updated status before reconciling
-			mgrClient := testMcManager.GetLocalManager().GetClient()
-			Eventually(func(g Gomega) {
-				cached := &osacv1alpha1.ComputeInstance{}
-				g.Expect(mgrClient.Get(ctx, nn, cached)).To(Succeed())
-				g.Expect(cached.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
-			}).Should(Succeed())
-
 			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
 
+			ci := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			// Phase should NOT have regressed to Starting
-			Expect(ci.Status.Phase).NotTo(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			// No KubeVirt VM exists in envtest, so findKubeVirtVMs returns nil.
+			// Phase is driven by KubeVirt PrintableStatus; when no VM exists, it is Starting.
+			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+		})
+	})
+
+	Context("determinePhaseFromPrintableStatus", func() {
+		ctx := context.Background()
+
+		// kvVM builds a minimal KubeVirt VirtualMachine with the given PrintableStatus
+		// and optional conditions.
+		kvVM := func(printableStatus kubevirtv1.VirtualMachinePrintableStatus, conditions ...kubevirtv1.VirtualMachineCondition) *kubevirtv1.VirtualMachine {
+			return &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: printableStatus,
+					Conditions:      conditions,
+				},
+			}
+		}
+
+		// kvCond builds a KubeVirt VirtualMachineCondition.
+		kvCond := func(condType kubevirtv1.VirtualMachineConditionType, status corev1.ConditionStatus) kubevirtv1.VirtualMachineCondition {
+			return kubevirtv1.VirtualMachineCondition{Type: condType, Status: status}
+		}
+
+		DescribeTable("maps PrintableStatus to phase",
+			func(kv *kubevirtv1.VirtualMachine, currentPhase osacv1alpha1.ComputeInstancePhaseType, expectedPhase osacv1alpha1.ComputeInstancePhaseType) {
+				Expect(determinePhaseFromPrintableStatus(ctx, kv, currentPhase)).To(Equal(expectedPhase))
+			},
+			// Transient startup states
+			Entry("Provisioning → Starting",
+				kvVM(kubevirtv1.VirtualMachineStatusProvisioning), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStarting),
+			Entry("WaitingForVolumeBinding → Starting",
+				kvVM(kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStarting),
+			Entry("Starting → Starting",
+				kvVM(kubevirtv1.VirtualMachineStatusStarting), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStarting),
+			// Running
+			Entry("Running (no pause condition) → Running",
+				kvVM(kubevirtv1.VirtualMachineStatusRunning), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseRunning),
+			Entry("Running (VirtualMachinePaused=False) → Running",
+				kvVM(kubevirtv1.VirtualMachineStatusRunning, kvCond(kubevirtv1.VirtualMachinePaused, corev1.ConditionFalse)), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseRunning),
+			Entry("Running (VirtualMachinePaused=True) → Paused (older KubeVirt fallback)",
+				kvVM(kubevirtv1.VirtualMachineStatusRunning, kvCond(kubevirtv1.VirtualMachinePaused, corev1.ConditionTrue)), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhasePaused),
+			// Paused
+			Entry("Paused (no conditions) → Paused",
+				kvVM(kubevirtv1.VirtualMachineStatusPaused), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhasePaused),
+			Entry("Paused (VirtualMachinePaused=True) → Paused",
+				kvVM(kubevirtv1.VirtualMachineStatusPaused, kvCond(kubevirtv1.VirtualMachinePaused, corev1.ConditionTrue)), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhasePaused),
+			// Migration (VM remains accessible)
+			Entry("Migrating → Running",
+				kvVM(kubevirtv1.VirtualMachineStatusMigrating), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseRunning),
+			Entry("WaitingForReceiver → Running",
+				kvVM(kubevirtv1.VirtualMachineStatusWaitingForReceiver), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseRunning),
+			// Stopping / Stopped
+			Entry("Stopping → Stopping",
+				kvVM(kubevirtv1.VirtualMachineStatusStopping), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStopping),
+			Entry("Stopped → Stopped",
+				kvVM(kubevirtv1.VirtualMachineStatusStopped), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStopped),
+			// Error states
+			Entry("ErrorUnschedulable → Failed",
+				kvVM(kubevirtv1.VirtualMachineStatusUnschedulable), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
+			Entry("CrashLoopBackOff → Failed",
+				kvVM(kubevirtv1.VirtualMachineStatusCrashLoopBackOff), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
+			Entry("Terminating → Failed",
+				kvVM(kubevirtv1.VirtualMachineStatusTerminating), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
+			Entry("DataVolumeError → Failed",
+				kvVM(kubevirtv1.VirtualMachineStatusDataVolumeError), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
+			Entry("ErrorPvcNotFound → Failed",
+				kvVM(kubevirtv1.VirtualMachineStatusPvcNotFound), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
+			// Unknown: preserves current phase
+			Entry("Unknown preserves Running phase",
+				kvVM(kubevirtv1.VirtualMachineStatusUnknown), osacv1alpha1.ComputeInstancePhaseRunning, osacv1alpha1.ComputeInstancePhaseRunning),
+			Entry("Unknown preserves Stopped phase",
+				kvVM(kubevirtv1.VirtualMachineStatusUnknown), osacv1alpha1.ComputeInstancePhaseStopped, osacv1alpha1.ComputeInstancePhaseStopped),
+		)
+	})
+
+	Context("handleKubeVirtVM", func() {
+		var (
+			ctx        context.Context
+			reconciler *ComputeInstanceReconciler
+			instance   *osacv1alpha1.ComputeInstance
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			reconciler = &ComputeInstanceReconciler{}
+			instance = &osacv1alpha1.ComputeInstance{}
+		})
+
+		It("sets Provisioned=True and Available=True when VM is Running and Ready", func() {
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{
+						{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, instance, kv)).To(Succeed())
+
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
+		})
+
+		It("sets Provisioned=True and Available=False when VM is Running but not Ready", func() {
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, instance, kv)).To(Succeed())
+
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
+		})
+
+		It("sets RestartRequired=True when KubeVirt RestartRequired condition is True", func() {
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{
+						{Type: kubevirtv1.VirtualMachineRestartRequired, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, instance, kv)).To(Succeed())
+
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("sets Provisioned=False when VM is in Provisioning state (storage not yet allocated)", func() {
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusProvisioning,
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, instance, kv)).To(Succeed())
+
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionFalse))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
+			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
 		})
 	})
 

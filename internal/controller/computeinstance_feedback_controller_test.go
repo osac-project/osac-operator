@@ -727,6 +727,148 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(found).To(BeTrue())
 		})
 
+		It("should sync Stopping phase", func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStopping
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING))
+		})
+
+		It("should sync Stopped phase", func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStopped
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED))
+		})
+
+		It("should sync Paused phase", func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhasePaused
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED))
+		})
+
+		It("should sync Provisioned condition when True", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionProvisioned),
+				Status:             metav1.ConditionTrue,
+				Reason:             "AsExpected",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
+		It("should sync Provisioned condition when False", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionProvisioned),
+				Status:             metav1.ConditionFalse,
+				Reason:             "AsExpected",
+				Message:            "Provisioning infrastructure resources",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_FALSE))
+					Expect(cond.GetMessage()).To(Equal("Provisioning infrastructure resources"))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
+		It("should sync RestartRequired condition when True", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+				Status:             metav1.ConditionTrue,
+				Reason:             "AsExpected",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_TRUE))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
+		It("should sync RestartRequired condition when False", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.Conditions = append(computeInstance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+				Status:             metav1.ConditionFalse,
+				Reason:             "AsExpected",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			found := false
+			for _, cond := range mockClient.lastUpdate.GetStatus().GetConditions() {
+				if cond.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED {
+					Expect(cond.GetStatus()).To(Equal(sharedv1.ConditionStatus_CONDITION_STATUS_FALSE))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+
 		It("should not crash when restart conditions are not present", func() {
 			// RestartInProgress and RestartFailed conditions should not be present by default
 			computeInstance := &osacv1alpha1.ComputeInstance{}
