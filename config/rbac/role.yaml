@@ -41,8 +41,10 @@ rules:
 - apiGroups:
   - kubevirt.io
   resources:
-  - computeinstances
+  - virtualmachineinstances
+  - virtualmachines
   verbs:
+  - delete
   - get
   - list
   - watch
