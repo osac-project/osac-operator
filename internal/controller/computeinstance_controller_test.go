@@ -315,7 +315,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		ctx := context.Background()
 
 		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", nil, 0, 0, mcmanager.LocalCluster)
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
 		It("returns the first interface IP from the VMI status", func() {
@@ -1013,7 +1013,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		BeforeEach(func() {
 			ctx = context.Background()
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", nil, 0, 0, mcmanager.LocalCluster)
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 			var err error
 			targetClient, err = reconciler.getTargetClient(ctx)
 			Expect(err).NotTo(HaveOccurred())
