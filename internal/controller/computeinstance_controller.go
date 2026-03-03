@@ -822,8 +822,11 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 // getFirstVMIIPAddress fetches the VirtualMachineInstance and returns the first non-empty
 // IP from .status.interfaces[*].ipAddress, or "" if none or on error.
 func (r *ComputeInstanceReconciler) getFirstVMIIPAddress(ctx context.Context, targetClient client.Client, namespace, name string) string {
+	log := ctrllog.FromContext(ctx)
+
 	vmi := &kubevirtv1.VirtualMachineInstance{}
 	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, vmi); err != nil {
+		log.Error(err, "failed to get VirtualMachineInstance", "namespace", namespace, "name", name)
 		return ""
 	}
 	for _, iface := range vmi.Status.Interfaces {
