@@ -32,6 +32,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.ipAddress
+      name: IP
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -266,6 +269,11 @@ spec:
               desiredConfigVersion:
                 description: DesiredConfigVersion is the version (hash) of the desired
                   configuration of the ComputeInstance
+                type: string
+              ipAddress:
+                description: |-
+                  IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
+                  Populated when the instance is ready (phase Running); cleared when the instance is not ready.
                 type: string
               jobs:
                 description: |-

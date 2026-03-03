@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -635,7 +636,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	}
 
 	if kv != nil {
-		if err := r.handleKubeVirtVM(ctx, instance, kv); err != nil {
+		if err := r.handleKubeVirtVM(ctx, targetClient, instance, kv); err != nil {
 			return ctrl.Result{}, err
 		}
 		instance.Status.Phase = determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase)
@@ -777,7 +778,7 @@ func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, targetC
 	return &kubeVirtVMList.Items[0], nil
 }
 
-func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instance *v1alpha1.ComputeInstance,
+func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, targetClient client.Client, instance *v1alpha1.ComputeInstance,
 	kv *kubevirtv1.VirtualMachine) error {
 	log := ctrllog.FromContext(ctx)
 
@@ -798,8 +799,11 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	// Available mirrors VirtualMachine.Status.Ready, synced from the VirtualMachineInstance
 	// Ready condition (set by the virt-launcher pod's readiness probe).
 	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue) {
-		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName())
+		ipAddress := r.getFirstVMIIPAddress(ctx, targetClient, kv.GetNamespace(), name)
+
+		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName(), "ipAddress", ipAddress)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		instance.SetIPAddress(ipAddress)
 	} else {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionAvailable, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	}
@@ -813,6 +817,21 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	}
 
 	return nil
+}
+
+// getFirstVMIIPAddress fetches the VirtualMachineInstance and returns the first non-empty
+// IP from .status.interfaces[*].ipAddress, or "" if none or on error.
+func (r *ComputeInstanceReconciler) getFirstVMIIPAddress(ctx context.Context, targetClient client.Client, namespace, name string) string {
+	vmi := &kubevirtv1.VirtualMachineInstance{}
+	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, vmi); err != nil {
+		return ""
+	}
+	for _, iface := range vmi.Status.Interfaces {
+		if iface.IP != "" {
+			return iface.IP
+		}
+	}
+	return ""
 }
 
 func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType) *kubevirtv1.VirtualMachineCondition {

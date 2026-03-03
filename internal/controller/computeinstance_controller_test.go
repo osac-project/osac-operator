@@ -309,6 +309,41 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("getFirstVMIIPAddress", func() {
+		var reconciler *ComputeInstanceReconciler
+		ctx := context.Background()
+
+		BeforeEach(func() {
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", nil, 0, 0, mcmanager.LocalCluster)
+		})
+
+		It("returns the first interface IP from the VMI status", func() {
+			const wantIP = "10.0.0.42"
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vmi-ip",
+					Namespace: "default",
+				},
+				Status: kubevirtv1.VirtualMachineInstanceStatus{
+					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
+						{IP: wantIP, Name: "default"},
+						{IP: "10.0.0.43", Name: "ignored"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			targetClient, err := reconciler.getTargetClient(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			ip := reconciler.getFirstVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
+			Expect(ip).To(Equal(wantIP))
+		})
+	})
+
 	Context("handleReconciledConfigVersion", func() {
 		var reconciler *ComputeInstanceReconciler
 		ctx := context.Background()

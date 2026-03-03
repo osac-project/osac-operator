@@ -59,3 +59,11 @@ func (ci *ComputeInstance) GetTenantReferenceNamespace() string {
 	}
 	return ci.Status.TenantReference.Namespace
 }
+
+func (ci *ComputeInstance) SetIPAddress(ip string) {
+	ci.Status.IPAddress = ip
+}
+
+func (ci *ComputeInstance) GetIPAddress() string {
+	return ci.Status.IPAddress
+}

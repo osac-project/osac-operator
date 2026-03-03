@@ -255,6 +255,11 @@ type ComputeInstanceStatus struct {
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
 	Jobs []JobStatus `json:"jobs,omitempty"`
+
+	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
+	// Populated when the instance is ready (phase Running).
+	// +kubebuilder:validation:Optional
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -265,6 +270,7 @@ type ComputeInstanceStatus struct {
 // +kubebuilder:printcolumn:name="Memory",type=integer,JSONPath=`.spec.memoryGiB`
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
 
 // ComputeInstance is the Schema for the computeinstances API
 type ComputeInstance struct {
