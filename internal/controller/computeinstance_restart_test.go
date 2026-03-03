@@ -37,7 +37,7 @@ var _ = Describe("ComputeInstance Restart Handler", func() {
 	ctx := context.Background()
 
 	BeforeEach(func() {
-		reconciler = NewComputeInstanceReconciler(testMcManager, "", nil, 0, 0, mcmanager.LocalCluster)
+		reconciler = NewComputeInstanceReconciler(testMcManager, "", "", nil, 0, 0, mcmanager.LocalCluster)
 	})
 
 	Context("handleRestartRequest", func() {

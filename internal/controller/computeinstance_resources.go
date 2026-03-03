@@ -18,85 +18,40 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
+// ErrTenantBeingDeleted is returned by getTenant when the tenant exists but has DeletionTimestamp set.
+var ErrTenantBeingDeleted = errors.New("tenant is being deleted")
+
 // getTenant gets the tenant object from the local cluster.
-// If the tenant is not found, return nil and no error.
+// If the tenant is not found, returns nil and error.
+// If the tenant has DeletionTimestamp, returns an error so the controller requeues (does not clear the instance's tenant reference).
 func (r *ComputeInstanceReconciler) getTenant(ctx context.Context, instance *v1alpha1.ComputeInstance) (*v1alpha1.Tenant, error) {
-	if instance.GetTenantReferenceName() == "" || instance.GetTenantReferenceNamespace() == "" {
-		// tenant reference is not set because it doesn't exist yet
-		return nil, nil
+	tenantName, exists := instance.GetAnnotations()[osacTenantAnnotation]
+	if !exists || tenantName == "" {
+		return nil, fmt.Errorf("tenant information for compute instance %s not found", instance.GetName())
 	}
 
 	tenant := &v1alpha1.Tenant{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: instance.GetTenantReferenceNamespace(), Name: instance.GetTenantReferenceName()}, tenant)
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.TenantNamespace, Name: tenantName}, tenant)
 	if err != nil {
-		return nil, client.IgnoreNotFound(err)
+		return nil, err
 	}
+
+	if !tenant.DeletionTimestamp.IsZero() {
+		return nil, fmt.Errorf("%w: %s", ErrTenantBeingDeleted, tenant.GetName())
+	}
+
+	instance.SetTenantReferenceName(tenant.GetName())
+	instance.SetTenantReferenceNamespace(tenant.GetNamespace())
 
 	return tenant, nil
-}
-
-// createOrUpdateTenant creates or updates the tenant object in the local cluster in the namespace where the compute instance lives.
-func (r *ComputeInstanceReconciler) createOrUpdateTenant(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
-	tenantName, exists := instance.GetAnnotations()[osacTenantAnnotation]
-	if !exists || tenantName == "" {
-		return fmt.Errorf("tenant name not found")
-	}
-
-	tenantObjectName := getTenantObjectName(tenantName)
-
-	// Check if a tenant with this name already exists and is being deleted.
-	// This can happen when a previous ComputeInstance owned the tenant and its deletion
-	// triggered garbage collection. We must wait for the old tenant to be fully removed
-	// before creating a new one with the same name.
-	existing := &v1alpha1.Tenant{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: instance.GetNamespace(), Name: tenantObjectName}, existing); err == nil {
-		if existing.DeletionTimestamp != nil {
-			return fmt.Errorf("tenant %s is being deleted, will retry", tenantObjectName)
-		}
-	}
-
-	tenant := &v1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      tenantObjectName,
-			Namespace: instance.GetNamespace(),
-			Labels: map[string]string{
-				"app.kubernetes.io/name": osacAppName,
-			},
-		},
-		Spec: v1alpha1.TenantSpec{
-			Name: tenantName,
-		},
-	}
-
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, tenant, func() error {
-		err := controllerutil.SetOwnerReference(instance, tenant, r.Scheme)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	// Update the tenant reference
-	instance.SetTenantReferenceName(tenant.Name)
-	instance.SetTenantReferenceNamespace(tenant.GetNamespace())
-	return nil
-}
-
-func getTenantObjectName(tenantName string) string {
-	return fmt.Sprintf("tenant-%s", encodeTenantName(tenantName))
 }
 
 func labelSelectorFromComputeInstanceInstance(instance *v1alpha1.ComputeInstance) client.MatchingLabels {

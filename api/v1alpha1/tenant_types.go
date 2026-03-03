@@ -25,21 +25,13 @@ import (
 
 // TenantSpec defines the desired state of Tenant.
 type TenantSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable once set"
-	Name string `json:"name,omitempty"`
 }
 
 type TenantPhaseType string
 
 const (
 	TenantPhaseProgressing TenantPhaseType = "Progressing"
-	TenantPhaseFailed      TenantPhaseType = "Failed"
 	TenantPhaseReady       TenantPhaseType = "Ready"
-	TenantPhaseDeleting    TenantPhaseType = "Deleting"
 )
 
 // TenantStatus defines the observed state of Tenant.
@@ -56,7 +48,6 @@ type TenantStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Tenant Name",type=string,JSONPath=`.spec.name`
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 

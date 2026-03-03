@@ -38,6 +38,37 @@ import (
 
 const testTemplateParams = `{"key": "value"}`
 
+// createReadyTenant creates a Tenant with the given name in the namespace and sets status to Ready.
+// If the tenant already exists, it is updated to Ready.
+func createReadyTenant(ctx context.Context, namespace, name string) {
+	tenant := &osacv1alpha1.Tenant{}
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, tenant)
+	if err != nil && errors.IsNotFound(err) {
+		tenant = &osacv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+			},
+			Spec: osacv1alpha1.TenantSpec{},
+		}
+		Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+	}
+	tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+	tenant.Status.Namespace = namespace
+	Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+}
+
+// deleteTenantInNamespace removes a Tenant by name in the given namespace (clears finalizers first).
+func deleteTenantInNamespace(ctx context.Context, namespace, name string) {
+	tenant := &osacv1alpha1.Tenant{}
+	nn := types.NamespacedName{Name: name, Namespace: namespace}
+	if err := k8sClient.Get(ctx, nn, tenant); err == nil {
+		tenant.Finalizers = nil
+		_ = k8sClient.Update(ctx, tenant)
+		_ = k8sClient.Delete(ctx, tenant)
+	}
+}
+
 var _ = Describe("ComputeInstance Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
@@ -53,8 +84,24 @@ var _ = Describe("ComputeInstance Controller", func() {
 		computeInstance := &osacv1alpha1.ComputeInstance{}
 
 		BeforeEach(func() {
+			By("creating a tenant for the ComputeInstance to reference")
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantName,
+					Namespace: namespaceName,
+				},
+				Spec: osacv1alpha1.TenantSpec{},
+			}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, &osacv1alpha1.Tenant{})
+			if err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+				tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+				tenant.Status.Namespace = namespaceName
+				Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			}
+
 			By("creating the custom resource for the Kind ComputeInstance")
-			err := k8sClient.Get(ctx, typeNamespacedName, computeInstance)
+			err = k8sClient.Get(ctx, typeNamespacedName, computeInstance)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
@@ -83,52 +130,38 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			By("Reconciling the deleted resource")
 			Eventually(func() error {
-				controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+				controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 					NamespacedName: typeNamespacedName,
 				}})
 				return err
 			}).Should(Succeed())
+
+			By("Cleanup the tenant")
+			tenant := &osacv1alpha1.Tenant{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, tenant); err == nil {
+				_ = k8sClient.Delete(ctx, tenant)
+			}
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			}})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Checking that a tenant was created")
-			expectedTenantName := getTenantObjectName(tenantName)
-			tenant := &osacv1alpha1.Tenant{}
-			err = k8sClient.Get(ctx, types.NamespacedName{
-				Name:      expectedTenantName,
-				Namespace: namespaceName,
-			}, tenant)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying tenant has correct spec name")
-			Expect(tenant.Spec.Name).To(Equal(tenantName))
-
-			By("Verifying tenant has correct labels")
-			Expect(tenant.Labels).To(HaveKeyWithValue("app.kubernetes.io/name", osacAppName))
-
-			By("Verifying tenant has owner reference to ComputeInstance")
-			Expect(tenant.OwnerReferences).NotTo(BeEmpty())
-			Expect(tenant.OwnerReferences[0].Name).To(Equal(resourceName))
-
-			// verify that finalizer is set
-			By("Verifying the finalizer is set on the ComputeInstance resource")
+			By("Verifying tenant reference is set on ComputeInstance status")
 			vm := &osacv1alpha1.ComputeInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
-
-			By("Verifying tenant reference is set on ComputeInstance status")
 			Expect(vm.Status.TenantReference).NotTo(BeNil())
-			Expect(vm.Status.TenantReference.Name).To(Equal(tenant.Name))
-			Expect(vm.Status.TenantReference.Namespace).To(Equal(tenant.Namespace))
+			Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
+			Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
+
+			By("Verifying the finalizer is set on the ComputeInstance resource")
+			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
 		})
 	})
 
@@ -137,7 +170,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		ctx := context.Background()
 
 		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
 		It("should compute and store a version of the spec", func() {
@@ -281,7 +314,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		ctx := context.Background()
 
 		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
 		It("should copy annotation to status when annotation exists", func() {
@@ -420,7 +453,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			var reconciler *ComputeInstanceReconciler
 
 			BeforeEach(func() {
-				reconciler = NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{}, 0, 3, mcmanager.LocalCluster)
+				reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 3, mcmanager.LocalCluster)
 			})
 
 			It("should append job to empty slice", func() {
@@ -539,7 +572,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should use default max history when set", func() {
-				reconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{}, 0, DefaultMaxJobHistory, mcmanager.LocalCluster)
+				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, DefaultMaxJobHistory, mcmanager.LocalCluster)
 				jobs := []osacv1alpha1.JobStatus{}
 				// Add 15 jobs
 				baseTime := time.Now().UTC()
@@ -695,7 +728,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			var reconciler *ComputeInstanceReconciler
 
 			BeforeEach(func() {
-				reconciler = NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+				reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 			})
 
 			It("should return true when no job exists", func() {
@@ -790,6 +823,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 			const resourceName = "test-phase-first-provision"
 			const tenantName = "tenant-phase-first"
 			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -804,7 +839,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
 			// Wait for the CI to appear in the controller's cache before calling Reconcile
 			// directly. Without this, r.Get() inside Reconcile returns NotFound (cache miss)
@@ -817,14 +852,18 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			ci := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			}).Should(Succeed())
 		})
 
 		It("should set Starting phase when no KubeVirt VM exists", func() {
 			const resourceName = "test-phase-no-kv"
 			const tenantName = "tenant-phase-nokv"
 			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -839,7 +878,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
 			// Wait for the CI to appear in the controller's cache before calling Reconcile directly.
 			Eventually(func() error {
@@ -1014,22 +1053,13 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 		}
 
-		deleteTenant := func(name string) {
-			tenant := &osacv1alpha1.Tenant{}
-			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
-			if err := k8sClient.Get(ctx, nn, tenant); err == nil {
-				tenant.Finalizers = nil
-				_ = k8sClient.Update(ctx, tenant)
-				_ = k8sClient.Delete(ctx, tenant)
-			}
-		}
-
-		It("should clear tenant reference and requeue when tenant has DeletionTimestamp", func() {
+		It("should requeue when tenant has DeletionTimestamp", func() {
 			const resourceName = "test-tenant-gc-clear"
 			const tenantName = "tenant-gc-clear"
-			tenantObjName := getTenantObjectName(tenantName)
 			defer deleteCI(resourceName)
-			defer deleteTenant(tenantObjName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			createReadyTenant(ctx, namespaceName, tenantName)
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -1049,13 +1079,13 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return mgrClient.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}).Should(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
-			// First reconcile: creates tenant and sets reference
+			// First reconcile: sets tenant reference
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify tenant was created and reference was set
+			// Verify reference was set
 			ci := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
 			Expect(ci.Status.TenantReference).NotTo(BeNil())
@@ -1063,7 +1093,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			// Add finalizer to tenant to keep it in terminating state
 			tenant := &osacv1alpha1.Tenant{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenantObjName, Namespace: namespaceName}, tenant)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, tenant)).To(Succeed())
 			tenant.Finalizers = append(tenant.Finalizers, "osac.openshift.io/test")
 			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
 
@@ -1072,45 +1102,30 @@ var _ = Describe("ComputeInstance Controller", func() {
 			// Wait for manager cache to see the tenant with DeletionTimestamp before second reconcile
 			Eventually(func(g Gomega) {
 				cachedTenant := &osacv1alpha1.Tenant{}
-				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantObjName, Namespace: namespaceName}, cachedTenant)).To(Succeed())
+				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cachedTenant)).To(Succeed())
 				g.Expect(cachedTenant.DeletionTimestamp).NotTo(BeNil())
 			}).Should(Succeed())
 
-			// Reconcile again - should detect terminating tenant
-			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(10 * time.Second))
+			// Reconcile again - should return error when tenant has DeletionTimestamp (reference is not cleared)
+			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("tenant is being deleted"))
 
-			// Verify tenant reference was cleared
+			// Tenant reference is left unchanged
 			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			Expect(ci.Status.TenantReference.Name).To(BeEmpty())
-			Expect(ci.Status.TenantReference.Namespace).To(BeEmpty())
+			Expect(ci.Status.TenantReference).NotTo(BeNil())
+			Expect(ci.Status.TenantReference.Name).To(Equal(tenantName))
+			Expect(ci.Status.TenantReference.Namespace).To(Equal(namespaceName))
 		})
 
-		It("should not create tenant when existing tenant with same name is being deleted", func() {
-			const resourceName = "test-tenant-gc-block"
-			const tenantName = "tenant-gc-block"
-			tenantObjName := getTenantObjectName(tenantName)
+		It("should return error when tenant does not exist", func() {
+			const resourceName = "test-tenant-not-found"
+			const tenantName = "tenant-nonexistent"
 			defer deleteCI(resourceName)
-			defer deleteTenant(tenantObjName)
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 
-			// Pre-create a tenant with a finalizer, then delete it to put it in terminating state
-			tenant := &osacv1alpha1.Tenant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       tenantObjName,
-					Namespace:  namespaceName,
-					Finalizers: []string{"osac.openshift.io/test"},
-				},
-				Spec: osacv1alpha1.TenantSpec{
-					Name: tenantName,
-				},
-			}
-			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
-
-			// Create a ComputeInstance that would use the same tenant name
+			// Create a ComputeInstance that references a tenant that does not exist
 			resource := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -1122,21 +1137,16 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			// Wait for manager cache to see both resources before reconciling
 			mgrClient := testMcManager.GetLocalManager().GetClient()
 			Eventually(func() error {
-				if err := mgrClient.Get(ctx, nn, &osacv1alpha1.ComputeInstance{}); err != nil {
-					return err
-				}
-				return mgrClient.Get(ctx, types.NamespacedName{Name: tenantObjName, Namespace: namespaceName}, &osacv1alpha1.Tenant{})
+				return mgrClient.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}).Should(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
-			// Reconcile should fail because createOrUpdateTenant detects the terminating tenant
+			// Reconcile should fail because tenant does not exist
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("is being deleted"))
 		})
 	})
 })

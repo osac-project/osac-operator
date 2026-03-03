@@ -338,6 +338,7 @@ func setupComputeInstanceControllers(
 ) error {
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
+	tenantNamespace := os.Getenv(envTenantNamespace)
 	targetCluster := mcmanager.LocalCluster
 	if mgr.GetProvider() != nil {
 		targetCluster = remoteClusterName
@@ -374,6 +375,7 @@ func setupComputeInstanceControllers(
 	if err := (controller.NewComputeInstanceReconciler(
 		mgr,
 		computeInstanceNamespace,
+		tenantNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
 		maxJobHistory,

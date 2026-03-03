@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -81,8 +80,6 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 	var res ctrl.Result
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
 		res, err = r.handleUpdate(ctx, req.Request, instance)
-	} else {
-		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
@@ -100,16 +97,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	log.Info("handling update for Tenant", "name", instance.GetName(), "tenant", instance.Spec.Name)
-
-	// Add finalizer if it doesn't exist
-	if !controllerutil.ContainsFinalizer(instance, tenantFinalizer) {
-		controllerutil.AddFinalizer(instance, tenantFinalizer)
-		if err := r.Update(ctx, instance); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
+	log.Info("handling update for Tenant", "name", instance.GetName())
 
 	// Set phase to Progressing
 	instance.Status.Phase = v1alpha1.TenantPhaseProgressing
@@ -120,62 +108,15 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Create namespace
-	if err := createOrUpdateTenantNamespace(ctx, targetClient, instance); err != nil {
-		instance.Status.Phase = v1alpha1.TenantPhaseFailed
+	// Get namespace
+	var namespace corev1.Namespace
+	if err = targetClient.Get(ctx, client.ObjectKey{Name: instance.GetName()}, &namespace); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Create UDN
-	if err := createOrUpdateTenantUDN(ctx, targetClient, instance); err != nil {
-		instance.Status.Phase = v1alpha1.TenantPhaseFailed
-		return ctrl.Result{}, err
-	}
-
-	// Update status to Ready if everything succeeded
+	instance.Status.Namespace = namespace.GetName()
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 
-	return ctrl.Result{}, nil
-}
-
-// handleDelete handles deletion operations for Tenant
-func (r *TenantReconciler) handleDelete(ctx context.Context, req reconcile.Request, instance *v1alpha1.Tenant) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	log.Info("handling delete for Tenant", "name", instance.Name)
-
-	// Set deleting phase
-	instance.Status.Phase = v1alpha1.TenantPhaseDeleting
-
-	if !controllerutil.ContainsFinalizer(instance, tenantFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	// Get target cluster client where namespace and UDN are deleted
-	targetClient, err := r.getTargetClient(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Delete UDN first
-	udn, err := deleteTenantUDN(ctx, targetClient, instance)
-	if err != nil || udn != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Delete namespace
-	ns, err := deleteTenantNamespace(ctx, targetClient, instance)
-	if err != nil || ns != nil {
-		return ctrl.Result{}, err
-	}
-
-	// All resources deleted, remove finalizer
-	if controllerutil.RemoveFinalizer(instance, tenantFinalizer) {
-		if err := r.Update(ctx, instance); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	log.Info("Tenant deletion completed", "name", instance.Name)
 	return ctrl.Result{}, nil
 }
 

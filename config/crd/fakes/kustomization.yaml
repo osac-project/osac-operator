@@ -5,3 +5,4 @@ resources:
 - hypershift.openshift.io_nodepools.yaml
 - k8s.ovn.org_userdefinednetworks.yaml
 - kubevirt.io_virtualmachineinstances.yaml
+- kubevirt.io_virtualmachines.yaml

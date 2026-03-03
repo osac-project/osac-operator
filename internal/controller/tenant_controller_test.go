@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,9 +53,7 @@ var _ = Describe("Tenant Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: v1alpha1.TenantSpec{
-						Name: "my-tenant",
-					},
+					Spec: v1alpha1.TenantSpec{},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -69,47 +66,38 @@ var _ = Describe("Tenant Controller", func() {
 
 			By("Cleanup the specific resource instance Tenant")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-
-			// envtest doesn't delete namespaces
-			// https://book.kubebuilder.io/reference/envtest.html#namespace-usage-limitation
-			By("Reconciling until namespace is terminating")
-			Eventually(func(g Gomega) {
-				controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
-				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				}})
-				g.Expect(err).NotTo(HaveOccurred())
-
-				namespace := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resource.Status.Namespace}, namespace)).To(Succeed())
-				g.Expect(namespace.Status.Phase).To(Equal(corev1.NamespaceTerminating))
-			}).Should(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
-			By("reconciling until tenant is ready")
+			By("reconciling when namespace does not exist - status becomes Progressing")
+			_, _ = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}})
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
+
+			By("creating the namespace on the target cluster (controller only observes it)")
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, namespace)
+			})
+
+			By("reconciling until tenant is Ready and status.namespace is set")
 			Eventually(func(g Gomega) {
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 					NamespacedName: typeNamespacedName,
 				}})
 				g.Expect(err).NotTo(HaveOccurred())
-
 				g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
+				g.Expect(tenant.Status.Namespace).To(Equal(resourceName))
 			}).Should(Succeed())
-
-			By("checking that the finalizer was added")
-			Expect(tenant.Finalizers).To(ContainElement("osac.openshift.io/tenant"))
-
-			By("checking that the namespace was created")
-			Expect(tenant.Status.Namespace).NotTo(BeEmpty())
-			namespace := &corev1.Namespace{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenant.Status.Namespace}, namespace)).To(Succeed())
-
-			By("checking that the UDN was created")
-			udn := &ovnv1.UserDefinedNetwork{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: tenant.Status.Namespace, Name: udnName}, udn)).To(Succeed())
 		})
 	})
 })
