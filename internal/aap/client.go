@@ -4,6 +4,7 @@ package aap
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // NotFoundError indicates a resource was not found in AAP (HTTP 404).
@@ -53,12 +56,18 @@ type Client struct {
 }
 
 // NewClient creates a new AAP API client.
-func NewClient(baseURL, token string) *Client {
+// When insecureSkipVerify is true, TLS certificate verification is disabled (InsecureSkipVerify) for AAP API requests.
+func NewClient(baseURL, token string, insecureSkipVerify bool) *Client {
+	transport := &http.Transport{}
+	if insecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
 	}
 }
@@ -304,10 +313,15 @@ func (c *Client) doTemplateRequest(ctx context.Context, method, url string, payl
 
 // doRequest performs an HTTP request with authentication and returns the response body.
 func (c *Client) doRequest(ctx context.Context, method, url string, payload any) ([]byte, error) {
+	log := ctrllog.FromContext(ctx)
+
+	log.V(1).Info("AAP request starting", "method", method, "url", url)
+
 	var body io.Reader
 	if payload != nil {
 		jsonData, err := json.Marshal(payload)
 		if err != nil {
+			log.Error(err, "AAP request failed to marshal payload", "method", method, "url", url)
 			return nil, fmt.Errorf("failed to marshal payload: %w", err)
 		}
 		body = bytes.NewBuffer(jsonData)
@@ -315,6 +329,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, payload any)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
+		log.Error(err, "AAP request failed to create request", "method", method, "url", url)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -323,6 +338,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, payload any)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Error(err, "AAP request failed to send", "method", method, "url", url)
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
@@ -331,10 +347,16 @@ func (c *Client) doRequest(ctx context.Context, method, url string, payload any)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Error(err, "AAP request failed to read response body", "method", method, "url", url, "status", resp.StatusCode)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyPreview := string(respBody)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500] + "..."
+		}
+		log.Info("AAP request returned non-success status", "method", method, "url", url, "status", resp.StatusCode, "responseBody", bodyPreview)
 		// Return typed error for 404 Not Found
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, &NotFoundError{
@@ -352,5 +374,6 @@ func (c *Client) doRequest(ctx context.Context, method, url string, payload any)
 		return nil, fmt.Errorf("received non-success status code %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	log.V(1).Info("AAP request succeeded", "method", method, "url", url, "status", resp.StatusCode)
 	return respBody, nil
 }

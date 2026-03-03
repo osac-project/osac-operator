@@ -52,7 +52,7 @@ var _ = Describe("Client", func() {
 						"id": 123,
 					})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return job ID", func() {
@@ -71,7 +71,7 @@ var _ = Describe("Client", func() {
 					w.WriteHeader(http.StatusNotFound)
 					_, _ = w.Write([]byte("template not found"))
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return NotFoundError", func() {
@@ -97,7 +97,7 @@ var _ = Describe("Client", func() {
 						"id": 456,
 					})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return job ID", func() {
@@ -128,7 +128,7 @@ var _ = Describe("Client", func() {
 						"result_traceback": "",
 					})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return job details", func() {
@@ -144,7 +144,7 @@ var _ = Describe("Client", func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusNotFound)
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return error", func() {
@@ -171,7 +171,7 @@ var _ = Describe("Client", func() {
 						_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 					}
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return job template", func() {
@@ -199,7 +199,7 @@ var _ = Describe("Client", func() {
 						_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 					}
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return workflow template", func() {
@@ -217,7 +217,7 @@ var _ = Describe("Client", func() {
 					w.WriteHeader(http.StatusOK)
 					_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return error", func() {
@@ -249,7 +249,7 @@ var _ = Describe("Client", func() {
 						_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 					}
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should cache result and avoid repeated AAP queries", func() {
@@ -302,7 +302,7 @@ var _ = Describe("Client", func() {
 					_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 				}
 			}))
-			client = aap.NewClient(server.URL, "test-token")
+			client = aap.NewClient(server.URL, "test-token", false)
 		})
 
 		It("should invalidate cache when LaunchJobTemplate returns 404", func() {
@@ -366,7 +366,7 @@ var _ = Describe("Client", func() {
 					_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 				}
 			}))
-			client = aap.NewClient(server.URL, "test-token")
+			client = aap.NewClient(server.URL, "test-token", false)
 
 			// Step 1: GetTemplate caches the workflow template
 			template, err := client.GetTemplate(ctx, workflowName)
@@ -421,7 +421,7 @@ var _ = Describe("Client", func() {
 					_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
 				}
 			}))
-			client = aap.NewClient(server.URL, "test-token")
+			client = aap.NewClient(server.URL, "test-token", false)
 		})
 
 		It("should clear all cached templates", func() {
@@ -452,7 +452,7 @@ var _ = Describe("Client", func() {
 						"can_cancel": true,
 					})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return true", func() {
@@ -469,7 +469,7 @@ var _ = Describe("Client", func() {
 						"can_cancel": false,
 					})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return false", func() {
@@ -484,7 +484,7 @@ var _ = Describe("Client", func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusNotFound)
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return error", func() {
@@ -501,7 +501,7 @@ var _ = Describe("Client", func() {
 					w.WriteHeader(http.StatusAccepted)
 					_ = json.NewEncoder(w).Encode(map[string]any{})
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return no error", func() {
@@ -516,7 +516,7 @@ var _ = Describe("Client", func() {
 					w.WriteHeader(http.StatusMethodNotAllowed)
 					_, _ = w.Write([]byte("job cannot be canceled"))
 				}))
-				client = aap.NewClient(server.URL, "test-token")
+				client = aap.NewClient(server.URL, "test-token", false)
 			})
 
 			It("should return MethodNotAllowedError", func() {
