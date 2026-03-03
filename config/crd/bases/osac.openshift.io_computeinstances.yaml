@@ -273,7 +273,7 @@ spec:
               ipAddress:
                 description: |-
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
-                  Populated when the instance is ready (phase Running); cleared when the instance is not ready.
+                  Populated when the instance is ready (phase Running).
                 type: string
               jobs:
                 description: |-
