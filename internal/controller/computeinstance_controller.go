@@ -878,6 +878,11 @@ func kvVMHasConditionWithStatus(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.V
 // All remaining values (Terminating, CrashLoopBackOff, ErrorUnschedulable, ErrImagePull,
 // ImagePullBackOff, ErrorPvcNotFound, DataVolumeError) map to Failed.
 func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.VirtualMachine, currentPhase v1alpha1.ComputeInstancePhaseType) v1alpha1.ComputeInstancePhaseType {
+	log := ctrllog.FromContext(ctx)
+	log.V(1).Info("mapping KubeVirt PrintableStatus to ComputeInstance phase",
+		"printableStatus", kv.Status.PrintableStatus,
+		"currentPhase", currentPhase)
+
 	switch kv.Status.PrintableStatus {
 	case kubevirtv1.VirtualMachineStatusProvisioning,
 		kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding,
@@ -902,18 +907,21 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 	case kubevirtv1.VirtualMachineStatusUnknown:
 		// Host is temporarily unreachable. Preserve the last known phase rather than
 		// asserting Failed. Clears automatically when the host recovers.
+		log.Info("KubeVirt PrintableStatus is Unknown, preserving current phase",
+			"currentPhase", currentPhase)
 		return currentPhase
 	case "":
 		// PrintableStatus not yet set by KubeVirt — race condition at VM creation.
 		// Our watch fires before KubeVirt's controller processes the new VM CR.
 		// Preserve the current phase (always Starting at this point) to avoid a
 		// transient Failed.
+		log.Info("KubeVirt PrintableStatus not yet set, preserving current phase",
+			"currentPhase", currentPhase)
 		return currentPhase
 	default:
 		// Covers: Terminating, CrashLoopBackOff, ErrorUnschedulable, ErrImagePull,
 		// ImagePullBackOff, ErrorPvcNotFound, DataVolumeError.
 		// If a new KubeVirt PrintableStatus is introduced and falls here, update this switch.
-		log := ctrllog.FromContext(ctx)
 		log.Info("unhandled KubeVirt PrintableStatus, defaulting to Failed",
 			"printableStatus", kv.Status.PrintableStatus)
 		return v1alpha1.ComputeInstancePhaseFailed
