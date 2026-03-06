@@ -245,6 +245,7 @@ func (t *computeInstanceFeedbackReconcilerTask) syncState(ctx context.Context) {
 	t.syncConditions(ctx)
 	t.syncPhase(ctx)
 	t.syncIPAddress()
+	t.syncVMReference()
 	t.syncLastRestartedAt()
 }
 
@@ -411,6 +412,22 @@ func (t *computeInstanceFeedbackReconcilerTask) syncIPAddress() {
 	if ok && ipAddress != "" {
 		t.ci.GetStatus().SetIpAddress(ipAddress)
 	}
+}
+
+func (t *computeInstanceFeedbackReconcilerTask) syncVMReference() {
+	ref := t.object.Status.VirtualMachineReference
+	if ref == nil {
+		return
+	}
+	vmRef := t.ci.GetStatus().GetVmReference()
+	if vmRef != nil && vmRef.GetNamespace() == ref.Namespace && vmRef.GetVmName() == ref.KubeVirtVirtualMachineName {
+		return
+	}
+	t.ci.GetStatus().SetVmReference(privatev1.ComputeInstanceVMReference_builder{
+		HubId:     t.ci.GetStatus().GetHub(),
+		Namespace: ref.Namespace,
+		VmName:    ref.KubeVirtVirtualMachineName,
+	}.Build())
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncLastRestartedAt() {

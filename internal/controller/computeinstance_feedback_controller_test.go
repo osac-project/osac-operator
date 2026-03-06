@@ -887,4 +887,106 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.updateCalled).To(BeTrue())
 		})
 	})
+
+	Context("When reconciling VM reference", func() {
+		const vmRefResourceName = "test-ci-vmref"
+
+		BeforeEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vmRefResourceName,
+					Namespace: computeInstanceNS,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel: ciID,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vmRefResourceName, Namespace: computeInstanceNS}, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			vm.Status.VirtualMachineReference = &osacv1alpha1.VirtualMachineReferenceType{
+				Namespace:                  "vm-namespace",
+				KubeVirtVirtualMachineName: "my-kubevirt-vm",
+			}
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: vmRefResourceName, Namespace: computeInstanceNS}, vm)
+			if err == nil {
+				vm.Finalizers = nil
+				_ = k8sClient.Update(ctx, vm)
+				_ = k8sClient.Delete(ctx, vm)
+			}
+		})
+
+		It("should sync VM reference from CR status to fulfillment service", func() {
+			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
+				Object: &privatev1.ComputeInstance{
+					Id:   ciID,
+					Spec: &privatev1.ComputeInstanceSpec{},
+					Status: &privatev1.ComputeInstanceStatus{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						Hub:   "hub-42",
+					},
+				},
+			}
+			mockClient.updateResponse = &privatev1.ComputeInstancesUpdateResponse{}
+
+			request := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vmRefResourceName,
+					Namespace: computeInstanceNS,
+				},
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			vmRef := mockClient.lastUpdate.GetStatus().GetVmReference()
+			Expect(vmRef).NotTo(BeNil())
+			Expect(vmRef.GetHubId()).To(Equal("hub-42"))
+			Expect(vmRef.GetNamespace()).To(Equal("vm-namespace"))
+			Expect(vmRef.GetVmName()).To(Equal("my-kubevirt-vm"))
+		})
+
+		It("should preserve VM reference when it already matches", func() {
+			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
+				Object: &privatev1.ComputeInstance{
+					Id:   ciID,
+					Spec: &privatev1.ComputeInstanceSpec{},
+					Status: &privatev1.ComputeInstanceStatus{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						Hub:   "hub-42",
+						VmReference: privatev1.ComputeInstanceVMReference_builder{
+							HubId:     "hub-42",
+							Namespace: "vm-namespace",
+							VmName:    "my-kubevirt-vm",
+						}.Build(),
+					},
+				},
+			}
+			mockClient.updateResponse = &privatev1.ComputeInstancesUpdateResponse{}
+
+			request := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vmRefResourceName,
+					Namespace: computeInstanceNS,
+				},
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			if mockClient.updateCalled {
+				vmRef := mockClient.lastUpdate.GetStatus().GetVmReference()
+				Expect(vmRef).NotTo(BeNil())
+				Expect(vmRef.GetHubId()).To(Equal("hub-42"))
+				Expect(vmRef.GetNamespace()).To(Equal("vm-namespace"))
+				Expect(vmRef.GetVmName()).To(Equal("my-kubevirt-vm"))
+			}
+		})
+	})
 })
