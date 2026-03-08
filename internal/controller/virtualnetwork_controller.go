@@ -44,11 +44,11 @@ const (
 // VirtualNetworkReconciler reconciles a VirtualNetwork object
 type VirtualNetworkReconciler struct {
 	client.Client
-	Scheme                   *runtime.Scheme
-	VirtualNetworkNamespace  string
-	ProvisioningProvider     provisioning.ProvisioningProvider
-	StatusPollInterval       time.Duration
-	MaxJobHistory            int
+	Scheme                  *runtime.Scheme
+	VirtualNetworkNamespace string
+	ProvisioningProvider    provisioning.ProvisioningProvider
+	StatusPollInterval      time.Duration
+	MaxJobHistory           int
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch;create;update;patch;delete

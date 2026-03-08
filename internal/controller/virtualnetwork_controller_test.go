@@ -44,12 +44,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		ctx = context.TODO()
 		mockProvider = &mockVirtualNetworkProvider{}
 		reconciler = &VirtualNetworkReconciler{
-			Client:                   k8sClient,
-			Scheme:                   k8sClient.Scheme(),
-			VirtualNetworkNamespace:  "default",
-			ProvisioningProvider:     mockProvider,
-			StatusPollInterval:       1 * time.Second,
-			MaxJobHistory:            10,
+			Client:                  k8sClient,
+			Scheme:                  k8sClient.Scheme(),
+			VirtualNetworkNamespace: "default",
+			ProvisioningProvider:    mockProvider,
+			StatusPollInterval:      1 * time.Second,
+			MaxJobHistory:           10,
 		}
 
 		// Create NetworkClass fixture
