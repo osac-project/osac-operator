@@ -74,9 +74,9 @@ const (
 	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
-	// ClusterOrder EDA webhook environment variables
-	envClusterOrderProvisionWebhook   = "OSAC_CLUSTER_ORDER_PROVISION_WEBHOOK"
-	envClusterOrderDeprovisionWebhook = "OSAC_CLUSTER_ORDER_DEPROVISION_WEBHOOK"
+	// Cluster (ClusterOrder) EDA webhook environment variables
+	envClusterCreateWebhook = "OSAC_CLUSTER_CREATE_WEBHOOK"
+	envClusterDeleteWebhook = "OSAC_CLUSTER_DELETE_WEBHOOK"
 
 	// HostPool EDA webhook environment variables
 	envHostPoolProvisionWebhook   = "OSAC_HOSTPOOL_PROVISION_WEBHOOK"
@@ -93,9 +93,9 @@ const (
 	envAAPStatusPollInterval  = "OSAC_AAP_STATUS_POLL_INTERVAL"
 	envAAPInsecureSkipVerify  = "OSAC_AAP_INSECURE_SKIP_VERIFY"
 
-	// ClusterOrder AAP template overrides
-	envClusterOrderAAPProvisionTemplate   = "OSAC_CLUSTER_ORDER_AAP_PROVISION_TEMPLATE"
-	envClusterOrderAAPDeprovisionTemplate = "OSAC_CLUSTER_ORDER_AAP_DEPROVISION_TEMPLATE"
+	// Cluster (ClusterOrder) AAP template overrides
+	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
+	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
 	// HostPool AAP template overrides
 	envHostPoolAAPProvisionTemplate   = "OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE"
@@ -387,8 +387,8 @@ func setupClusterControllers(
 	localMgr := mgr.GetLocalManager()
 	return setupWebhookController(
 		minimumRequestInterval,
-		envClusterOrderProvisionWebhook, envClusterOrderDeprovisionWebhook,
-		envClusterOrderAAPProvisionTemplate, envClusterOrderAAPDeprovisionTemplate,
+		envClusterCreateWebhook, envClusterDeleteWebhook,
+		envClusterAAPProvisionTemplate, envClusterAAPDeprovisionTemplate,
 		func() error {
 			if grpcConn == nil {
 				return nil
