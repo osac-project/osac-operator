@@ -330,16 +330,16 @@ func createProvider(
 }
 
 // createProviderFromEnv creates a provisioning provider by reading shared env vars
-// and optional per-resource-type template overrides.
+// and optional per-resource-type template overrides. Defaults to EDA when no
+// provider type is configured.
 func createProviderFromEnv(
 	provisionWebhookEnv, deprovisionWebhookEnv string,
 	templateOverrideProvisionEnv, templateOverrideDeprovisionEnv string,
 	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
-	providerTypeStr := os.Getenv(envProvisioningProvider)
-	providerType := provisioning.ProviderType(providerTypeStr)
+	providerType := provisioning.ProviderType(os.Getenv(envProvisioningProvider))
 	if providerType == "" {
-		return nil, 0, nil
+		providerType = provisioning.ProviderTypeEDA
 	}
 	provisionWebhook := os.Getenv(provisionWebhookEnv)
 	deprovisionWebhook := os.Getenv(deprovisionWebhookEnv)
@@ -357,6 +357,27 @@ func createProviderFromEnv(
 	)
 }
 
+// setupWebhookController handles the shared flow: feedback setup, provider creation, reconciler setup.
+func setupWebhookController(
+	minimumRequestInterval time.Duration,
+	provisionWebhookEnv, deprovisionWebhookEnv, aapProvisionTemplateEnv, aapDeprovisionTemplateEnv string,
+	setupFeedback func() error,
+	setupReconciler func(provisioning.ProvisioningProvider, time.Duration) error,
+) error {
+	if err := setupFeedback(); err != nil {
+		return err
+	}
+	provider, statusPollInterval, err := createProviderFromEnv(
+		provisionWebhookEnv, deprovisionWebhookEnv,
+		aapProvisionTemplateEnv, aapDeprovisionTemplateEnv,
+		minimumRequestInterval,
+	)
+	if err != nil {
+		return err
+	}
+	return setupReconciler(provider, statusPollInterval)
+}
+
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
@@ -364,38 +385,28 @@ func setupClusterControllers(
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
-	if grpcConn != nil {
-		if err := (controller.NewFeedbackReconciler(
-			ctrl.Log.WithName("feedback"),
-			localMgr.GetClient(),
-			grpcConn,
-			os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
-		)).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("feedback controller: %w", err)
-		}
-	}
-	provider, statusPollInterval, err := createProviderFromEnv(
+	return setupWebhookController(
+		minimumRequestInterval,
 		envClusterOrderProvisionWebhook, envClusterOrderDeprovisionWebhook,
 		envClusterOrderAAPProvisionTemplate, envClusterOrderAAPDeprovisionTemplate,
-		minimumRequestInterval,
+		func() error {
+			if grpcConn == nil {
+				return nil
+			}
+			return controller.NewFeedbackReconciler(
+				ctrl.Log.WithName("feedback"),
+				localMgr.GetClient(), grpcConn,
+				os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
+			).SetupWithManager(mgr)
+		},
+		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
+			return controller.NewClusterOrderReconciler(
+				localMgr.GetClient(), localMgr.GetScheme(),
+				os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
+				provider, pollInterval, maxJobHistory,
+			).SetupWithManager(mgr)
+		},
 	)
-	if err != nil {
-		return fmt.Errorf("create clusterorder provisioning provider: %w", err)
-	}
-	if err := (controller.NewClusterOrderReconciler(
-		localMgr.GetClient(),
-		localMgr.GetScheme(),
-		os.Getenv("OSAC_CLUSTER_CREATE_WEBHOOK"),
-		os.Getenv("OSAC_CLUSTER_DELETE_WEBHOOK"),
-		os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
-		minimumRequestInterval,
-		provider,
-		statusPollInterval,
-		maxJobHistory,
-	)).SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("cluster order controller: %w", err)
-	}
-	return nil
 }
 
 // setupHostPoolControllers registers the HostPool controller and, when grpcConn is set,
@@ -405,38 +416,28 @@ func setupHostPoolControllers(
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
-	if grpcConn != nil {
-		if err := (controller.NewHostPoolFeedbackReconciler(
-			ctrl.Log.WithName("feedback"),
-			localMgr.GetClient(),
-			grpcConn,
-			os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
-		)).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("hostpool feedback controller: %w", err)
-		}
-	}
-	provider, statusPollInterval, err := createProviderFromEnv(
+	return setupWebhookController(
+		minimumRequestInterval,
 		envHostPoolProvisionWebhook, envHostPoolDeprovisionWebhook,
 		envHostPoolAAPProvisionTemplate, envHostPoolAAPDeprovisionTemplate,
-		minimumRequestInterval,
+		func() error {
+			if grpcConn == nil {
+				return nil
+			}
+			return controller.NewHostPoolFeedbackReconciler(
+				ctrl.Log.WithName("feedback"),
+				localMgr.GetClient(), grpcConn,
+				os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
+			).SetupWithManager(mgr)
+		},
+		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
+			return controller.NewHostPoolReconciler(
+				localMgr.GetClient(), localMgr.GetScheme(),
+				os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
+				provider, pollInterval, maxJobHistory,
+			).SetupWithManager(mgr)
+		},
 	)
-	if err != nil {
-		return fmt.Errorf("create hostpool provisioning provider: %w", err)
-	}
-	if err := (controller.NewHostPoolReconciler(
-		localMgr.GetClient(),
-		localMgr.GetScheme(),
-		os.Getenv("OSAC_HOSTPOOL_CREATE_WEBHOOK"),
-		os.Getenv("OSAC_HOSTPOOL_DELETE_WEBHOOK"),
-		os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
-		minimumRequestInterval,
-		provider,
-		statusPollInterval,
-		maxJobHistory,
-	)).SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("hostpool controller: %w", err)
-	}
-	return nil
 }
 
 // setupComputeInstanceControllers registers the ComputeInstance controller and, when grpcConn is set,
@@ -454,23 +455,9 @@ func setupComputeInstanceControllers(
 	if mgr.GetProvider() != nil {
 		targetCluster = remoteClusterName
 	}
-	providerTypeStr := os.Getenv(envProvisioningProvider)
-	provisionWebhook := os.Getenv(envComputeInstanceProvisionWebhook)
-	deprovisionWebhook := os.Getenv(envComputeInstanceDeprovisionWebhook)
-	aapURL := os.Getenv(envAAPURL)
-	aapToken := os.Getenv(envAAPToken)
-	provisionTemplate := os.Getenv(envAAPProvisionTemplate)
-	deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
-	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-	providerType := provisioning.ProviderType(providerTypeStr)
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeEDA
-	}
-	computeInstanceProvider, statusPollInterval, err := createProvider(
-		providerType,
-		provisionWebhook, deprovisionWebhook,
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-		aapInsecureSkipVerify,
+	computeInstanceProvider, statusPollInterval, err := createProviderFromEnv(
+		envComputeInstanceProvisionWebhook, envComputeInstanceDeprovisionWebhook,
+		"", "", // ComputeInstance uses shared AAP templates (no per-resource overrides)
 		minimumRequestInterval,
 	)
 	if err != nil {

@@ -70,10 +70,7 @@ func (r *ClusterOrderReconciler) components() []component {
 type ClusterOrderReconciler struct {
 	client.Client
 	Scheme                *runtime.Scheme
-	CreateClusterWebhook  string
-	DeleteClusterWebhook  string
 	ClusterOrderNamespace string
-	webhookClient         *WebhookClient
 	ProvisioningProvider  provisioning.ProvisioningProvider
 	StatusPollInterval    time.Duration
 	MaxJobHistory         int
@@ -82,10 +79,7 @@ type ClusterOrderReconciler struct {
 func NewClusterOrderReconciler(
 	client client.Client,
 	scheme *runtime.Scheme,
-	createClusterWebhook string,
-	deleteClusterWebhook string,
 	clusterOrderNamespace string,
-	minimumRequestInterval time.Duration,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -106,10 +100,7 @@ func NewClusterOrderReconciler(
 	return &ClusterOrderReconciler{
 		Client:                client,
 		Scheme:                scheme,
-		CreateClusterWebhook:  createClusterWebhook,
-		DeleteClusterWebhook:  deleteClusterWebhook,
 		ClusterOrderNamespace: clusterOrderNamespace,
-		webhookClient:         NewWebhookClient(10*time.Second, minimumRequestInterval),
 		ProvisioningProvider:  provisioningProvider,
 		StatusPollInterval:    statusPollInterval,
 		MaxJobHistory:         maxJobHistory,
@@ -319,25 +310,6 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		}
 	}
 
-	if url := r.CreateClusterWebhook; url != "" {
-		val, exists := instance.Annotations[osacManagementStateAnnotation]
-		if exists && val == ManagementStateManual {
-			log.Info("not triggering create webhook due to management-state annotation", "url", url, "management-state", val)
-		} else {
-			remainingTime, err := r.webhookClient.TriggerWebhook(ctx, url, instance)
-			if err != nil {
-				log.Error(err, "failed to trigger webhook", "url", url, "error", err)
-				return ctrl.Result{Requeue: true}, nil
-			}
-
-			// Verify if we are within the minimum request window
-			if remainingTime != 0 {
-				log.Info("request is within minimum request window", "url", url)
-				return ctrl.Result{RequeueAfter: remainingTime}, nil
-			}
-		}
-	}
-
 	// If provision job needs polling, requeue for status updates
 	if provisionResult.RequeueAfter > 0 {
 		return provisionResult, nil
@@ -540,25 +512,6 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 		}
 	}
 
-	// We always trigger the delete webhook, since this is responsible both for
-	// cleaning up the kubernetres resources and the underlying infrastructure.
-	if url := r.DeleteClusterWebhook; url != "" {
-		val, exists := instance.Annotations[osacManagementStateAnnotation]
-		if exists && val == ManagementStateManual {
-			log.Info("not triggering delete webhook due to management-state annotation", "url", url, "management-state", val)
-		} else {
-			remainingTime, err := r.webhookClient.TriggerWebhook(ctx, url, instance)
-			if err != nil {
-				log.Error(err, "failed to trigger webhook", "url", url, "error", err)
-				return ctrl.Result{Requeue: true}, nil
-			}
-
-			if remainingTime != 0 {
-				return ctrl.Result{RequeueAfter: remainingTime}, nil
-			}
-		}
-	}
-
 	return ctrl.Result{}, nil
 }
 
@@ -567,11 +520,6 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 // Non-blocking: returns RequeueAfter for polling, doesn't delay reconciliation.
 func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-
-	// If provider not configured, skip (webhook fallback)
-	if r.ProvisioningProvider == nil {
-		return ctrl.Result{}, nil
-	}
 
 	// Check if provision job already exists
 	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
@@ -641,11 +589,6 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 // Waits for provision job termination if needed, then triggers deprovision job.
 func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-
-	// If provider not configured, skip (webhook fallback)
-	if r.ProvisioningProvider == nil {
-		return ctrl.Result{}, nil
-	}
 
 	// Check if deprovision job already exists
 	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)

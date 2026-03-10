@@ -58,23 +58,17 @@ func (r *HostPoolReconciler) hostPoolComponents() []hostPoolComponent {
 // HostPoolReconciler reconciles a HostPool object
 type HostPoolReconciler struct {
 	client.Client
-	Scheme                *runtime.Scheme
-	CreateHostPoolWebhook string
-	DeleteHostPoolWebhook string
-	HostPoolNamespace     string
-	webhookClient         *WebhookClient
-	ProvisioningProvider  provisioning.ProvisioningProvider
-	StatusPollInterval    time.Duration
-	MaxJobHistory         int
+	Scheme               *runtime.Scheme
+	HostPoolNamespace    string
+	ProvisioningProvider provisioning.ProvisioningProvider
+	StatusPollInterval   time.Duration
+	MaxJobHistory        int
 }
 
 func NewHostPoolReconciler(
 	client client.Client,
 	scheme *runtime.Scheme,
-	createHostPoolWebhook string,
-	deleteHostPoolWebhook string,
 	hostPoolNamespace string,
-	minimumRequestInterval time.Duration,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -93,15 +87,12 @@ func NewHostPoolReconciler(
 	}
 
 	return &HostPoolReconciler{
-		Client:                client,
-		Scheme:                scheme,
-		CreateHostPoolWebhook: createHostPoolWebhook,
-		DeleteHostPoolWebhook: deleteHostPoolWebhook,
-		HostPoolNamespace:     hostPoolNamespace,
-		webhookClient:         NewWebhookClient(10*time.Second, minimumRequestInterval),
-		ProvisioningProvider:  provisioningProvider,
-		StatusPollInterval:    statusPollInterval,
-		MaxJobHistory:         maxJobHistory,
+		Client:               client,
+		Scheme:               scheme,
+		HostPoolNamespace:    hostPoolNamespace,
+		ProvisioningProvider: provisioningProvider,
+		StatusPollInterval:   statusPollInterval,
+		MaxJobHistory:        maxJobHistory,
 	}
 }
 
@@ -266,40 +257,20 @@ func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req reconcile.Req
 		return ctrl.Result{}, err
 	}
 
-	// If using provider, check provision job status before setting Ready
-	if r.ProvisioningProvider != nil {
-		latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
-		if latestProvisionJob != nil {
-			// Only set Ready if provision job succeeded
-			if latestProvisionJob.State == v1alpha1.JobStateSucceeded {
-				instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "HostPoolReady", "HostPool is ready")
-				instance.SetCondition(v1alpha1.HostPoolConditionAvailable, metav1.ConditionTrue, "HostPoolAvailable", "HostPool is available")
-				instance.Status.Phase = v1alpha1.HostPoolPhaseReady
-				// Update status with host sets info
-				instance.Status.HostSets = instance.Spec.HostSets
-			} else if !latestProvisionJob.State.IsTerminal() {
-				// Job still running, keep Progressing phase
-				instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionTrue, "ProvisionJobRunning", fmt.Sprintf("Provision job %s is %s", latestProvisionJob.JobID, latestProvisionJob.State))
-			}
-			// If job failed, Phase was already set to Failed in handleProvisioning
+	// Check provision job status before setting Ready
+	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	if latestProvisionJob != nil {
+		// Only set Ready if provision job succeeded
+		if latestProvisionJob.State == v1alpha1.JobStateSucceeded {
+			instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "HostPoolReady", "HostPool is ready")
+			instance.SetCondition(v1alpha1.HostPoolConditionAvailable, metav1.ConditionTrue, "HostPoolAvailable", "HostPool is available")
+			instance.Status.Phase = v1alpha1.HostPoolPhaseReady
+			instance.Status.HostSets = instance.Spec.HostSets
+		} else if !latestProvisionJob.State.IsTerminal() {
+			// Job still running, keep Progressing phase
+			instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionTrue, "ProvisionJobRunning", fmt.Sprintf("Provision job %s is %s", latestProvisionJob.JobID, latestProvisionJob.State))
 		}
-	} else {
-		// Webhook fallback - call webhook if configured
-		if r.CreateHostPoolWebhook != "" {
-			_, err := r.webhookClient.TriggerWebhook(ctx, r.CreateHostPoolWebhook, instance)
-			if err != nil {
-				instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "WebhookFailed", fmt.Sprintf("Webhook call failed: %v", err))
-				instance.Status.Phase = v1alpha1.HostPoolPhaseFailed
-				return ctrl.Result{}, err
-			}
-		}
-
-		// Fire-and-forget webhook - set Ready immediately (old behavior)
-		instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "HostPoolReady", "HostPool is ready")
-		instance.SetCondition(v1alpha1.HostPoolConditionAvailable, metav1.ConditionTrue, "HostPoolAvailable", "HostPool is available")
-		instance.Status.Phase = v1alpha1.HostPoolPhaseReady
-		// Update status with host sets info
-		instance.Status.HostSets = instance.Spec.HostSets
+		// If job failed, Phase was already set to Failed in handleProvisioning
 	}
 
 	// If provision job needs polling, requeue for status updates
@@ -360,24 +331,6 @@ func (r *HostPoolReconciler) handleDelete(ctx context.Context, req reconcile.Req
 	}
 
 	if ns != nil {
-		// Call webhook to delete host pool resources
-		if url := r.DeleteHostPoolWebhook; url != "" {
-			val, exists := instance.Annotations[osacHostPoolManagementStateAnnotation]
-			if exists && val == ManagementStateManual {
-				log.Info("not triggering delete webhook due to management-state annotation", "url", url, "management-state", val)
-			} else {
-				remainingTime, err := r.webhookClient.TriggerWebhook(ctx, url, instance)
-				if err != nil {
-					log.Error(err, "failed to trigger webhook", "url", url, "error", err)
-					return ctrl.Result{Requeue: true}, nil
-				}
-
-				if remainingTime != 0 {
-					return ctrl.Result{RequeueAfter: remainingTime}, nil
-				}
-			}
-		}
-
 		// Delete working namespace
 		log.Info("deleting host pool namespace", "namespace", ns.GetName())
 		if err := r.Client.Delete(ctx, ns); err != nil {
@@ -402,11 +355,6 @@ func (r *HostPoolReconciler) handleDelete(ctx context.Context, req reconcile.Req
 // Polls job status and sets Phase=Ready only when job succeeds (replaces fire-and-forget webhook).
 func (r *HostPoolReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-
-	// If provider not configured, skip (webhook fallback)
-	if r.ProvisioningProvider == nil {
-		return ctrl.Result{}, nil
-	}
 
 	// Check if provision job already exists
 	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
@@ -477,11 +425,6 @@ func (r *HostPoolReconciler) handleProvisioning(ctx context.Context, instance *v
 // Waits for provision job termination if needed, then triggers deprovision job.
 func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.HostPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-
-	// If provider not configured, skip (webhook fallback)
-	if r.ProvisioningProvider == nil {
-		return ctrl.Result{}, nil
-	}
 
 	// Check if deprovision job already exists
 	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)

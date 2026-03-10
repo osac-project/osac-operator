@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
@@ -40,6 +41,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -125,6 +127,14 @@ var _ = AfterSuite(func() {
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+// noopWebhookClientForTest is a no-op webhook client for tests that need a provider
+// but don't test provisioning behavior.
+type noopWebhookClientForTest struct{}
+
+func (c *noopWebhookClientForTest) TriggerWebhook(_ context.Context, _ string, _ webhook.Resource) (time.Duration, error) {
+	return 0, nil
+}
 
 // newTestComputeInstanceSpec creates a valid ComputeInstanceSpec for testing
 func newTestComputeInstanceSpec(templateID string) osacv1alpha1.ComputeInstanceSpec {
