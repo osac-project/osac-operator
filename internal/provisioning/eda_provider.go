@@ -34,15 +34,6 @@ func IsEDAJobID(jobID string) bool {
 	return strings.HasPrefix(jobID, EDAJobIDPrefix)
 }
 
-// RateLimitError indicates a request was rate-limited and should be retried.
-type RateLimitError struct {
-	RetryAfter time.Duration
-}
-
-func (e *RateLimitError) Error() string {
-	return fmt.Sprintf("rate limit active, retry after %v", e.RetryAfter)
-}
-
 // WebhookClient is the interface for triggering webhooks to EDA.
 // This matches the existing webhook_common.WebhookClient implementation.
 type WebhookClient interface {
@@ -71,16 +62,16 @@ func NewEDAProvider(
 }
 
 // getAAPFinalizerName returns the AAP finalizer name for the resource type.
-func getAAPFinalizerName(resource client.Object) string {
+func getAAPFinalizerName(resource client.Object) (string, error) {
 	switch resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return ComputeInstanceAAPFinalizer
+		return ComputeInstanceAAPFinalizer, nil
 	case *v1alpha1.ClusterOrder:
-		return ClusterOrderAAPFinalizer
+		return ClusterOrderAAPFinalizer, nil
 	case *v1alpha1.HostPool:
-		return HostPoolAAPFinalizer
+		return HostPoolAAPFinalizer, nil
 	default:
-		return ComputeInstanceAAPFinalizer
+		return "", fmt.Errorf("unsupported resource type for AAP finalizer: %T", resource)
 	}
 }
 
@@ -160,7 +151,10 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 	log := ctrllog.FromContext(ctx)
 
 	// EDA only deprovisions if AAP finalizer exists (set by playbook during provision)
-	aapFinalizer := getAAPFinalizerName(resource)
+	aapFinalizer, err := getAAPFinalizerName(resource)
+	if err != nil {
+		return nil, err
+	}
 	if !controllerutil.ContainsFinalizer(resource, aapFinalizer) {
 		log.Info("no AAP finalizer, skipping EDA deprovisioning", "finalizer", aapFinalizer)
 		return &DeprovisionResult{
@@ -209,7 +203,10 @@ func (p *EDAProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 // Returns Succeeded when finalizer is removed, Running while it still exists.
 func (p *EDAProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	// Check if AAP finalizer has been removed (signals playbook completion)
-	aapFinalizer := getAAPFinalizerName(resource)
+	aapFinalizer, err := getAAPFinalizerName(resource)
+	if err != nil {
+		return ProvisionStatus{}, err
+	}
 
 	if !controllerutil.ContainsFinalizer(resource, aapFinalizer) {
 		return ProvisionStatus{

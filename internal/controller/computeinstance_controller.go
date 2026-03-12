@@ -51,6 +51,9 @@ import (
 const (
 	// DefaultMaxJobHistory is the default number of jobs to keep in status.jobs array
 	DefaultMaxJobHistory = 10
+
+	// DefaultStatusPollInterval is the default interval for polling provider job status
+	DefaultStatusPollInterval = 30 * time.Second
 )
 
 // ComputeInstanceReconciler reconciles a ComputeInstance object

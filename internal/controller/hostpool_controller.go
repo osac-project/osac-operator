@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -78,8 +77,8 @@ func NewHostPoolReconciler(
 		hostPoolNamespace = defaultHostPoolNamespace
 	}
 
-	if statusPollInterval == 0 {
-		statusPollInterval = 30 * time.Second
+	if statusPollInterval <= 0 {
+		statusPollInterval = DefaultStatusPollInterval
 	}
 
 	if maxJobHistory <= 0 {
@@ -364,8 +363,7 @@ func (r *HostPoolReconciler) handleProvisioning(ctx context.Context, instance *v
 		log.Info("triggering provision job")
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
 		if err != nil {
-			var rateLimitErr *provisioning.RateLimitError
-			if errors.As(err, &rateLimitErr) {
+			if rateLimitErr, ok := provisioning.AsRateLimitError(err); ok {
 				log.Info("provision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
 				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
 			}
@@ -434,8 +432,7 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 		log.Info("triggering deprovision job")
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
 		if err != nil {
-			var rateLimitErr *provisioning.RateLimitError
-			if errors.As(err, &rateLimitErr) {
+			if rateLimitErr, ok := provisioning.AsRateLimitError(err); ok {
 				log.Info("deprovision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
 				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
 			}
@@ -483,6 +480,9 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 				Timestamp: metav1.Now(),
 			}, r.MaxJobHistory)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+		default:
+			return ctrl.Result{}, fmt.Errorf("unknown deprovision action: %v", result.Action)
 		}
 	}
 

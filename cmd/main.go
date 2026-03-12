@@ -71,6 +71,8 @@ const (
 	// Namespace environment variables
 	envComputeInstanceNamespace          = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace               = "OSAC_NETWORKING_NAMESPACE"
+	envClusterOrderNamespace             = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envHostPoolOrderNamespace            = "OSAC_HOSTPOOL_ORDER_NAMESPACE"
 	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
@@ -396,13 +398,13 @@ func setupClusterControllers(
 			return controller.NewFeedbackReconciler(
 				ctrl.Log.WithName("feedback"),
 				localMgr.GetClient(), grpcConn,
-				os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
+				os.Getenv(envClusterOrderNamespace),
 			).SetupWithManager(mgr)
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
 			return controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetScheme(),
-				os.Getenv("OSAC_CLUSTER_ORDER_NAMESPACE"),
+				os.Getenv(envClusterOrderNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)
 		},
@@ -427,13 +429,13 @@ func setupHostPoolControllers(
 			return controller.NewHostPoolFeedbackReconciler(
 				ctrl.Log.WithName("feedback"),
 				localMgr.GetClient(), grpcConn,
-				os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
+				os.Getenv(envHostPoolOrderNamespace),
 			).SetupWithManager(mgr)
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
 			return controller.NewHostPoolReconciler(
 				localMgr.GetClient(), localMgr.GetScheme(),
-				os.Getenv("OSAC_HOSTPOOL_ORDER_NAMESPACE"),
+				os.Getenv(envHostPoolOrderNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)
 		},
