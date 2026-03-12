@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
 var _ = Describe("ClusterOrder Controller", func() {
@@ -70,9 +71,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
+			noopWebhookClient := &noopWebhookClientForTest{}
 			controllerReconciler := &ClusterOrderReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

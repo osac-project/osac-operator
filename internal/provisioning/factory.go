@@ -33,7 +33,10 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 		if config.ProvisionWebhook == "" || config.DeprovisionWebhook == "" {
 			return nil, fmt.Errorf("EDA provider requires both ProvisionWebhook and DeprovisionWebhook")
 		}
-		return NewEDAProvider(config.WebhookClient, config.ProvisionWebhook, config.DeprovisionWebhook), nil
+		return NewEDAProvider(
+			config.WebhookClient,
+			config.ProvisionWebhook, config.DeprovisionWebhook,
+		), nil
 
 	case ProviderTypeAAP:
 		if config.AAPClient == nil {
