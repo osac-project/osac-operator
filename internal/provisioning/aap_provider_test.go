@@ -159,7 +159,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return error", func() {
 				_, err := provider.TriggerProvision(ctx, resource)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("provision template not configured"))
+				Expect(err.Error()).To(ContainSubstring("create template not configured"))
 			})
 		})
 
@@ -457,7 +457,7 @@ var _ = Describe("AAPProvider", func() {
 			It("should return error", func() {
 				_, err := provider.TriggerDeprovision(ctx, instance)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("deprovision template not configured"))
+				Expect(err.Error()).To(ContainSubstring("delete template not configured"))
 			})
 		})
 
@@ -644,6 +644,78 @@ var _ = Describe("AAPProvider", func() {
 	Describe("Name", func() {
 		It("should return provider name", func() {
 			Expect(provider.Name()).To(Equal(string(provisioning.ProviderTypeAAP)))
+		})
+	})
+
+	Describe("NewAAPProviderWithPrefix", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProviderWithPrefix(aapClient, "osac")
+		})
+
+		It("should derive provision template name from resource Kind", func() {
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				Expect(templateName).To(Equal("osac-create-virtual-network"))
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Expect(req.TemplateName).To(Equal("osac-create-virtual-network"))
+				return &aap.LaunchJobTemplateResponse{JobID: 100}, nil
+			}
+
+			vnet := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-vnet", Namespace: "default"},
+			}
+			vnet.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("VirtualNetwork"))
+
+			result, err := provider.TriggerProvision(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("100"))
+		})
+
+		It("should derive deprovision template name from resource Kind", func() {
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				Expect(templateName).To(Equal("osac-delete-subnet"))
+				return &aap.Template{ID: 2, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Expect(req.TemplateName).To(Equal("osac-delete-subnet"))
+				return &aap.LaunchJobTemplateResponse{JobID: 200}, nil
+			}
+
+			subnet := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-subnet", Namespace: "default"},
+			}
+			subnet.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("Subnet"))
+
+			result, err := provider.TriggerDeprovision(ctx, subnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+			Expect(result.JobID).To(Equal("200"))
+		})
+
+		It("should derive security-group template names correctly", func() {
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				Expect(templateName).To(Equal("osac-create-security-group"))
+				return &aap.Template{ID: 3, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				return &aap.LaunchJobTemplateResponse{JobID: 300}, nil
+			}
+
+			sg := &v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-sg", Namespace: "default"},
+			}
+			sg.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("SecurityGroup"))
+
+			result, err := provider.TriggerProvision(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("300"))
+		})
+
+		It("should return error when resource has no Kind set", func() {
+			_, err := provider.TriggerProvision(ctx, resource)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("resource has no Kind set"))
 		})
 	})
 })

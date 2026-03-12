@@ -22,10 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -122,19 +120,20 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	// Set phase to Progressing
 	subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
 
-	// Get parent VirtualNetwork to read implementation strategy
-	vnet := &v1alpha1.VirtualNetwork{}
-	err := r.Get(ctx, types.NamespacedName{
-		Name:      subnet.Spec.VirtualNetwork,
-		Namespace: subnet.Namespace,
-	}, vnet)
+	// Get parent VirtualNetwork by UUID label to read implementation strategy
+	vnetList := &v1alpha1.VirtualNetworkList{}
+	err := r.List(ctx, vnetList,
+		client.InNamespace(subnet.Namespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork},
+	)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("parent VirtualNetwork not found, requeueing", "name", subnet.Spec.VirtualNetwork)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 		return ctrl.Result{}, err
 	}
+	if len(vnetList.Items) == 0 {
+		log.Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	vnet := &vnetList.Items[0]
 
 	// Read implementation strategy from parent VirtualNetwork spec
 	implementationStrategy := vnet.Spec.ImplementationStrategy

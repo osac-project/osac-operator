@@ -21,6 +21,12 @@ type ProviderConfig struct {
 	AAPClient           *aap.Client
 	ProvisionTemplate   string
 	DeprovisionTemplate string
+
+	// TemplatePrefix enables convention-based template name resolution for AAP.
+	// When set, template names are derived from the resource Kind:
+	//   {prefix}-create-{kind-kebab} and {prefix}-delete-{kind-kebab}
+	// Explicit ProvisionTemplate/DeprovisionTemplate take precedence when set.
+	TemplatePrefix string
 }
 
 // NewProvider creates a provisioning provider based on the configuration.
@@ -38,6 +44,9 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 	case ProviderTypeAAP:
 		if config.AAPClient == nil {
 			return nil, fmt.Errorf("AAP provider requires AAPClient")
+		}
+		if config.TemplatePrefix != "" && config.ProvisionTemplate == "" && config.DeprovisionTemplate == "" {
+			return NewAAPProviderWithPrefix(config.AAPClient, config.TemplatePrefix), nil
 		}
 		return NewAAPProvider(config.AAPClient, config.ProvisionTemplate, config.DeprovisionTemplate), nil
 

@@ -59,6 +59,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet",
 				Namespace: "test-namespace",
+				Labels: map[string]string{
+					osacVirtualNetworkIDLabel: "test-vnet-uuid",
+				},
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
 				Region:                 "us-west-1",
@@ -74,7 +77,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				Namespace: "test-namespace",
 			},
 			Spec: osacv1alpha1.SecurityGroupSpec{
-				VirtualNetwork: "test-vnet",
+				VirtualNetwork: "test-vnet-uuid",
 				IngressRules: []osacv1alpha1.SecurityRule{
 					{
 						Protocol: osacv1alpha1.SecurityGroupProtocolTCP,
@@ -235,6 +238,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "vnet-no-strategy",
 					Namespace: "test-namespace",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "vnet-no-strategy-uuid",
+					},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region:       "us-west-1",
@@ -250,7 +256,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					Namespace: "test-namespace",
 				},
 				Spec: osacv1alpha1.SecurityGroupSpec{
-					VirtualNetwork: "vnet-no-strategy",
+					VirtualNetwork: "vnet-no-strategy-uuid",
 				},
 			}
 			Expect(fakeClient.Create(ctx, sgNoStrategy)).To(Succeed())

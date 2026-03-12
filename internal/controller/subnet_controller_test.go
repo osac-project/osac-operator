@@ -58,6 +58,9 @@ var _ = Describe("SubnetReconciler", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet",
 				Namespace: "default",
+				Labels: map[string]string{
+					osacVirtualNetworkIDLabel: "test-vnet-uuid",
+				},
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
 				Region:                 "us-west-1",
@@ -75,7 +78,7 @@ var _ = Describe("SubnetReconciler", func() {
 				Namespace: "default",
 			},
 			Spec: osacv1alpha1.SubnetSpec{
-				VirtualNetwork: "test-vnet",
+				VirtualNetwork: "test-vnet-uuid",
 				IPv4CIDR:       "10.0.1.0/24",
 			},
 		}
@@ -169,6 +172,9 @@ var _ = Describe("SubnetReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "vnet-no-strategy",
 					Namespace: "default",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "vnet-no-strategy-uuid",
+					},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region:       "us-west-1",
@@ -185,7 +191,7 @@ var _ = Describe("SubnetReconciler", func() {
 					Namespace: "default",
 				},
 				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-no-strategy",
+					VirtualNetwork: "vnet-no-strategy-uuid",
 					IPv4CIDR:       "10.0.3.0/24",
 				},
 			}

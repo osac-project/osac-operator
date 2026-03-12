@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/stoewer/go-strcase"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -24,19 +25,60 @@ type AAPClient interface {
 }
 
 // AAPProvider implements ProvisioningProvider using direct AAP REST API integration.
+//
+// Template resolution supports two modes:
+//   - Explicit: provisionTemplate and deprovisionTemplate are set directly
+//   - Prefix-based: templatePrefix is set, and template names are derived from the
+//     resource Kind (e.g., prefix "osac" + Kind "VirtualNetwork" → "osac-create-virtual-network")
 type AAPProvider struct {
 	client              AAPClient
 	provisionTemplate   string
 	deprovisionTemplate string
+	templatePrefix      string
 }
 
-// NewAAPProvider creates a new AAP provider.
+// NewAAPProvider creates a new AAP provider with explicit template names.
 func NewAAPProvider(client AAPClient, provisionTemplate, deprovisionTemplate string) *AAPProvider {
 	return &AAPProvider{
 		client:              client,
 		provisionTemplate:   provisionTemplate,
 		deprovisionTemplate: deprovisionTemplate,
 	}
+}
+
+// NewAAPProviderWithPrefix creates a new AAP provider that derives template names
+// from the resource Kind using the given prefix. For example, with prefix "osac" and
+// a VirtualNetwork resource, it resolves to "osac-create-virtual-network" and
+// "osac-delete-virtual-network".
+func NewAAPProviderWithPrefix(client AAPClient, templatePrefix string) *AAPProvider {
+	return &AAPProvider{
+		client:         client,
+		templatePrefix: templatePrefix,
+	}
+}
+
+// resolveTemplateName returns the template name to use for the given action and resource.
+// When explicit template names are configured, those are returned directly.
+// When a prefix is configured, the name is derived from the resource Kind.
+func (p *AAPProvider) resolveTemplateName(action string, resource client.Object) (string, error) {
+	switch action {
+	case "create":
+		if p.provisionTemplate != "" {
+			return p.provisionTemplate, nil
+		}
+	case "delete":
+		if p.deprovisionTemplate != "" {
+			return p.deprovisionTemplate, nil
+		}
+	}
+	if p.templatePrefix != "" {
+		kind := resource.GetObjectKind().GroupVersionKind().Kind
+		if kind == "" {
+			return "", fmt.Errorf("resource has no Kind set; cannot derive template name from prefix")
+		}
+		return p.templatePrefix + "-" + action + "-" + strcase.KebabCase(kind), nil
+	}
+	return "", fmt.Errorf("%s template not configured", action)
 }
 
 // TriggerProvision triggers provisioning via AAP API.
@@ -56,47 +98,11 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 
 // launchProvisionJob launches the provision template and returns the job ID.
 func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Object) (string, error) {
-	if p.provisionTemplate == "" {
-		return "", fmt.Errorf("provision template not configured")
-	}
-
-	template, err := p.client.GetTemplate(ctx, p.provisionTemplate)
+	templateName, err := p.resolveTemplateName("create", resource)
 	if err != nil {
-		return "", fmt.Errorf("failed to get template: %w", err)
+		return "", err
 	}
-
-	// Extract extra vars from resource
-	extraVars, err := extractExtraVars(resource)
-	if err != nil {
-		return "", fmt.Errorf("failed to extract extra vars: %w", err)
-	}
-
-	// Launch appropriate template type
-	var jobID int
-	switch template.Type {
-	case aap.TemplateTypeJob:
-		resp, err := p.client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
-			TemplateName: p.provisionTemplate,
-			ExtraVars:    extraVars,
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to launch job template: %w", err)
-		}
-		jobID = resp.JobID
-	case aap.TemplateTypeWorkflow:
-		resp, err := p.client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
-			TemplateName: p.provisionTemplate,
-			ExtraVars:    extraVars,
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to launch workflow template: %w", err)
-		}
-		jobID = resp.JobID
-	default:
-		return "", fmt.Errorf("unknown template type: %s", template.Type)
-	}
-
-	return strconv.Itoa(jobID), nil
+	return p.launchTemplate(ctx, templateName, resource)
 }
 
 // GetProvisionStatus checks provisioning job status via AAP API.
@@ -105,10 +111,31 @@ func (p *AAPProvider) GetProvisionStatus(ctx context.Context, resource client.Ob
 }
 
 // TriggerDeprovision attempts to start deprovisioning for a resource.
+// For ComputeInstance resources, it checks whether a running provision job needs
+// to be cancelled first (including EDA provider switch scenarios).
+// For all other resource types, it launches the deprovision job directly.
 func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*DeprovisionResult, error) {
-	instance := resource.(*v1alpha1.ComputeInstance)
+	// ComputeInstance has special pre-deprovision checks (EDA compatibility, job cancellation)
+	if instance, ok := resource.(*v1alpha1.ComputeInstance); ok {
+		return p.triggerComputeInstanceDeprovision(ctx, instance)
+	}
 
-	// Check if provision job needs to be terminated first
+	// For all other resource types, launch deprovision directly
+	jobID, err := p.launchDeprovisionJob(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DeprovisionResult{
+		Action:                 DeprovisionTriggered,
+		JobID:                  jobID,
+		BlockDeletionOnFailure: true,
+	}, nil
+}
+
+// triggerComputeInstanceDeprovision handles deprovisioning for ComputeInstance resources,
+// which may have EDA provision jobs that need special handling before deprovisioning.
+func (p *AAPProvider) triggerComputeInstanceDeprovision(ctx context.Context, instance *v1alpha1.ComputeInstance) (*DeprovisionResult, error) {
 	ready, provisionStatus, err := p.isReadyForDeprovision(ctx, instance)
 	if err != nil {
 		return nil, err
@@ -121,8 +148,7 @@ func (p *AAPProvider) TriggerDeprovision(ctx context.Context, resource client.Ob
 		}, nil
 	}
 
-	// Launch deprovision job
-	jobID, err := p.launchDeprovisionJob(ctx, resource)
+	jobID, err := p.launchDeprovisionJob(ctx, instance)
 	if err != nil {
 		return nil, err
 	}
@@ -249,27 +275,30 @@ func (p *AAPProvider) cancelProvisionJob(ctx context.Context, jobID string) erro
 
 // launchDeprovisionJob launches the deprovision template and returns the job ID.
 func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.Object) (string, error) {
-	if p.deprovisionTemplate == "" {
-		return "", fmt.Errorf("deprovision template not configured")
+	templateName, err := p.resolveTemplateName("delete", resource)
+	if err != nil {
+		return "", err
 	}
+	return p.launchTemplate(ctx, templateName, resource)
+}
 
-	template, err := p.client.GetTemplate(ctx, p.deprovisionTemplate)
+// launchTemplate launches the named template (job or workflow) and returns the job ID.
+func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object) (string, error) {
+	template, err := p.client.GetTemplate(ctx, templateName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
 	}
 
-	// Extract extra vars from resource
 	extraVars, err := extractExtraVars(resource)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 
-	// Launch appropriate template type
 	var jobID int
 	switch template.Type {
 	case aap.TemplateTypeJob:
 		resp, err := p.client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
-			TemplateName: p.deprovisionTemplate,
+			TemplateName: templateName,
 			ExtraVars:    extraVars,
 		})
 		if err != nil {
@@ -278,7 +307,7 @@ func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.
 		jobID = resp.JobID
 	case aap.TemplateTypeWorkflow:
 		resp, err := p.client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
-			TemplateName: p.deprovisionTemplate,
+			TemplateName: templateName,
 			ExtraVars:    extraVars,
 		})
 		if err != nil {

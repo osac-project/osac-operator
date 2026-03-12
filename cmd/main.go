@@ -470,18 +470,15 @@ func setupNetworkingControllers(
 	// Get provider configuration
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
-	provisionTemplate := os.Getenv(envAAPProvisionTemplate)
-	deprovisionTemplate := os.Getenv(envAAPDeprovisionTemplate)
 	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
+	statusPollInterval := parsePollInterval(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
 
-	// Create provider (AAP only for networking - no EDA webhook support)
-	networkingProvider, statusPollInterval, err := createAAPProvider(
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-		aapInsecureSkipVerify,
-	)
-	if err != nil {
-		return fmt.Errorf("create networking provisioning provider: %w", err)
-	}
+	// Create a single prefix-based AAP provider shared by all networking controllers.
+	// Template names are derived from the resource Kind at call time:
+	//   {prefix}-create-{kind-kebab} / {prefix}-delete-{kind-kebab}
+	templatePrefix := helpers.GetEnvWithDefault("OSAC_AAP_TEMPLATE_PREFIX", "osac")
+	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
+	networkingProvider := provisioning.NewAAPProviderWithPrefix(aapClient, templatePrefix)
 
 	// Setup VirtualNetwork controller and feedback
 	if grpcConn != nil {
