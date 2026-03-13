@@ -21,6 +21,7 @@ import (
 
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -51,6 +52,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
 func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string, targetCluster string) *TenantReconciler {
 	return &TenantReconciler{
@@ -99,25 +101,92 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 
 	log.Info("handling update for Tenant", "name", instance.GetName())
 
-	// Set phase to Progressing
+	// Reset all status fields to their Progressing defaults. They are only set to
+	// meaningful values if ALL prerequisites are satisfied and the phase advances to
+	// Ready. Any early return below leaves the status in a clean Progressing state.
 	instance.Status.Phase = v1alpha1.TenantPhaseProgressing
+	instance.Status.Namespace = ""
+	instance.Status.StorageClass = ""
 
-	// Get target cluster client where namespace and UDN are reconciled
+	// Get target cluster client where namespace, StorageClass, and UDN are reconciled
 	targetClient, err := r.getTargetClient(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Get namespace
+	// Prerequisite 1: namespace must exist on the target cluster
 	var namespace corev1.Namespace
 	if err = targetClient.Get(ctx, client.ObjectKey{Name: instance.GetName()}, &namespace); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	// Prerequisite 2: exactly one StorageClass labeled osac.openshift.io/tenant=<name> must exist
+	storageClassName, err := r.getTenantStorageClass(ctx, targetClient, instance.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if storageClassName == "" {
+		// No matching StorageClass yet; stay Progressing and wait for Watch event
+		return ctrl.Result{}, nil
+	}
+
 	instance.Status.Namespace = namespace.GetName()
+	instance.Status.StorageClass = storageClassName
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 
 	return ctrl.Result{}, nil
+}
+
+// getTenantStorageClass returns the name of the single StorageClass on the target cluster that
+// carries the label osac.openshift.io/tenant=<tenantName>. It returns an empty string (not an
+// error) when zero StorageClasses are found, so the caller can remain in Progressing without
+// polluting the error log. A non-nil error is only returned for API call failures.
+func (r *TenantReconciler) getTenantStorageClass(ctx context.Context, targetClient client.Client, tenantName string) (string, error) {
+	log := ctrllog.FromContext(ctx)
+
+	storageClassList := &storagev1.StorageClassList{}
+	if err := targetClient.List(ctx, storageClassList, client.MatchingLabels{osacTenantAnnotation: tenantName}); err != nil {
+		return "", err
+	}
+
+	switch len(storageClassList.Items) {
+	case 0:
+		log.Info("no StorageClass found for tenant, staying Progressing", "tenant", tenantName)
+		return "", nil
+	case 1:
+		return storageClassList.Items[0].GetName(), nil
+	default:
+		log.Info("multiple StorageClasses found for tenant, staying Progressing",
+			"tenant", tenantName, "count", len(storageClassList.Items))
+		return "", nil
+	}
+}
+
+// mapStorageClassToTenant maps a StorageClass event to the Tenant named by the
+// osac.openshift.io/tenant label on the StorageClass.
+func (r *TenantReconciler) mapStorageClassToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	tenantName, exists := obj.GetLabels()[osacTenantAnnotation]
+	if !exists || tenantName == "" {
+		return nil
+	}
+
+	tenant := &v1alpha1.Tenant{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.tenantNamespace, Name: tenantName}, tenant)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to get Tenant for StorageClass", "storageClass", obj.GetName(), "tenant", tenantName)
+		}
+		return nil
+	}
+
+	log.Info("mapping StorageClass to Tenant", "storageClass", obj.GetName(), "tenant", tenantName)
+	return []reconcile.Request{
+		{
+			NamespacedName: client.ObjectKeyFromObject(tenant),
+		},
+	}
 }
 
 // mapObjectToTenant maps an event for a watched UDN to the associated Tenant resource.
@@ -172,7 +241,21 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
 			mcbuilder.WithPredicates(tenantLabelPredicate),
 		).
+		Watches(
+			&storagev1.StorageClass{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapStorageClassToTenant),
+			mcbuilder.WithPredicates(storageClassTenantPredicate()),
+		).
 		Complete(r)
+}
+
+// storageClassTenantPredicate returns a predicate that passes only StorageClasses
+// carrying the osac.openshift.io/tenant label (any value).
+func storageClassTenantPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		_, exists := obj.GetLabels()[osacTenantAnnotation]
+		return exists
+	})
 }
 
 // tenantNamespacePredicate filters resources based on the tenant namespace.

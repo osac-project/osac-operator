@@ -73,7 +73,7 @@ spec:
                     storageClass:
                       description: |-
                         StorageClass is the Kubernetes storage class to use for this disk
-                        If not specified, the default storage class will be used
+                        If not specified, the tenant's StorageClass (labeled osac.openshift.io/tenant=<tenant>) is used
                       type: string
                   required:
                   - sizeGiB
@@ -93,7 +93,7 @@ spec:
                   storageClass:
                     description: |-
                       StorageClass is the Kubernetes storage class to use for this disk
-                      If not specified, the default storage class will be used
+                      If not specified, the tenant's StorageClass (labeled osac.openshift.io/tenant=<tenant>) is used
                     type: string
                 required:
                 - sizeGiB

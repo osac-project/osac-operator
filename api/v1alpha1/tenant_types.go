@@ -44,11 +44,15 @@ type TenantStatus struct {
 
 	// Namespace is the namespace allocated to the tenant
 	Namespace string `json:"namespace,omitempty"`
+
+	// StorageClass is the StorageClass allocated to the tenant on the target cluster
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
+// +kubebuilder:printcolumn:name="Storage Class",type=string,JSONPath=`.status.storageClass`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
 // Tenant is the Schema for the tenants API.

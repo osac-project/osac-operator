@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,37 +68,74 @@ var _ = Describe("Tenant Controller", func() {
 			By("Cleanup the specific resource instance Tenant")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should transition through all Ready/Progressing phases correctly", func() {
 			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
-			By("reconciling when namespace does not exist - status becomes Progressing")
-			_, _ = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}})
-			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
-
-			By("creating the namespace on the target cluster (controller only observes it)")
-			namespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: resourceName,
-				},
-			}
-			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.Delete(ctx, namespace)
-			})
-
-			By("reconciling until tenant is Ready and status.namespace is set")
-			Eventually(func(g Gomega) {
+			doReconcile := func() error {
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 					NamespacedName: typeNamespacedName,
 				}})
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
-				g.Expect(tenant.Status.Namespace).To(Equal(resourceName))
-			}).Should(Succeed())
+				return err
+			}
+			getPhase := func() v1alpha1.TenantPhaseType {
+				Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+				return tenant.Status.Phase
+			}
+
+			// ── Step 1: no namespace, no StorageClass ─────────────────────────────
+			By("reconciling when namespace does not exist - status becomes Progressing")
+			_ = doReconcile()
+			Expect(getPhase()).To(Equal(v1alpha1.TenantPhaseProgressing))
+
+			// ── Step 2: namespace exists, no StorageClass ─────────────────────────
+			By("creating the namespace on the target cluster (controller only observes it)")
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+			}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
+
+			By("reconciling with namespace present but no StorageClass - status stays Progressing")
+			Expect(doReconcile()).NotTo(HaveOccurred())
+			Expect(getPhase()).To(Equal(v1alpha1.TenantPhaseProgressing))
+
+			// ── Step 3: namespace + exactly one StorageClass → Ready ──────────────
+			By("creating the tenant StorageClass on the target cluster")
+			storageClass := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   resourceName + "-sc",
+					Labels: map[string]string{osacTenantAnnotation: resourceName},
+				},
+				Provisioner: "kubernetes.io/no-provisioner",
+			}
+			Expect(k8sClient.Create(ctx, storageClass)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, storageClass) })
+
+			By("reconciling - tenant becomes Ready with namespace and StorageClass populated")
+			Expect(doReconcile()).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
+			Expect(tenant.Status.Namespace).To(Equal(resourceName))
+			Expect(tenant.Status.StorageClass).To(Equal(resourceName + "-sc"))
+
+			// ── Step 4: a second StorageClass for the same tenant → back to Progressing
+			By("creating a second StorageClass for the same tenant (misconfiguration)")
+			extraSC := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   resourceName + "-sc-extra",
+					Labels: map[string]string{osacTenantAnnotation: resourceName},
+				},
+				Provisioner: "kubernetes.io/no-provisioner",
+			}
+			Expect(k8sClient.Create(ctx, extraSC)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, extraSC) })
+
+			By("reconciling - multiple StorageClasses violate exactly-one constraint, back to Progressing")
+			Expect(doReconcile()).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
+			Expect(tenant.Status.StorageClass).To(BeEmpty())
 		})
 	})
 })

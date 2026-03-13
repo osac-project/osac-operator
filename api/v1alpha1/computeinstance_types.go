@@ -54,7 +54,7 @@ type DiskSpec struct {
 	SizeGiB int32 `json:"sizeGiB"`
 
 	// StorageClass is the Kubernetes storage class to use for this disk
-	// If not specified, the default storage class will be used
+	// If not specified, the tenant's StorageClass (labeled osac.openshift.io/tenant=<tenant>) is used
 	// +kubebuilder:validation:Optional
 	StorageClass string `json:"storageClass,omitempty"`
 }

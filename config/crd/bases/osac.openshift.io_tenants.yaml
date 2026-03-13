@@ -18,6 +18,9 @@ spec:
     - jsonPath: .status.namespace
       name: Tenant Namespace
       type: string
+    - jsonPath: .status.storageClass
+      name: Storage Class
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -54,6 +57,10 @@ spec:
                 type: string
               phase:
                 description: Phase is the phase of the tenant
+                type: string
+              storageClass:
+                description: StorageClass is the StorageClass allocated to the tenant
+                  on the target cluster
                 type: string
             type: object
         type: object
