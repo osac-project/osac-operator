@@ -403,7 +403,7 @@ func setupClusterControllers(
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
 			return controller.NewClusterOrderReconciler(
-				localMgr.GetClient(), localMgr.GetScheme(),
+				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)
@@ -434,7 +434,7 @@ func setupHostPoolControllers(
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
 			return controller.NewHostPoolReconciler(
-				localMgr.GetClient(), localMgr.GetScheme(),
+				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envHostPoolOrderNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)

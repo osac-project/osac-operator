@@ -33,4 +33,8 @@ const (
 	// This is derived from the NetworkClass and used by AAP playbooks to select the appropriate role
 	// (e.g., "cudn" -> cudn_virtual_network or cudn_subnet role).
 	osacImplementationStrategyAnnotation = osacPrefix + "/implementation-strategy"
+
+	// osacReconciledConfigVersionAnnotation is set by AAP playbooks after successfully applying a config.
+	// The operator copies this to status.ReconciledConfigVersion to detect spec changes.
+	osacReconciledConfigVersionAnnotation = osacPrefix + "/reconciled-config-version"
 )

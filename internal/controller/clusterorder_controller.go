@@ -19,9 +19,13 @@ package controller
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"time"
 
+	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -68,6 +72,7 @@ func (r *ClusterOrderReconciler) components() []component {
 // ClusterOrderReconciler reconciles a ClusterOrder object
 type ClusterOrderReconciler struct {
 	client.Client
+	apiReader             client.Reader
 	Scheme                *runtime.Scheme
 	ClusterOrderNamespace string
 	ProvisioningProvider  provisioning.ProvisioningProvider
@@ -77,6 +82,7 @@ type ClusterOrderReconciler struct {
 
 func NewClusterOrderReconciler(
 	client client.Client,
+	apiReader client.Reader,
 	scheme *runtime.Scheme,
 	clusterOrderNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
@@ -98,6 +104,7 @@ func NewClusterOrderReconciler(
 
 	return &ClusterOrderReconciler{
 		Client:                client,
+		apiReader:             apiReader,
 		Scheme:                scheme,
 		ClusterOrderNamespace: clusterOrderNamespace,
 		ProvisioningProvider:  provisioningProvider,
@@ -293,8 +300,13 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 
 	instance.SetStatusCondition(v1alpha1.ConditionNamespaceCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
+	// Compute config version from spec and copy reconciled version from annotation
+	if err := r.handleDesiredConfigVersion(instance); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.handleReconciledConfigVersion(ctx, instance)
+
 	// Handle provisioning via provider (hybrid approach: job tracking + HC watching)
-	// Non-blocking: returns RequeueAfter for polling without delaying reconciliation
 	provisionResult, err := r.handleProvisioning(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -517,72 +529,126 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 }
 
 // handleProvisioning manages the provisioning job lifecycle for ClusterOrder.
-// Uses hybrid approach: provider for job tracking + existing watch-based HC readiness.
-// Non-blocking: returns RequeueAfter for polling, doesn't delay reconciliation.
+// Uses shouldTriggerProvision to decide action, with API server read-through guard.
 func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	// Check if provision job already exists
-	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	action, latestProvisionJob := r.shouldTriggerProvision(ctx, instance)
+	switch action {
+	case provisionSkip:
+		return ctrl.Result{}, nil
+	case provisionRequeue:
+		return ctrl.Result{Requeue: true}, nil
+	case provisionTrigger:
+		return r.triggerProvisionJob(ctx, instance)
+	default: // provisionPoll
+		return r.pollProvisionJob(ctx, log, instance, latestProvisionJob)
+	}
+}
 
-	// If no provision job exists, trigger one
-	if latestProvisionJob == nil {
-		log.Info("triggering provision job")
-		result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
-		if err != nil {
-			if rateLimitErr, ok := provisioning.AsRateLimitError(err); ok {
-				log.Info("provision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
-				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
-			}
-			return ctrl.Result{}, fmt.Errorf("failed to trigger provision: %w", err)
+func (r *ClusterOrderReconciler) triggerProvisionJob(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+	log.Info("triggering provision job")
+
+	result, err := r.ProvisioningProvider.TriggerProvision(ctx, instance)
+	if err != nil {
+		if rateLimitErr, ok := provisioning.AsRateLimitError(err); ok {
+			log.Info("provision request rate-limited, requeueing", "retryAfter", rateLimitErr.RetryAfter)
+			return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
 		}
+		return ctrl.Result{}, fmt.Errorf("failed to trigger provision: %w", err)
+	}
 
-		// Append new job to status
-		instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
-			JobID:     result.JobID,
-			Type:      v1alpha1.JobTypeProvision,
-			State:     result.InitialState,
-			Message:   result.Message,
-			Timestamp: metav1.NewTime(time.Now().UTC()),
-		}, r.MaxJobHistory)
+	instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
+		JobID:     result.JobID,
+		Type:      v1alpha1.JobTypeProvision,
+		State:     result.InitialState,
+		Message:   result.Message,
+		Timestamp: metav1.NewTime(time.Now().UTC()),
+	}, r.MaxJobHistory)
+	log.Info("provision job triggered", "jobID", result.JobID)
+	return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+}
 
-		// Requeue to poll status
+func (r *ClusterOrderReconciler) pollProvisionJob(ctx context.Context, log logr.Logger,
+	instance *v1alpha1.ClusterOrder, latestProvisionJob *v1alpha1.JobStatus) (ctrl.Result, error) {
+
+	log.Info("polling provision job status", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
+	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
+	if err != nil {
+		log.Error(err, "failed to get provision status", "jobID", latestProvisionJob.JobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// Poll existing provision job status (non-blocking)
-	if !latestProvisionJob.State.IsTerminal() {
-		log.Info("polling provision job status", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
-		status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance, latestProvisionJob.JobID)
-		if err != nil {
-			log.Error(err, "failed to get provision status", "jobID", latestProvisionJob.JobID)
-			// Don't block reconciliation on polling errors, just requeue
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	if status.State != latestProvisionJob.State || status.Message != latestProvisionJob.Message {
+		log.Info("provision job status changed", "jobID", latestProvisionJob.JobID, "oldState", latestProvisionJob.State, "newState", status.State)
+		updatedJob := *latestProvisionJob
+		updatedJob.State = status.State
+		updatedJob.Message = status.Message
+		helpers.UpdateJob(instance.Status.Jobs, updatedJob)
 
-		// Update job status if changed
-		if status.State != latestProvisionJob.State || status.Message != latestProvisionJob.Message {
-			log.Info("provision job status changed", "jobID", latestProvisionJob.JobID, "oldState", latestProvisionJob.State, "newState", status.State)
-			updatedJob := *latestProvisionJob
-			updatedJob.State = status.State
-			updatedJob.Message = status.Message
-			helpers.UpdateJob(instance.Status.Jobs, updatedJob)
-
-			// If job failed, set Phase to Failed
-			if status.State == v1alpha1.JobStateFailed {
-				log.Info("provision job failed", "jobID", latestProvisionJob.JobID)
-				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
-			}
-		}
-
-		// Continue polling if still running
-		if !status.State.IsTerminal() {
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		if status.State == v1alpha1.JobStateFailed {
+			log.Info("provision job failed", "jobID", latestProvisionJob.JobID)
+			instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
 		}
 	}
 
-	// Job is terminal or no polling needed, continue with normal reconciliation
+	if !status.State.IsTerminal() {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// shouldTriggerProvision determines the next provisioning action.
+func (r *ClusterOrderReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ClusterOrder) (provisionAction, *v1alpha1.JobStatus) {
+	latestJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	if latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal() {
+		return provisionPoll, latestJob
+	}
+	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+		return provisionSkip, latestJob
+	}
+	if r.checkAPIServerForNonTerminalJob(ctx, instance) {
+		return provisionRequeue, nil
+	}
+	return provisionTrigger, latestJob
+}
+
+func (r *ClusterOrderReconciler) checkAPIServerForNonTerminalJob(ctx context.Context, instance *v1alpha1.ClusterOrder) bool {
+	log := ctrllog.FromContext(ctx)
+	fresh := &v1alpha1.ClusterOrder{}
+	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(instance), fresh); err != nil {
+		return false
+	}
+	freshJob := v1alpha1.FindLatestJobByType(fresh.Status.Jobs, v1alpha1.JobTypeProvision)
+	if freshJob != nil && freshJob.JobID != "" && !freshJob.State.IsTerminal() {
+		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
+		return true
+	}
+	return false
+}
+
+func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.ClusterOrder) error {
+	specJSON, err := json.Marshal(instance.Spec)
+	if err != nil {
+		return fmt.Errorf("failed to marshal spec to JSON: %w", err)
+	}
+	hasher := fnv.New64a()
+	if _, err := hasher.Write(specJSON); err != nil {
+		return fmt.Errorf("failed to write to hash: %w", err)
+	}
+	instance.Status.DesiredConfigVersion = hex.EncodeToString(hasher.Sum(nil))
+	return nil
+}
+
+func (r *ClusterOrderReconciler) handleReconciledConfigVersion(ctx context.Context, instance *v1alpha1.ClusterOrder) {
+	log := ctrllog.FromContext(ctx)
+	if version, exists := instance.Annotations[osacReconciledConfigVersionAnnotation]; exists {
+		instance.Status.ReconciledConfigVersion = version
+		log.V(1).Info("copied reconciled config version from annotation", "version", version)
+	} else {
+		instance.Status.ReconciledConfigVersion = ""
+	}
 }
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for ClusterOrder.

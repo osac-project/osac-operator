@@ -83,6 +83,7 @@ var _ = Describe("HostPool Controller", func() {
 			noopWebhookClient := &noopWebhookClientForTest{}
 			controllerReconciler := &HostPoolReconciler{
 				Client:               k8sClient,
+				apiReader:            k8sClient,
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
 			}

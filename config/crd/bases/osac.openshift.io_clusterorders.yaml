@@ -161,6 +161,11 @@ spec:
                   - type
                   type: object
                 type: array
+              desiredConfigVersion:
+                description: |-
+                  DesiredConfigVersion is a hash of the current spec, used to detect spec changes
+                  that require re-provisioning.
+                type: string
               jobs:
                 description: |-
                   Jobs tracks the history of provision and deprovision operations
@@ -240,6 +245,11 @@ spec:
                 - Failed
                 - Ready
                 - Deleting
+                type: string
+              reconciledConfigVersion:
+                description: |-
+                  ReconciledConfigVersion is the config version that was last successfully applied
+                  by the AAP playbook (copied from the reconciled-config-version annotation).
                 type: string
             type: object
         type: object

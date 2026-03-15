@@ -74,6 +74,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			noopWebhookClient := &noopWebhookClientForTest{}
 			controllerReconciler := &ClusterOrderReconciler{
 				Client:               k8sClient,
+				apiReader:            k8sClient,
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
 			}

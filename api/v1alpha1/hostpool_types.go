@@ -103,6 +103,16 @@ type HostPoolStatus struct {
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
 	Jobs []JobStatus `json:"jobs,omitempty"`
+
+	// DesiredConfigVersion is a hash of the current spec, used to detect spec changes
+	// that require re-provisioning.
+	// +kubebuilder:validation:Optional
+	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+
+	// ReconciledConfigVersion is the config version that was last successfully applied
+	// by the AAP playbook (copied from the reconciled-config-version annotation).
+	// +kubebuilder:validation:Optional
+	ReconciledConfigVersion string `json:"reconciledConfigVersion,omitempty"`
 }
 
 // +kubebuilder:object:root=true
