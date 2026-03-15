@@ -18,14 +18,14 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -83,8 +83,230 @@ var _ = Describe("ClusterOrder Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+	})
+
+	Context("shouldTriggerProvision", func() {
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			noopWebhookClient := &noopWebhookClientForTest{}
+			reconciler = &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should trigger when no job exists and config versions differ", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "abc123",
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+			Expect(job).To(BeNil())
+		})
+
+		It("should trigger when job has empty ID and config versions differ", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "abc123",
+					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: ""}},
+				},
+			}
+			action, _ := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+		})
+
+		It("should skip when no job exists and config versions match", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion:    "abc123",
+					ReconciledConfigVersion: "abc123",
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionSkip))
+			Expect(job).To(BeNil())
+		})
+
+		It("should poll when job is still running", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateRunning}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionPoll))
+			Expect(job).NotTo(BeNil())
+			Expect(job.JobID).To(Equal("job-1"))
+		})
+
+		It("should poll when job is pending", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStatePending}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionPoll))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should skip when job succeeded and config versions match", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion:    "abc123",
+					ReconciledConfigVersion: "abc123",
+					Jobs:                    []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionSkip))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should trigger when job succeeded but config versions differ", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion:    "new-version",
+					ReconciledConfigVersion: "old-version",
+					Jobs:                    []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should trigger when job failed and config versions differ", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion:    "new-version",
+					ReconciledConfigVersion: "old-version",
+					Jobs:                    []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateFailed}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should skip when job failed but config versions match", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion:    "abc123",
+					ReconciledConfigVersion: "abc123",
+					Jobs:                    []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateFailed}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionSkip))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should requeue when API server has non-terminal job but cache shows none", func() {
+			instanceName := "test-co-api-server-check"
+			apiInstance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+			Expect(k8sClient.Create(ctx, apiInstance)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, apiInstance)
+			})
+
+			jobTimestamp := metav1.NewTime(time.Now().UTC())
+			apiInstance.Status.DesiredConfigVersion = "v1"
+			apiInstance.Status.Jobs = []v1alpha1.JobStatus{
+				{Type: v1alpha1.JobTypeProvision, JobID: "running-job", State: v1alpha1.JobStateRunning, Timestamp: jobTimestamp},
+			}
+			Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
+
+			// Simulate stale cache: in-memory instance has no jobs
+			staleInstance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: "default",
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "v1",
+				},
+			}
+
+			action, job := reconciler.shouldTriggerProvision(ctx, staleInstance)
+			Expect(action).To(Equal(provisionRequeue))
+			Expect(job).To(BeNil())
+		})
+	})
+
+	Context("handleDesiredConfigVersion", func() {
+		It("should produce consistent hash for same spec", func() {
+			reconciler := &ClusterOrderReconciler{}
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test-template",
+				},
+			}
+			err := reconciler.handleDesiredConfigVersion(instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.DesiredConfigVersion).NotTo(BeEmpty())
+
+			firstHash := instance.Status.DesiredConfigVersion
+			err = reconciler.handleDesiredConfigVersion(instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.DesiredConfigVersion).To(Equal(firstHash))
+		})
+
+		It("should produce different hash for different spec", func() {
+			reconciler := &ClusterOrderReconciler{}
+			instance1 := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{TemplateID: "template-a"},
+			}
+			instance2 := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{TemplateID: "template-b"},
+			}
+			Expect(reconciler.handleDesiredConfigVersion(instance1)).To(Succeed())
+			Expect(reconciler.handleDesiredConfigVersion(instance2)).To(Succeed())
+			Expect(instance1.Status.DesiredConfigVersion).NotTo(Equal(instance2.Status.DesiredConfigVersion))
+		})
+	})
+
+	Context("handleReconciledConfigVersion", func() {
+		ctx := context.Background()
+
+		It("should copy version from annotation", func() {
+			reconciler := &ClusterOrderReconciler{}
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						osacReconciledConfigVersionAnnotation: "abc123",
+					},
+				},
+			}
+			reconciler.handleReconciledConfigVersion(ctx, instance)
+			Expect(instance.Status.ReconciledConfigVersion).To(Equal("abc123"))
+		})
+
+		It("should clear version when annotation missing", func() {
+			reconciler := &ClusterOrderReconciler{}
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					ReconciledConfigVersion: "old-version",
+				},
+			}
+			reconciler.handleReconciledConfigVersion(ctx, instance)
+			Expect(instance.Status.ReconciledConfigVersion).To(BeEmpty())
 		})
 	})
 })
