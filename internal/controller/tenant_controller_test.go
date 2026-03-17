@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -70,12 +71,19 @@ var _ = Describe("Tenant Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
+			By("waiting for the Tenant to appear in the controller's cache")
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
 			By("reconciling when namespace does not exist - status becomes Progressing")
 			_, _ = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			}})
-			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
+			Eventually(func(g Gomega) {
+				Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			By("creating the namespace on the target cluster (controller only observes it)")
 			namespace := &corev1.Namespace{

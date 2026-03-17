@@ -157,11 +157,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			By("Verifying tenant reference is set on ComputeInstance status")
 			vm := &osacv1alpha1.ComputeInstance{}
-			err = k8sClient.Get(ctx, typeNamespacedName, vm)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vm.Status.TenantReference).NotTo(BeNil())
-			Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
-			Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
+			Eventually(func(g Gomega) {
+				Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+				g.Expect(vm.Status.TenantReference).NotTo(BeNil())
+				g.Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
+				g.Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			By("Verifying the finalizer is set on the ComputeInstance resource")
 			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
@@ -1145,10 +1146,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			ci := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
 			// No KubeVirt VM exists in envtest, so findKubeVirtVMs returns nil.
 			// Phase is driven by KubeVirt PrintableStatus; when no VM exists, it is Starting.
-			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			Eventually(func(g Gomega) {
+				Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 	})
 
@@ -1352,9 +1355,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			// Verify reference was set
 			ci := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			Expect(ci.Status.TenantReference).NotTo(BeNil())
-			Expect(ci.Status.TenantReference.Name).NotTo(BeEmpty())
+			Eventually(func(g Gomega) {
+				Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.TenantReference).NotTo(BeNil())
+				g.Expect(ci.Status.TenantReference.Name).NotTo(BeEmpty())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			// Add finalizer to tenant to keep it in terminating state
 			tenant := &osacv1alpha1.Tenant{}
@@ -1377,10 +1382,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("tenant is being deleted"))
 
 			// Tenant reference is left unchanged
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			Expect(ci.Status.TenantReference).NotTo(BeNil())
-			Expect(ci.Status.TenantReference.Name).To(Equal(tenantName))
-			Expect(ci.Status.TenantReference.Namespace).To(Equal(namespaceName))
+			Eventually(func(g Gomega) {
+				Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.TenantReference).NotTo(BeNil())
+				g.Expect(ci.Status.TenantReference.Name).To(Equal(tenantName))
+				g.Expect(ci.Status.TenantReference.Namespace).To(Equal(namespaceName))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 
 		It("should return error when tenant does not exist", func() {
