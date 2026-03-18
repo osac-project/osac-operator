@@ -1421,4 +1421,85 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(err).To(HaveOccurred())
 		})
 	})
+
+	Context("resolveSubnetNamespace", func() {
+		const namespaceName = "default"
+		var (
+			reconciler *ComputeInstanceReconciler
+			ctx        context.Context
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			reconciler = NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+		})
+
+		It("should return empty string when subnetRef is not set", func() {
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ci-no-subnet",
+					Namespace: namespaceName,
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+
+			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnetNS).To(BeEmpty())
+		})
+
+		It("should return subnet CR name when subnet CR exists", func() {
+			const subnetRef = "test-subnet-cr"
+
+			// Create Subnet CR
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetRef,
+					Namespace: namespaceName,
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.0.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, subnet)
+			}()
+
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ci-with-subnet",
+					Namespace: namespaceName,
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			instance.Spec.SubnetRef = subnetRef
+
+			// Wait for Subnet CR to be cached
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
+			}).Should(Succeed())
+
+			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnetNS).To(Equal(subnetRef))
+		})
+
+		It("should return error when subnet CR does not exist", func() {
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ci-missing-subnet",
+					Namespace: namespaceName,
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			instance.Spec.SubnetRef = "nonexistent-subnet"
+
+			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to get Subnet CR"))
+			Expect(subnetNS).To(BeEmpty())
+		})
+	})
 })

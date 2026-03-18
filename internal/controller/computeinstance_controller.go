@@ -572,6 +572,41 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 }
 
+// resolveSubnetNamespace looks up the Subnet CR referenced by spec.subnetRef
+// and returns the subnet namespace (which equals the Subnet CR name).
+// Returns empty string if subnetRef is not set.
+// Returns error if Subnet CR lookup fails.
+func (r *ComputeInstanceReconciler) resolveSubnetNamespace(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
+	log := ctrllog.FromContext(ctx)
+
+	if instance.Spec.SubnetRef == "" {
+		// No subnet reference, no namespace to resolve
+		return "", nil
+	}
+
+	// Look up Subnet CR in the same namespace as ComputeInstance
+	subnet := &v1alpha1.Subnet{}
+	subnetKey := types.NamespacedName{
+		Name:      instance.Spec.SubnetRef,
+		Namespace: instance.Namespace,
+	}
+
+	err := r.Get(ctx, subnetKey, subnet)
+	if err != nil {
+		return "", fmt.Errorf("failed to get Subnet CR %s: %w", instance.Spec.SubnetRef, err)
+	}
+
+	// Subnet namespace = Subnet CR name (established pattern from Phase 17)
+	subnetNamespace := subnet.Name
+
+	log.Info("Resolved subnet namespace from Subnet CR",
+		"subnetRef", instance.Spec.SubnetRef,
+		"subnetNamespace", subnetNamespace,
+	)
+
+	return subnetNamespace, nil
+}
+
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -640,6 +675,23 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Resolve subnet namespace if subnetRef is set
+	// This must happen before TriggerProvision so the annotation is available for AAP
+	if instance.Spec.SubnetRef != "" {
+		subnetNamespace, err := r.resolveSubnetNamespace(ctx, instance)
+		if err != nil {
+			log.Error(err, "Failed to resolve subnet namespace")
+			// Return error to retry - Subnet CR might not exist yet
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+
+		// Store subnet namespace in annotation for AAP provider to use
+		if instance.Annotations == nil {
+			instance.Annotations = make(map[string]string)
+		}
+		instance.Annotations["osac.openshift.io/subnet-namespace"] = subnetNamespace
 	}
 
 	if err := r.handleReconciledConfigVersion(ctx, instance); err != nil {

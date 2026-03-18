@@ -158,6 +158,11 @@ spec:
                 x-kubernetes-validations:
                 - message: sshKey is immutable
                   rule: self == oldSelf
+              subnetRef:
+                description: |-
+                  SubnetRef is the name of the Subnet CR in the hub cluster
+                  This references the Kubernetes CR name (not the fulfillment ID)
+                type: string
               templateID:
                 description: TemplateID is the unique identifier of the compute instance
                   template to use when creating this compute instance

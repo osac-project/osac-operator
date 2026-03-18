@@ -122,6 +122,11 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sshKey is immutable"
 	SSHKey string `json:"sshKey,omitempty"`
 
+	// SubnetRef is the name of the Subnet CR in the hub cluster
+	// This references the Kubernetes CR name (not the fulfillment ID)
+	// +kubebuilder:validation:Optional
+	SubnetRef string `json:"subnetRef,omitempty"`
+
 	// RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 	//
 	// Set this field to the current time (usually NOW) to request a restart.
