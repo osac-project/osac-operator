@@ -448,12 +448,25 @@ func (r *HostPoolReconciler) pollProvisionJob(ctx context.Context, log logr.Logg
 // shouldTriggerProvision determines the next provisioning action.
 func (r *HostPoolReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.HostPool) (provisionAction, *v1alpha1.JobStatus) {
 	latestJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
-	if latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal() {
+
+	if !hasJobID(latestJob) {
+		// No job ever ran (or trigger failed before getting a job ID) — check if config is already reconciled
+		if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+			return provisionSkip, latestJob
+		}
+	} else if !latestJob.State.IsTerminal() {
+		// Job still running — poll for status
 		return provisionPoll, latestJob
-	}
-	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+	} else if latestJob.ConfigVersion != "" {
+		// Terminal job with ConfigVersion — skip if same config
+		if latestJob.ConfigVersion == instance.Status.DesiredConfigVersion {
+			return provisionSkip, latestJob
+		}
+	} else if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+		// Terminal job without ConfigVersion (pre-existing job) — use annotation-based check
 		return provisionSkip, latestJob
 	}
+
 	if r.checkAPIServerForNonTerminalJob(ctx, instance) {
 		return provisionRequeue, nil
 	}
@@ -467,7 +480,7 @@ func (r *HostPoolReconciler) checkAPIServerForNonTerminalJob(ctx context.Context
 		return false
 	}
 	freshJob := v1alpha1.FindLatestJobByType(fresh.Status.Jobs, v1alpha1.JobTypeProvision)
-	if freshJob != nil && freshJob.JobID != "" && !freshJob.State.IsTerminal() {
+	if hasJobID(freshJob) && !freshJob.State.IsTerminal() {
 		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
 		return true
 	}

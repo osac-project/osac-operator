@@ -362,11 +362,12 @@ func (r *ComputeInstanceReconciler) triggerProvisionJob(ctx context.Context, ins
 		// Actual error - mark as failed
 		log.Error(err, "failed to trigger provisioning")
 		newJob := v1alpha1.JobStatus{
-			JobID:     "",
-			Type:      v1alpha1.JobTypeProvision,
-			Timestamp: metav1.NewTime(time.Now().UTC()),
-			State:     v1alpha1.JobStateFailed,
-			Message:   fmt.Sprintf("Failed to trigger provisioning: %v", err),
+			JobID:         "",
+			Type:          v1alpha1.JobTypeProvision,
+			Timestamp:     metav1.NewTime(time.Now().UTC()),
+			State:         v1alpha1.JobStateFailed,
+			Message:       fmt.Sprintf("Failed to trigger provisioning: %v", err),
+			ConfigVersion: instance.Status.DesiredConfigVersion,
 		}
 		instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
@@ -379,6 +380,7 @@ func (r *ComputeInstanceReconciler) triggerProvisionJob(ctx context.Context, ins
 		State:                  result.InitialState,
 		Message:                result.Message,
 		BlockDeletionOnFailure: false, // Provision failures don't block deletion
+		ConfigVersion:          instance.Status.DesiredConfigVersion,
 	}
 	instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 	log.Info("provisioning job triggered", "jobID", result.JobID)
@@ -456,7 +458,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// Trigger deprovisioning - provider decides internally if ready
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
+	if !hasJobID(latestDeprovisionJob) {
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
 
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
@@ -978,6 +980,10 @@ const (
 	provisionRequeue                        // stale cache detected, requeue to refresh
 )
 
+func hasJobID(job *v1alpha1.JobStatus) bool {
+	return job != nil && job.JobID != ""
+}
+
 // shouldTriggerProvision determines the next provisioning action.
 // Returns provisionPoll with the in-progress job when one is already running.
 // Returns provisionSkip when config versions match (no change needed).
@@ -986,12 +992,24 @@ const (
 func (r *ComputeInstanceReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ComputeInstance) (provisionAction, *v1alpha1.JobStatus) {
 	latestJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal() {
+	if !hasJobID(latestJob) {
+		// No job ever ran (or trigger failed before getting a job ID) — check if config is already reconciled
+		if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+			return provisionSkip, latestJob
+		}
+	} else if !latestJob.State.IsTerminal() {
+		// Job still running — poll for status
 		return provisionPoll, latestJob
-	}
-	if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+	} else if latestJob.ConfigVersion != "" {
+		// Terminal job with ConfigVersion — skip if same config
+		if latestJob.ConfigVersion == instance.Status.DesiredConfigVersion {
+			return provisionSkip, latestJob
+		}
+	} else if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
+		// Terminal job without ConfigVersion (pre-existing job) — use annotation-based check
 		return provisionSkip, latestJob
 	}
+
 	// Provision is needed (no job, or spec changed since last terminal job).
 	// Check the API server to guard against stale informer cache: a prior
 	// reconcile may have already triggered a job that the cache hasn't picked up.
@@ -1011,7 +1029,7 @@ func (r *ComputeInstanceReconciler) checkAPIServerForNonTerminalJob(ctx context.
 		return nil, false
 	}
 	freshJob := v1alpha1.FindLatestJobByType(fresh.Status.Jobs, v1alpha1.JobTypeProvision)
-	if freshJob != nil && freshJob.JobID != "" && !freshJob.State.IsTerminal() {
+	if hasJobID(freshJob) && !freshJob.State.IsTerminal() {
 		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
 		return freshJob, true
 	}

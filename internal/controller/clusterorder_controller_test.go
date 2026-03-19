@@ -211,6 +211,74 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(job).NotTo(BeNil())
 		})
 
+		It("should skip when latest job succeeded with matching ConfigVersion", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "abc123",
+					Jobs: []v1alpha1.JobStatus{{
+						Type:          v1alpha1.JobTypeProvision,
+						JobID:         "job-1",
+						State:         v1alpha1.JobStateSucceeded,
+						ConfigVersion: "abc123",
+					}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionSkip))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should skip when latest job failed with matching ConfigVersion", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "abc123",
+					Jobs: []v1alpha1.JobStatus{{
+						Type:          v1alpha1.JobTypeProvision,
+						JobID:         "job-1",
+						State:         v1alpha1.JobStateFailed,
+						ConfigVersion: "abc123",
+					}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionSkip))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should trigger when latest job failed with different ConfigVersion", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "new-version",
+					Jobs: []v1alpha1.JobStatus{{
+						Type:          v1alpha1.JobTypeProvision,
+						JobID:         "job-1",
+						State:         v1alpha1.JobStateFailed,
+						ConfigVersion: "old-version",
+					}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+			Expect(job).NotTo(BeNil())
+		})
+
+		It("should trigger when latest job succeeded with different ConfigVersion", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					DesiredConfigVersion: "new-version",
+					Jobs: []v1alpha1.JobStatus{{
+						Type:          v1alpha1.JobTypeProvision,
+						JobID:         "job-1",
+						State:         v1alpha1.JobStateSucceeded,
+						ConfigVersion: "old-version",
+					}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionTrigger))
+			Expect(job).NotTo(BeNil())
+		})
+
 		It("should requeue when API server has non-terminal job but cache shows none", func() {
 			instanceName := "test-co-api-server-check"
 			apiInstance := &v1alpha1.ClusterOrder{

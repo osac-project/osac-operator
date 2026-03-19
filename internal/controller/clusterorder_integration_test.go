@@ -282,9 +282,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 	Context("Infinite retry prevention", func() {
 		// Known bug: when a provision job fails and the AAP playbook never sets the
-		// reconciled-config-version annotation, DesiredConfigVersion != ReconciledConfigVersion
-		// stays true forever, causing an infinite retry loop. Fix is TBD.
-		PIt("should not create additional provision jobs when previous job failed for same config", func() {
+		It("should not create additional provision jobs when previous job failed for same config", func() {
 			const name = "cluster-order-no-infinite-retry"
 			instance := newTestClusterOrder(name)
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
