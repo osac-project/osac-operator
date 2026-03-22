@@ -1638,4 +1638,79 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(hashWith).NotTo(Equal(hashWithout), "restartRequestedAt must change the spec hash to trigger provisioning")
 		})
 	})
+
+	Context("computeBackoffFromJobs", func() {
+		now := time.Now().UTC()
+
+		It("should return base delay for empty jobs", func() {
+			Expect(computeBackoffFromJobs(nil, "v1")).To(Equal(backoffBaseDelay))
+		})
+
+		It("should return base delay for single failed job", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(backoffBaseDelay))
+		})
+
+		It("should double the gap between two failed jobs", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(10 * time.Minute))
+		})
+
+		It("should cap at max delay", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-20 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(backoffMaxDelay))
+		})
+
+		It("should return base delay when gap is smaller than base", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-30 * time.Second))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(backoffBaseDelay))
+		})
+
+		It("should return base delay when timestamps are equal (zero gap)", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(backoffBaseDelay))
+		})
+
+		It("should ignore jobs with different ConfigVersion", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
+			}
+			// Only one job matches "v1", so base delay
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(backoffBaseDelay))
+		})
+
+		It("should ignore non-provision jobs", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeDeprovision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-3 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(10 * time.Minute))
+		})
+
+		It("should ignore succeeded jobs", func() {
+			jobs := []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-3 * time.Minute))},
+				{Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.NewTime(now)},
+			}
+			// Gap is between the two failed jobs (5 min), not between failed and succeeded
+			Expect(computeBackoffFromJobs(jobs, "v1")).To(Equal(10 * time.Minute))
+		})
+	})
 })

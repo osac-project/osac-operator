@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/internal/helpers"
 )
 
 var _ = Describe("ClusterOrder Integration Tests", func() {
@@ -99,7 +100,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			instance = getClusterOrder(name)
 			job := osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(job).NotTo(BeNil())
-			Expect(job.JobID).To(Equal("prov-job-" + name))
+			Expect(job.JobID).To(HavePrefix("prov-job-" + name))
 			Expect(job.State).To(Equal(osacv1alpha1.JobStatePending))
 			Expect(job.ConfigVersion).To(Equal("v1"), "job should record the DesiredConfigVersion it was triggered for")
 
@@ -301,12 +302,67 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
-			// Next reconcile should NOT trigger a new job
+			// Next reconcile should back off, not trigger a new job immediately
 			instance = getClusterOrder(name)
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-			Expect(countProvisionJobs(instance)).To(Equal(1), "should not create additional jobs on repeated failure")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "should requeue with backoff delay")
+			Expect(result.RequeueAfter).To(BeNumerically("<=", backoffMaxDelay))
+			Expect(countProvisionJobs(instance)).To(Equal(1), "should not create additional jobs during backoff")
+		})
+
+		It("should retry after backoff elapses and increase backoff on successive failures", func() {
+			const name = "cluster-order-backoff-retry"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+			instance.Status.DesiredConfigVersion = "v1"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// First failure: trigger → poll (fails) → backoff
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Failed")
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// Verify first backoff uses base delay
+			instance = getClusterOrder(name)
+			result1, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result1.RequeueAfter).To(BeNumerically("~", backoffBaseDelay, 5*time.Second), "first failure should use base delay")
+			Expect(countProvisionJobs(instance)).To(Equal(1), "should not retry during backoff")
+
+			// Backdate the first failed job to 5 minutes ago to simulate backoff elapsed
+			instance = getClusterOrder(name)
+			latestJob := osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob.Timestamp = metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute))
+			helpers.UpdateJob(instance.Status.Jobs, *latestJob)
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// Second failure: backoff elapsed → trigger → poll (fails)
+			instance = getClusterOrder(name)
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(countProvisionJobs(instance)).To(Equal(2), "should create new job after backoff elapsed")
+
+			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Failed again")
+			instance = getClusterOrder(name)
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// Second backoff should be longer: gap between two failed jobs is ~5min, so backoff = 10min
+			instance = getClusterOrder(name)
+			result2, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result2.RequeueAfter).To(BeNumerically(">", result1.RequeueAfter), "second failure should have longer backoff")
+			Expect(result2.RequeueAfter).To(BeNumerically("~", 10*time.Minute, 30*time.Second), "backoff should double the 5-minute gap")
 		})
 	})
 })

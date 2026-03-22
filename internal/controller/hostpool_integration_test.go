@@ -228,12 +228,13 @@ var _ = Describe("HostPool Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
-			// Next reconcile should NOT trigger a new job
+			// Next reconcile should back off, not trigger a new job immediately
 			instance = getHostPool(name)
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-			Expect(countProvisionJobs(instance)).To(Equal(1))
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0), "should requeue with backoff delay")
+			Expect(result.RequeueAfter).To(BeNumerically("<=", backoffMaxDelay))
+			Expect(countProvisionJobs(instance)).To(Equal(1), "should not create additional jobs during backoff")
 		})
 	})
 })

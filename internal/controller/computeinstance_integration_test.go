@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type controllableProvider struct {
 	provisionJobState   osacv1alpha1.JobState
 	provisionJobMsg     string
 	provisionTriggerErr error
+	provisionCallCount  int
 
 	deprovisionJobID      string
 	deprovisionJobState   osacv1alpha1.JobState
@@ -62,7 +64,8 @@ func (p *controllableProvider) TriggerProvision(ctx context.Context, resource cl
 		return nil, p.provisionTriggerErr
 	}
 
-	p.provisionJobID = "prov-job-" + resource.GetName()
+	p.provisionCallCount++
+	p.provisionJobID = fmt.Sprintf("prov-job-%s-%d", resource.GetName(), p.provisionCallCount)
 	p.provisionJobState = osacv1alpha1.JobStatePending
 	p.provisionJobMsg = "Job triggered"
 	return &provisioning.ProvisionResult{
@@ -199,7 +202,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
 			latestProvisionJob := osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
-			Expect(latestProvisionJob.JobID).To(Equal("prov-job-" + instanceName))
+			Expect(latestProvisionJob.JobID).To(HavePrefix("prov-job-" + instanceName))
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStatePending))
 
 			// Simulate job transitioning to running
