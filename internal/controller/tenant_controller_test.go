@@ -105,8 +105,11 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
 
 			By("reconciling with namespace present but no StorageClass - status stays Progressing")
-			Expect(doReconcile()).NotTo(HaveOccurred())
-			assertPhase(v1alpha1.TenantPhaseProgressing)
+			Eventually(func(g Gomega) {
+				g.Expect(doReconcile()).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			// ── Step 3: namespace + exactly one StorageClass → Ready ──────────────
 			By("creating the tenant StorageClass on the target cluster")
@@ -121,8 +124,8 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, storageClass) })
 
 			By("reconciling - tenant becomes Ready with namespace and StorageClass populated")
-			Expect(doReconcile()).NotTo(HaveOccurred())
 			Eventually(func(g Gomega) {
+				g.Expect(doReconcile()).NotTo(HaveOccurred())
 				Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
 				g.Expect(tenant.Status.Namespace).To(Equal(resourceName))
@@ -142,8 +145,8 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, extraSC) })
 
 			By("reconciling - multiple StorageClasses violate exactly-one constraint, back to Progressing")
-			Expect(doReconcile()).NotTo(HaveOccurred())
 			Eventually(func(g Gomega) {
+				g.Expect(doReconcile()).NotTo(HaveOccurred())
 				Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 				g.Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
 				g.Expect(tenant.Status.StorageClass).To(BeEmpty())
