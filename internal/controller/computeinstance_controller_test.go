@@ -1502,6 +1502,156 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("VM search namespace with subnetRef", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+		}
+
+		It("should reconcile successfully when subnetRef is set and Subnet CR exists", func() {
+			const resourceName = "test-ci-subnet-vm-ns"
+			const tenantName = "tenant-subnet-vm-ns"
+			const subnetRef = "test-subnet-vm-ns"
+			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			// Create Subnet CR — the subnet name becomes the namespace where the VM will be searched
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetRef,
+					Namespace: namespaceName,
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.0.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, subnet)
+			}()
+
+			// Wait for Subnet CR to be cached
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
+			}).Should(Succeed())
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.SubnetRef = subnetRef
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Reconcile should succeed — it resolves the subnet namespace for VM lookup
+			// instead of using the tenant namespace (this is the bug fix).
+			// No VM exists in envtest, so phase should be Starting.
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+
+		It("should requeue when subnetRef is set but Subnet CR does not exist", func() {
+			const resourceName = "test-ci-missing-subnet-vm"
+			const tenantName = "tenant-missing-subnet-vm"
+			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.SubnetRef = "nonexistent-subnet-cr"
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Reconcile should return error (requeue) when Subnet CR is missing
+			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		})
+
+		It("should use tenant namespace when subnetRef is empty", func() {
+			const resourceName = "test-ci-no-subnet-vm-ns"
+			const tenantName = "tenant-no-subnet-vm"
+			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// When no subnetRef, should use tenant namespace (default behavior)
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+	})
+
 	Context("lastRestartedAt update after provisioning", func() {
 		var reconciler *ComputeInstanceReconciler
 		ctx := context.Background()

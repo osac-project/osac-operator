@@ -660,7 +660,21 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, tenant.Status.Namespace)
+	// When a subnetRef is set, the VM is created in the subnet namespace
+	// (by the AAP playbook), not in the tenant namespace.
+	vmSearchNamespace := tenant.Status.Namespace
+	if instance.Spec.SubnetRef != "" {
+		subnetNS, err := r.resolveSubnetNamespace(ctx, instance)
+		if err != nil {
+			log.Error(err, "Failed to resolve subnet namespace for VM lookup")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+		if subnetNS != "" {
+			vmSearchNamespace = subnetNS
+		}
+	}
+
+	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, vmSearchNamespace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
