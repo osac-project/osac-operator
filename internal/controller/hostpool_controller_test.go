@@ -159,4 +159,39 @@ var _ = Describe("HostPool Controller", func() {
 			Expect(latestDeprovisionJob).To(BeNil())
 		})
 	})
+
+	Context("shouldTriggerProvision", func() {
+		var reconciler *HostPoolReconciler
+
+		BeforeEach(func() {
+			reconciler = &HostPoolReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: &mockProvisioningProvider{},
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should backoff when latest job failed with matching ConfigVersion", func() {
+			instance := &v1alpha1.HostPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{},
+				},
+				Status: v1alpha1.HostPoolStatus{
+					DesiredConfigVersion: "abc123",
+					Jobs: []v1alpha1.JobStatus{{
+						Type:          v1alpha1.JobTypeProvision,
+						JobID:         "job-1",
+						State:         v1alpha1.JobStateFailed,
+						ConfigVersion: "abc123",
+					}},
+				},
+			}
+			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			Expect(action).To(Equal(provisionBackoff))
+			Expect(job).NotTo(BeNil())
+		})
+	})
 })

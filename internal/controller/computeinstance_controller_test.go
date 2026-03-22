@@ -878,6 +878,25 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(job).NotTo(BeNil())
 			})
 
+			It("should backoff when latest job failed with matching ConfigVersion", func() {
+				instance := &osacv1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-backoff", Namespace: "default"},
+					Spec:       newTestComputeInstanceSpec("test_template"),
+					Status: osacv1alpha1.ComputeInstanceStatus{
+						DesiredConfigVersion: "abc123",
+						Jobs: []osacv1alpha1.JobStatus{{
+							Type:          osacv1alpha1.JobTypeProvision,
+							JobID:         "job-1",
+							State:         osacv1alpha1.JobStateFailed,
+							ConfigVersion: "abc123",
+						}},
+					},
+				}
+				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				Expect(action).To(Equal(provisionBackoff))
+				Expect(job).NotTo(BeNil())
+			})
+
 			It("should requeue when API server has non-terminal job but cache shows none", func() {
 				// Create instance in API server with a running provision job
 				instanceName := "test-api-server-check-no-cache"
