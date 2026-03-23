@@ -868,6 +868,57 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(found).To(BeTrue())
 		})
 
+		It("should sync floating IP address from annotation", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Annotations = map[string]string{
+				osacVirualMachineFloatingIPAddressAnnotation: "10.0.0.100",
+			}
+			Expect(k8sClient.Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetIpAddress()).To(Equal("10.0.0.100"))
+		})
+
+		It("should sync internal IP from CR status when no floating IP annotation", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.IPAddress = "192.168.1.50"
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetIpAddress()).To(Equal("192.168.1.50"))
+		})
+
+		It("should prefer floating IP over internal IP when both are set", func() {
+			computeInstance := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Annotations = map[string]string{
+				osacVirualMachineFloatingIPAddressAnnotation: "10.0.0.100",
+			}
+			Expect(k8sClient.Update(ctx, computeInstance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
+			computeInstance.Status.IPAddress = "192.168.1.50"
+			Expect(k8sClient.Status().Update(ctx, computeInstance)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetIpAddress()).To(Equal("10.0.0.100"))
+		})
+
+		It("should not set IP address when neither floating IP nor internal IP is set", func() {
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetIpAddress()).To(BeEmpty())
+		})
+
 		It("should not crash when restart conditions are not present", func() {
 			// RestartInProgress and RestartFailed conditions should not be present by default
 			computeInstance := &osacv1alpha1.ComputeInstance{}

@@ -407,9 +407,15 @@ func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kin
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncIPAddress() {
+	// Prefer floating IP from annotation (set by external networking component)
 	ipAddress, ok := t.object.Annotations[osacVirualMachineFloatingIPAddressAnnotation]
 	if ok && ipAddress != "" {
 		t.ci.GetStatus().SetIpAddress(ipAddress)
+		return
+	}
+	// Fall back to the VM's internal IP from CR status
+	if t.object.Status.IPAddress != "" {
+		t.ci.GetStatus().SetIpAddress(t.object.Status.IPAddress)
 	}
 }
 
