@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -43,6 +45,7 @@ import (
 type TenantReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
+	Recorder        record.EventRecorder
 	tenantNamespace string
 	mgr             mcmanager.Manager
 	targetCluster   string
@@ -52,6 +55,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
@@ -59,6 +63,7 @@ func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string, targetCl
 	return &TenantReconciler{
 		Client:          mgr.GetLocalManager().GetClient(),
 		Scheme:          mgr.GetLocalManager().GetScheme(),
+		Recorder:        mgr.GetLocalManager().GetEventRecorderFor("tenant-controller"),
 		tenantNamespace: tenantNamespace,
 		mgr:             mgr,
 		targetCluster:   targetCluster,
@@ -145,6 +150,9 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 			metav1.ConditionFalse,
 			scResult.reason,
 			scResult.message)
+		if scResult.reason == v1alpha1.TenantReasonMultipleFound || scResult.reason == v1alpha1.TenantReasonMultipleDefaultsFound {
+			r.Recorder.Event(instance, corev1.EventTypeWarning, "DuplicateStorageClass", scResult.message)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -169,6 +177,16 @@ type storageClassResult struct {
 	message string
 }
 
+// joinStorageClassNames returns StorageClass metadata names as a comma-separated string for
+// messages and the same values as a slice for structured logging.
+func joinStorageClassNames(items []storagev1.StorageClass) (joined string, names []string) {
+	names = make([]string, len(items))
+	for i := range items {
+		names[i] = items[i].GetName()
+	}
+	return strings.Join(names, ", "), names
+}
+
 // getTenantStorageClass looks up the StorageClass for a tenant using a two-step
 // fallback: tenant-specific SC first, then shared Default SC. Returns a
 // storageClassResult with the resolved name and condition metadata. A non-nil
@@ -176,6 +194,8 @@ type storageClassResult struct {
 func (r *TenantReconciler) getTenantStorageClass(ctx context.Context, targetClient client.Client, tenantName string) (storageClassResult, error) {
 	log := ctrllog.FromContext(ctx)
 
+	// Step 1 — Tenant-specific StorageClasses (label osac.openshift.io/tenant=<tenantName>).
+	// Exactly one → use it. More than one → error (do not consider Default SC). Zero → Step 2.
 	tenantSCList := &storagev1.StorageClassList{}
 	if err := targetClient.List(ctx, tenantSCList, client.MatchingLabels{osacTenantAnnotation: tenantName}); err != nil {
 		return storageClassResult{}, err
@@ -190,17 +210,20 @@ func (r *TenantReconciler) getTenantStorageClass(ctx context.Context, targetClie
 			message: fmt.Sprintf("StorageClass %q found for tenant %q", scName, tenantName),
 		}, nil
 	case 0:
-		// fall through to Default lookup below
+		// No tenant SCs — evaluate shared Default SCs (Step 2) below.
 	default:
-		msg := fmt.Sprintf("Multiple StorageClasses (%d) found for tenant %q; exactly one required",
-			len(tenantSCList.Items), tenantName)
-		log.Info(msg)
+		joined, names := joinStorageClassNames(tenantSCList.Items)
+		msg := fmt.Sprintf("Multiple StorageClasses found for tenant %q: [%s]. Exactly one is required; remove the extras to resolve.",
+			tenantName, joined)
+		log.Error(nil, msg, "tenant", tenantName, "storageClasses", names)
 		return storageClassResult{
 			reason:  v1alpha1.TenantReasonMultipleFound,
 			message: msg,
 		}, nil
 	}
 
+	// Step 2 — Shared Default StorageClasses (label osac.openshift.io/tenant=Default).
+	// Only reached when Step 1 found zero tenant-specific SCs.
 	defaultSCList := &storagev1.StorageClassList{}
 	if err := targetClient.List(ctx, defaultSCList, client.MatchingLabels{osacTenantAnnotation: defaultStorageClassSentinel}); err != nil {
 		return storageClassResult{}, err
@@ -226,9 +249,10 @@ func (r *TenantReconciler) getTenantStorageClass(ctx context.Context, targetClie
 			message: msg,
 		}, nil
 	default:
-		msg := fmt.Sprintf("Multiple shared Default StorageClasses (%d) found; exactly one required",
-			len(defaultSCList.Items))
-		log.Info(msg)
+		joined, names := joinStorageClassNames(defaultSCList.Items)
+		msg := fmt.Sprintf("Multiple shared Default StorageClasses found: [%s]. Exactly one is required; remove the extras to resolve. Tenant %q has no dedicated StorageClass and is affected.",
+			joined, tenantName)
+		log.Error(nil, msg, "tenant", tenantName, "storageClasses", names)
 		return storageClassResult{
 			reason:  v1alpha1.TenantReasonMultipleDefaultsFound,
 			message: msg,

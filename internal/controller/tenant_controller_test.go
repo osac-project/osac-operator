@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -71,7 +72,9 @@ var _ = Describe("Tenant Controller", func() {
 		})
 
 		It("should transition through all Ready/Progressing phases with conditions", func() {
+			fakeRecorder := record.NewFakeRecorder(10)
 			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+			controllerReconciler.Recorder = fakeRecorder
 
 			By("waiting for the Tenant to appear in the controller's cache")
 			Eventually(func() error {
@@ -106,6 +109,16 @@ var _ = Describe("Tenant Controller", func() {
 					g.Expect(scCond).NotTo(BeNil())
 					g.Expect(scCond.Status).To(Equal(expectedSCStatus))
 					g.Expect(scCond.Reason).To(Equal(expectedSCReason))
+				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+			}
+			assertSCConditionMessage := func(substrings ...string) {
+				Eventually(func(g Gomega) {
+					g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+					scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageClassReady)
+					g.Expect(scCond).NotTo(BeNil())
+					for _, s := range substrings {
+						g.Expect(scCond.Message).To(ContainSubstring(s))
+					}
 				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 			}
 
@@ -190,6 +203,16 @@ var _ = Describe("Tenant Controller", func() {
 				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
 				metav1.ConditionFalse, v1alpha1.TenantReasonMultipleFound,
 			)
+			By("verifying condition message names the conflicting StorageClasses")
+			assertSCConditionMessage(resourceName+"-sc", resourceName+"-sc-extra")
+
+			By("verifying a DuplicateStorageClass warning event was emitted")
+			Expect(fakeRecorder.Events).To(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring("DuplicateStorageClass"),
+				ContainSubstring(resourceName+"-sc"),
+				ContainSubstring(resourceName+"-sc-extra"),
+			)))
 
 			// ── Step 6: remove extra SC → back to Ready (tenant SC) ───────────────
 			By("removing the extra tenant StorageClass")
@@ -251,6 +274,46 @@ var _ = Describe("Tenant Controller", func() {
 				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
 				metav1.ConditionFalse, v1alpha1.TenantReasonMultipleDefaultsFound,
 			)
+			By("verifying condition message names the conflicting Default StorageClasses and affected tenant")
+			assertSCConditionMessage("shared-default-sc-1", "shared-default-sc-2", resourceName)
+
+			By("verifying a DuplicateStorageClass warning event was emitted for Default SCs")
+			Expect(fakeRecorder.Events).To(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring("DuplicateStorageClass"),
+				ContainSubstring("shared-default-sc-1"),
+				ContainSubstring("shared-default-sc-2"),
+				ContainSubstring(resourceName),
+			)))
 		})
+	})
+})
+
+var _ = Describe("joinStorageClassNames", func() {
+	It("returns empty joined string and empty slice for nil or empty input", func() {
+		joined, names := joinStorageClassNames(nil)
+		Expect(joined).To(BeEmpty())
+		Expect(names).To(BeEmpty())
+
+		joined, names = joinStorageClassNames([]storagev1.StorageClass{})
+		Expect(joined).To(BeEmpty())
+		Expect(names).To(BeEmpty())
+	})
+
+	It("returns a single name", func() {
+		joined, names := joinStorageClassNames([]storagev1.StorageClass{
+			{ObjectMeta: metav1.ObjectMeta{Name: "sc-a"}},
+		})
+		Expect(joined).To(Equal("sc-a"))
+		Expect(names).To(Equal([]string{"sc-a"}))
+	})
+
+	It("joins multiple names in list order", func() {
+		joined, names := joinStorageClassNames([]storagev1.StorageClass{
+			{ObjectMeta: metav1.ObjectMeta{Name: "sc-a"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "sc-b"}},
+		})
+		Expect(joined).To(Equal("sc-a, sc-b"))
+		Expect(names).To(Equal([]string{"sc-a", "sc-b"}))
 	})
 })
