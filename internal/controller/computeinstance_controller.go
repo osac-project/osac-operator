@@ -18,11 +18,8 @@ package controller
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -998,74 +995,21 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 // Returns provisionRequeue when the API server has a non-terminal job that the cache missed (stale cache).
 // Returns provisionTrigger when provisioning is needed and no in-flight job exists.
 func (r *ComputeInstanceReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ComputeInstance) (provisionAction, *v1alpha1.JobStatus) {
-	latestJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
-
-	if !hasJobID(latestJob) {
-		// No job ever ran (or trigger failed before getting a job ID) — check if config is already reconciled
-		if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
-			return provisionSkip, latestJob
-		}
-	} else if !latestJob.State.IsTerminal() {
-		// Job still running — poll for status
-		return provisionPoll, latestJob
-	} else if latestJob.ConfigVersion != "" {
-		if latestJob.ConfigVersion == instance.Status.DesiredConfigVersion {
-			if latestJob.State == v1alpha1.JobStateSucceeded {
-				// Succeeded with same config — nothing to do
-				return provisionSkip, latestJob
-			}
-			// Failed with same config — retry with backoff
-			return provisionBackoff, latestJob
-		}
-	} else if instance.Status.DesiredConfigVersion == instance.Status.ReconciledConfigVersion {
-		// Terminal job without ConfigVersion (pre-existing job) — use annotation-based check
-		return provisionSkip, latestJob
-	}
-
-	// Provision is needed (no job, or spec changed since last terminal job).
-	// Check the API server to guard against stale informer cache: a prior
-	// reconcile may have already triggered a job that the cache hasn't picked up.
-	if _, ok := r.checkAPIServerForNonTerminalJob(ctx, instance); ok {
-		return provisionRequeue, nil
-	}
-	return provisionTrigger, latestJob
+	return evaluateProvisionAction(&provisionState{
+		Jobs:                    &instance.Status.Jobs,
+		DesiredConfigVersion:    instance.Status.DesiredConfigVersion,
+		ReconciledConfigVersion: instance.Status.ReconciledConfigVersion,
+	}, func() bool {
+		return checkAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{})
+	})
 }
 
-// checkAPIServerForNonTerminalJob reads the instance directly from the API server
-// and returns a non-terminal provision job if one exists. This guards against
-// duplicate triggers when the informer cache is stale between back-to-back reconciles.
-func (r *ComputeInstanceReconciler) checkAPIServerForNonTerminalJob(ctx context.Context, instance *v1alpha1.ComputeInstance) (*v1alpha1.JobStatus, bool) {
-	log := ctrllog.FromContext(ctx)
-	fresh := &v1alpha1.ComputeInstance{}
-	if err := r.mgr.GetLocalManager().GetAPIReader().Get(ctx, client.ObjectKeyFromObject(instance), fresh); err != nil {
-		return nil, false
-	}
-	freshJob := v1alpha1.FindLatestJobByType(fresh.Status.Jobs, v1alpha1.JobTypeProvision)
-	if hasJobID(freshJob) && !freshJob.State.IsTerminal() {
-		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
-		return freshJob, true
-	}
-	return nil, false
-}
-
-// handleDesiredConfigVersion computes a version (hash) of the spec (using FNV-1a) and stores it as hexadecimal in status.DesiredConfigVersion.
-// The hashing is idempotent - the same spec will always produce the same version.
 func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
-	// Hash the spec using FNV-1a for idempotent hashing
-	specJSON, err := json.Marshal(instance.Spec)
+	version, err := computeDesiredConfigVersion(instance.Spec)
 	if err != nil {
-		return fmt.Errorf("failed to marshal spec to JSON: %w", err)
+		return err
 	}
-
-	hasher := fnv.New64a()
-	if _, err := hasher.Write(specJSON); err != nil {
-		return fmt.Errorf("failed to write to hash: %w", err)
-	}
-
-	hashBytes := hasher.Sum(nil)
-	desiredConfigVersion := hex.EncodeToString(hashBytes)
-	instance.Status.DesiredConfigVersion = desiredConfigVersion
-
+	instance.Status.DesiredConfigVersion = version
 	return nil
 }
 
