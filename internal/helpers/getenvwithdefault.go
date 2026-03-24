@@ -7,7 +7,13 @@ import (
 	"time"
 )
 
-func GetEnvWithDefault[T any](name string, defaultValue T) (value T) {
+// GetEnvWithDefault reads an environment variable, parses it to the specified type T,
+// and returns the parsed value. If the environment variable is empty, unparsable, or
+// fails validation, the defaultValue is returned instead.
+//
+// Supported types: string, int, bool, float64, time.Duration.
+// For unsupported types, the default value is always returned.
+func GetEnvWithDefault[T any](name string, defaultValue T, validator ...func(T) bool) (value T) {
 	val := os.Getenv(name)
 	if val == "" {
 		return defaultValue
@@ -15,36 +21,35 @@ func GetEnvWithDefault[T any](name string, defaultValue T) (value T) {
 
 	var result any
 	var zero T
+	var err error
 
 	switch any(zero).(type) {
 	case string:
 		result = val
 	case int:
-		v, err := strconv.Atoi(val)
-		if err != nil {
-			return defaultValue
-		}
-		result = v
+		result, err = strconv.Atoi(val)
 	case bool:
-		v, err := strconv.ParseBool(val)
-		if err != nil {
-			return defaultValue
-		}
-		result = v
+		result, err = strconv.ParseBool(val)
 	case float64:
-		v, err := strconv.ParseFloat(val, 64)
-		if err != nil {
-			return defaultValue
-		}
-		result = v
+		result, err = strconv.ParseFloat(val, 64)
 	case time.Duration:
-		v, err := time.ParseDuration(val)
-		if err != nil {
-			return defaultValue
-		}
-		result = v
+		result, err = time.ParseDuration(val)
 	default:
 		return defaultValue
+	}
+
+	if err != nil {
+		helperLog.Error(err, "conversion failed, using default", "envVar", name, "value", val, "default", defaultValue)
+		return defaultValue
+	}
+
+	if len(validator) > 0 {
+		for _, v := range validator {
+			if !v(result.(T)) {
+				helperLog.Info("validation failed, using default", "envVar", name, "value", val, "default", defaultValue)
+				return defaultValue
+			}
+		}
 	}
 
 	return result.(T)
