@@ -18,13 +18,17 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -831,31 +835,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := ctrl.SetupSignalHandler()
-
+	setupLog.Info("starting manager")
+	g, ctx := errgroup.WithContext(ctrl.SetupSignalHandler())
 	if remoteCluster != nil {
-		setupLog.Info("starting remote cluster")
-		go func() {
-			err := remoteCluster.Start(ctx)
-			if err != nil {
-				setupLog.Error(err, "unable to start remote cluster")
-				os.Exit(1)
-			}
-		}()
+		g.Go(func() error {
+			return ignoreCanceled(remoteCluster.Start(ctx))
+		})
 	}
 	if remoteProvider != nil {
-		setupLog.Info("starting remote provider")
-		go func() {
-			if err := remoteProvider.(multicluster.ProviderRunnable).Start(ctx, mgr); err != nil {
-				setupLog.Error(err, "remote provider failed")
-			}
-		}()
+		g.Go(func() error {
+			return ignoreCanceled(remoteProvider.(multicluster.ProviderRunnable).Start(ctx, mgr))
+		})
 	}
-	setupLog.Info("starting manager")
-	if err := mgr.Start(ctx); err != nil {
+	g.Go(func() error {
+		return ignoreCanceled(mgr.Start(ctx))
+	})
+	if err := g.Wait(); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// ignoreCanceled returns nil if the error is a context cancellation,
+// since that's the expected shutdown path when errgroup cancels the context.
+func ignoreCanceled(err error) error {
+	if err != nil && errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
 //nolint:nakedret
