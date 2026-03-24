@@ -23,7 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -124,46 +123,6 @@ const (
 
 	remoteClusterName = "remote"
 )
-
-// parsePollInterval parses a poll interval from environment variable with fallback to default.
-func parsePollInterval(envVar string, defaultInterval time.Duration) time.Duration {
-	pollIntervalStr := os.Getenv(envVar)
-	if pollIntervalStr == "" {
-		return defaultInterval
-	}
-
-	interval, err := time.ParseDuration(pollIntervalStr)
-	if err != nil {
-		setupLog.Error(err, "invalid poll interval, using default",
-			"envVar", envVar, "value", pollIntervalStr, "default", defaultInterval)
-		return defaultInterval
-	}
-
-	return interval
-}
-
-// parseIntEnv parses an integer from environment variable with fallback to default.
-func parseIntEnv(envVar string, defaultValue int) int {
-	valueStr := os.Getenv(envVar)
-	if valueStr == "" {
-		return defaultValue
-	}
-
-	value, err := strconv.Atoi(valueStr)
-	if err != nil {
-		setupLog.Error(err, "invalid integer value, using default",
-			"envVar", envVar, "value", valueStr, "default", defaultValue)
-		return defaultValue
-	}
-
-	if value < 1 {
-		setupLog.Info("integer value must be at least 1, using default",
-			"envVar", envVar, "value", value, "default", defaultValue)
-		return defaultValue
-	}
-
-	return value
-}
 
 // controllerFlags holds the enable flags for all controllers.
 type controllerFlags struct {
@@ -289,7 +248,7 @@ func createAAPProvider(
 	aapURL, aapToken, provisionTemplate, deprovisionTemplate string,
 	aapInsecureSkipVerify bool,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
-	statusPollInterval := parsePollInterval(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
+	statusPollInterval := helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
 
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	config := provisioning.ProviderConfig{
@@ -525,7 +484,7 @@ func setupNetworkingControllers(
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
 	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-	statusPollInterval := parsePollInterval(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
+	statusPollInterval := helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
 
 	// Create a single prefix-based AAP provider shared by all networking controllers.
 	// Template names are derived from the resource Kind at call time:
@@ -789,7 +748,9 @@ func main() {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
 
-	maxJobHistory := parseIntEnv(envMaxJobHistory, controller.DefaultMaxJobHistory)
+	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, controller.DefaultMaxJobHistory, func(v int) bool {
+		return v >= 1
+	})
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if ctrlFlags.Cluster {
