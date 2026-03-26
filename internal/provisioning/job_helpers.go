@@ -37,6 +37,9 @@ func AppendJob(jobs []v1alpha1.JobStatus, newJob v1alpha1.JobStatus, maxHistory 
 
 // NeedsProvisionJob determines if a new provision job should be triggered.
 // Returns true if no job exists, or if the previous job failed (allowing retry).
+// Used by controllers without config-version-based provisioning (SecurityGroup,
+// Subnet, VirtualNetwork). Controllers with ConfigVersion support should use
+// EvaluateAction instead, which adds backoff and spec-change detection.
 func NeedsProvisionJob(latestJob *v1alpha1.JobStatus) bool {
 	// No job exists yet
 	if latestJob == nil || latestJob.JobID == "" {

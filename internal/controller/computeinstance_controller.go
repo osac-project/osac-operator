@@ -331,11 +331,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		return ctrl.Result{}, nil
 	}
 
-	provState := &provisioning.State{
-		Jobs:                    &instance.Status.Jobs,
-		DesiredConfigVersion:    instance.Status.DesiredConfigVersion,
-		ReconciledConfigVersion: instance.Status.ReconciledConfigVersion,
-	}
+	provState := r.provisionState(instance)
 	action, latestProvisionJob := r.shouldTriggerProvision(ctx, instance)
 	trigger := func() (ctrl.Result, error) {
 		return provisioning.TriggerJob(ctx, r.ProvisioningProvider, instance, provState, r.MaxJobHistory, r.StatusPollInterval)
@@ -935,12 +931,16 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 // Returns provisioning.Skip when config versions match (no change needed).
 // Returns provisioning.Requeue when the API server has a non-terminal job that the cache missed (stale cache).
 // Returns provisioning.Trigger when provisioning is needed and no in-flight job exists.
-func (r *ComputeInstanceReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ComputeInstance) (provisioning.Action, *v1alpha1.JobStatus) {
-	return provisioning.EvaluateAction(&provisioning.State{
+func (r *ComputeInstanceReconciler) provisionState(instance *v1alpha1.ComputeInstance) *provisioning.State {
+	return &provisioning.State{
 		Jobs:                    &instance.Status.Jobs,
 		DesiredConfigVersion:    instance.Status.DesiredConfigVersion,
 		ReconciledConfigVersion: instance.Status.ReconciledConfigVersion,
-	}, func() bool {
+	}
+}
+
+func (r *ComputeInstanceReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ComputeInstance) (provisioning.Action, *v1alpha1.JobStatus) {
+	return provisioning.EvaluateAction(r.provisionState(instance), func() bool {
 		return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{})
 	})
 }

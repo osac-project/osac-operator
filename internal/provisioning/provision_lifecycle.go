@@ -179,7 +179,6 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 }
 
 // ComputeDesiredConfigVersion computes a hash of the spec and returns it.
-// ComputeDesiredConfigVersion computes a hash of the spec and returns it.
 // The caller must pass the resource's Spec field (not the entire resource).
 func ComputeDesiredConfigVersion(spec any) (string, error) {
 	specJSON, err := json.Marshal(spec)

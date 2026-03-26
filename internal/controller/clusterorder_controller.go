@@ -552,7 +552,7 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 	case provisioning.Skip:
 		return ctrl.Result{}, nil
 	case provisioning.Requeue:
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	case provisioning.Trigger:
 		return trigger()
 	case provisioning.Backoff:
@@ -601,7 +601,7 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// If no deprovision job exists, trigger one
-	if latestDeprovisionJob == nil {
+	if !provisioning.HasJobID(latestDeprovisionJob) {
 		log.Info("triggering deprovision job")
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
 		if err != nil {

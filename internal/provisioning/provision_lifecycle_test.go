@@ -23,6 +23,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
@@ -161,5 +162,214 @@ var _ = ginkgo.Describe("SyncReconciledConfigVersion", func() {
 
 	ginkgo.It("returns empty string when annotations map is nil", func() {
 		Expect(SyncReconciledConfigVersion(ctx, nil, "osac.openshift.io/reconciled-config-version")).To(BeEmpty())
+	})
+})
+var _ = ginkgo.Describe("FindLatestJobByType", func() {
+	var baseTime time.Time
+
+	ginkgo.BeforeEach(func() {
+		baseTime = time.Now().UTC()
+	})
+
+	ginkgo.It("should return nil when jobs array is empty", func() {
+		jobs := []v1alpha1.JobStatus{}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).To(BeNil())
+	})
+
+	ginkgo.It("should return nil when no jobs of requested type exist", func() {
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "job1",
+				Type:      v1alpha1.JobTypeDeprovision,
+				Timestamp: metav1.NewTime(baseTime),
+				State:     v1alpha1.JobStateRunning,
+			},
+		}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).To(BeNil())
+	})
+
+	ginkgo.It("should return the only job when only one job of that type exists", func() {
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "job1",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime),
+				State:     v1alpha1.JobStateRunning,
+			},
+		}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("job1"))
+	})
+
+	ginkgo.It("should return the job with latest timestamp when multiple jobs exist", func() {
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "job1",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-2 * time.Hour)),
+				State:     v1alpha1.JobStateSucceeded,
+			},
+			{
+				JobID:     "job2",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-1 * time.Hour)),
+				State:     v1alpha1.JobStateRunning,
+			},
+			{
+				JobID:     "job3",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute)),
+				State:     v1alpha1.JobStatePending,
+			},
+		}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("job3"))
+	})
+
+	ginkgo.It("should find latest by timestamp regardless of array order", func() {
+		// Jobs deliberately NOT in chronological order
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "job3",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute)), // Most recent
+				State:     v1alpha1.JobStatePending,
+			},
+			{
+				JobID:     "job1",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-2 * time.Hour)), // Oldest
+				State:     v1alpha1.JobStateSucceeded,
+			},
+			{
+				JobID:     "job2",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-1 * time.Hour)), // Middle
+				State:     v1alpha1.JobStateRunning,
+			},
+		}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("job3"))
+	})
+
+	ginkgo.It("should only consider jobs of the requested type", func() {
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "provision1",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-2 * time.Hour)),
+				State:     v1alpha1.JobStateSucceeded,
+			},
+			{
+				JobID:     "deprovision1",
+				Type:      v1alpha1.JobTypeDeprovision,
+				Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute)), // Most recent overall
+				State:     v1alpha1.JobStateRunning,
+			},
+			{
+				JobID:     "provision2",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: metav1.NewTime(baseTime.Add(-1 * time.Hour)),
+				State:     v1alpha1.JobStateRunning,
+			},
+		}
+		// Should find latest provision job, not latest overall
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("provision2"))
+		Expect(result.Type).To(Equal(v1alpha1.JobTypeProvision))
+
+		// Should find latest deprovision job
+		result = FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("deprovision1"))
+		Expect(result.Type).To(Equal(v1alpha1.JobTypeDeprovision))
+	})
+
+	ginkgo.It("should handle jobs with identical timestamps", func() {
+		sameTime := metav1.NewTime(baseTime)
+		jobs := []v1alpha1.JobStatus{
+			{
+				JobID:     "job1",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: sameTime,
+				State:     v1alpha1.JobStateSucceeded,
+			},
+			{
+				JobID:     "job2",
+				Type:      v1alpha1.JobTypeProvision,
+				Timestamp: sameTime,
+				State:     v1alpha1.JobStateRunning,
+			},
+		}
+		result := FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+		Expect(result).NotTo(BeNil())
+		// When timestamps are equal, returns first one found
+		Expect(result.JobID).To(Equal("job1"))
+	})
+})
+
+var _ = ginkgo.Describe("GetJobsFromResource", func() {
+	ginkgo.It("returns jobs from ComputeInstance", func() {
+		ci := &v1alpha1.ComputeInstance{}
+		ci.Status.Jobs = []v1alpha1.JobStatus{{JobID: "j1"}}
+		Expect(GetJobsFromResource(ci)).To(HaveLen(1))
+	})
+
+	ginkgo.It("returns jobs from ClusterOrder", func() {
+		co := &v1alpha1.ClusterOrder{}
+		co.Status.Jobs = []v1alpha1.JobStatus{{JobID: "j1"}, {JobID: "j2"}}
+		Expect(GetJobsFromResource(co)).To(HaveLen(2))
+	})
+
+	ginkgo.It("returns jobs from HostPool", func() {
+		hp := &v1alpha1.HostPool{}
+		Expect(GetJobsFromResource(hp)).To(BeEmpty())
+	})
+
+	ginkgo.It("returns nil for unsupported type", func() {
+		subnet := &v1alpha1.Subnet{}
+		Expect(GetJobsFromResource(subnet)).To(BeNil())
+	})
+})
+
+var _ = ginkgo.Describe("HandleBackoff", func() {
+	ginkgo.It("triggers when backoff elapsed", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC().Add(-BackoffBaseDelay - time.Minute))},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+		latestJob := &jobs[0]
+		triggered := false
+		result, err := HandleBackoff(ctx, provState, latestJob, func() (ctrl.Result, error) {
+			triggered = true
+			return ctrl.Result{RequeueAfter: BackoffBaseDelay}, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(triggered).To(BeTrue())
+		Expect(result.RequeueAfter).To(Equal(BackoffBaseDelay))
+	})
+
+	ginkgo.It("backs off when not enough time elapsed", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC().Add(-30 * time.Second))},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+		latestJob := &jobs[0]
+		triggered := false
+		result, err := HandleBackoff(ctx, provState, latestJob, func() (ctrl.Result, error) {
+			triggered = true
+			return ctrl.Result{}, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(triggered).To(BeFalse())
+		Expect(result.RequeueAfter).To(BeNumerically("~", BackoffBaseDelay, 35*time.Second))
 	})
 })
