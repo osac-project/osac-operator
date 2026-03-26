@@ -136,12 +136,12 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 	if sg.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		sg.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
-		// Preserve the status we've set since Update returns server state (empty status)
-		currentStatus := sg.Status.DeepCopy()
 		if err := r.Update(ctx, sg); err != nil {
 			return ctrl.Result{}, err
 		}
-		sg.Status = *currentStatus
+		if err := r.Get(ctx, client.ObjectKeyFromObject(sg), sg); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Handle provisioning

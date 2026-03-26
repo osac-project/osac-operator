@@ -53,6 +53,11 @@ const (
 	DefaultStatusPollInterval = 30 * time.Second
 )
 
+// errSubnetNotFound is returned when the Subnet CR referenced by SubnetRef
+// does not exist. handleUpdate treats this as a transient error and requeues
+// with a fixed delay instead of exponential backoff.
+var errSubnetNotFound = errors.New("subnet CR not found")
+
 // ComputeInstanceReconciler reconciles a ComputeInstance object
 type ComputeInstanceReconciler struct {
 	client.Client
@@ -618,22 +623,78 @@ func (r *ComputeInstanceReconciler) resolveSubnetNamespace(ctx context.Context, 
 	return subnetNamespace, nil
 }
 
-func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+// syncSubnetNamespaceAnnotation ensures the subnet-namespace annotation is set
+// when SubnetRef is configured. SubnetRef is immutable, so the annotation only
+// needs to be resolved and written once; subsequent reconciles reuse the cached
+// annotation value. Returns the resolved namespace, whether the annotation was
+// written, and any error.
+func (r *ComputeInstanceReconciler) syncSubnetNamespaceAnnotation(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, bool, error) {
+	if instance.Spec.SubnetRef == "" {
+		return "", false, nil
+	}
+
+	// SubnetRef is immutable — if the annotation is already set, reuse it.
+	if ns, ok := instance.Annotations[osacSubnetNamespaceAnnotation]; ok {
+		return ns, false, nil
+	}
+
+	subnetNamespace, err := r.resolveSubnetNamespace(ctx, instance)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %w", errSubnetNotFound, err)
+	}
+	if instance.Annotations == nil {
+		instance.Annotations = make(map[string]string)
+	}
+	instance.Annotations[osacSubnetNamespaceAnnotation] = subnetNamespace
+	return subnetNamespace, true, nil
+}
+
+// syncMetadataPreflight ensures the finalizer is set and the subnet-namespace
+// annotation is in sync with the current SubnetRef.  It batches all metadata
+// changes into a single r.Update() call to avoid multiple round-trips and the
+// status-clobbering problem.  The resolved subnetNamespace is returned so
+// callers can reuse it without a second resolveSubnetNamespace call.
+func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
 	log := ctrllog.FromContext(ctx)
 
-	if controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer) {
+	metadataChanged := controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer)
+
+	subnetNamespace, changed, err := r.syncSubnetNamespaceAnnotation(ctx, instance)
+	if err != nil {
+		log.Error(err, "Failed to resolve subnet namespace")
+		return "", err
+	}
+	if changed {
+		metadataChanged = true
+	}
+
+	if metadataChanged {
 		if err := r.Update(ctx, instance); err != nil {
-			return ctrl.Result{}, err
+			return "", err
 		}
 		// Re-fetch so we have the latest resourceVersion and status; Update() may not
 		// return the full status (status subresource is separate), and we need the
 		// latest version to avoid 409 conflicts on later status updates.
 		if err := r.Get(ctx, client.ObjectKeyFromObject(instance), instance); err != nil {
-			return ctrl.Result{}, err
+			return "", err
 		}
 	}
 
-	// Initialize status after the finalizer update, because r.Update() overwrites
+	return subnetNamespace, nil
+}
+
+func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	subnetNamespace, err := r.syncMetadataPreflight(ctx, instance)
+	if err != nil {
+		if errors.Is(err, errSubnetNotFound) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Initialize status after the metadata update, because r.Update() overwrites
 	// the in-memory status with the server response (status subresource is separate).
 	r.initializeStatusConditions(instance)
 	// Initialize phase to Starting for brand-new CIs (Phase is empty until first set).
@@ -662,17 +723,11 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	}
 
 	// When a subnetRef is set, the VM is created in the subnet namespace
-	// (by the AAP playbook), not in the tenant namespace.
+	// (by the AAP playbook), not in the tenant namespace.  Reuse the value
+	// resolved by syncMetadataPreflight to avoid a redundant API call.
 	vmSearchNamespace := tenant.Status.Namespace
-	if instance.Spec.SubnetRef != "" {
-		subnetNS, err := r.resolveSubnetNamespace(ctx, instance)
-		if err != nil {
-			log.Error(err, "Failed to resolve subnet namespace for VM lookup")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
-		if subnetNS != "" {
-			vmSearchNamespace = subnetNS
-		}
+	if subnetNamespace != "" {
+		vmSearchNamespace = subnetNamespace
 	}
 
 	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, vmSearchNamespace)
@@ -695,23 +750,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Resolve subnet namespace if subnetRef is set
-	// This must happen before provisioning.TriggerJob so the annotation is available for AAP
-	if instance.Spec.SubnetRef != "" {
-		subnetNamespace, err := r.resolveSubnetNamespace(ctx, instance)
-		if err != nil {
-			log.Error(err, "Failed to resolve subnet namespace")
-			// Return error to retry - Subnet CR might not exist yet
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-		}
-
-		// Store subnet namespace in annotation for AAP provider to use
-		if instance.Annotations == nil {
-			instance.Annotations = make(map[string]string)
-		}
-		instance.Annotations["osac.openshift.io/subnet-namespace"] = subnetNamespace
 	}
 
 	if err := r.handleReconciledConfigVersion(ctx, instance); err != nil {

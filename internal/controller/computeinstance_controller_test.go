@@ -1627,13 +1627,149 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
 
-			// Reconcile should return error (requeue) when Subnet CR is missing
+			// Reconcile should return RequeueAfter (no error) when Subnet CR is missing
 			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).To(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
 		})
 
-		It("should use tenant namespace when subnetRef is empty", func() {
+		It("should persist subnet-namespace annotation to the API server", func() {
+			const resourceName = "test-ci-subnet-anno-persist"
+			const tenantName = "tenant-subnet-anno-persist"
+			const subnetRef = "test-subnet-anno-persist"
+			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			// Create Subnet CR
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetRef,
+					Namespace: namespaceName,
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.0.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, subnet)
+			}()
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			// Wait for Subnet CR to be cached by the reconciler's manager cache
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.SubnetRef = subnetRef
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the annotation was persisted to the API server (not just in-memory)
+			ci := &osacv1alpha1.ComputeInstance{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				g.Expect(ci.Annotations).To(HaveKeyWithValue(osacSubnetNamespaceAnnotation, subnetRef))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+
+		It("should not update annotation when subnet-namespace is already correct", func() {
+			const resourceName = "test-ci-subnet-anno-noop"
+			const tenantName = "tenant-subnet-anno-noop"
+			const subnetRef = "test-subnet-anno-noop"
+			defer deleteCI(resourceName)
+			createReadyTenant(ctx, namespaceName, tenantName)
+			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
+
+			// Create Subnet CR
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetRef,
+					Namespace: namespaceName,
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.0.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, subnet)
+			}()
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			// Wait for Subnet CR to be cached by the reconciler's manager cache
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.SubnetRef = subnetRef
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantAnnotation:          tenantName,
+						osacSubnetNamespaceAnnotation: subnetRef, // already correct
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			Eventually(func() error {
+				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// First reconcile adds the finalizer, which triggers an r.Update().
+			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Capture the Generation after the first reconcile. Generation only
+			// increments on spec changes, not on metadata or status updates, so
+			// it stays stable across reconciles that only touch status.
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			genBefore := ci.Generation
+			annotationsBefore := ci.Annotations
+
+			// Second reconcile — finalizer and annotation are already in place,
+			// so syncMetadataPreflight should skip the r.Update() call entirely.
+			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+
+			ciAfter := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ciAfter)).To(Succeed())
+			Expect(ciAfter.Annotations).To(HaveKeyWithValue(osacSubnetNamespaceAnnotation, subnetRef))
+			Expect(ciAfter.Generation).To(Equal(genBefore), "Generation should not change when no spec/metadata write occurs")
+			Expect(ciAfter.Annotations).To(Equal(annotationsBefore), "Annotations should be unchanged across reconciles")
+		})
+
+		It("should not set subnet-namespace annotation when subnetRef is empty", func() {
 			const resourceName = "test-ci-no-subnet-vm-ns"
 			const tenantName = "tenant-no-subnet-vm"
 			defer deleteCI(resourceName)
@@ -1667,6 +1803,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
 				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+				g.Expect(ci.Annotations).NotTo(HaveKey(osacSubnetNamespaceAnnotation))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 	})
