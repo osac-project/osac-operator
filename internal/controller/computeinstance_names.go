@@ -33,4 +33,5 @@ var (
 	osacComputeInstanceManagementStateAnnotation string = fmt.Sprintf("%s/management-state", osacPrefix)
 	osacVirualMachineFloatingIPAddressAnnotation string = fmt.Sprintf("%s/floating-ip-address", osacPrefix)
 	osacAAPReconciledConfigVersionAnnotation     string = fmt.Sprintf("%s/reconciled-config-version", osacPrefix)
+	osacSubnetNamespaceAnnotation                string = fmt.Sprintf("%s/subnet-namespace", osacPrefix)
 )
