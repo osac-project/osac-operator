@@ -120,6 +120,7 @@ const (
 	envEnableComputeInstanceController = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
 	envEnableClusterController         = "OSAC_ENABLE_CLUSTER_CONTROLLER"
 	envEnableNetworkingController      = "OSAC_ENABLE_NETWORKING_CONTROLLER"
+	envEnableBareMetalPoolController   = "OSAC_ENABLE_BAREMETALPOOL_CONTROLLER"
 
 	remoteClusterName = "remote"
 )
@@ -131,6 +132,7 @@ type controllerFlags struct {
 	ComputeInstance bool
 	Cluster         bool
 	Networking      bool
+	BareMetalPool   bool
 }
 
 // registerControllerFlags registers controller enable flags with the flag package
@@ -152,17 +154,21 @@ func registerControllerFlags() *controllerFlags {
 	flag.BoolVar(&flags.Networking, "enable-networking-controller",
 		helpers.GetEnvWithDefault(envEnableNetworkingController, false),
 		"Enable the networking controllers (VirtualNetwork, Subnet, SecurityGroup).")
+	flag.BoolVar(&flags.BareMetalPool, "enable-baremetalpool-controller",
+		helpers.GetEnvWithDefault(envEnableBareMetalPoolController, false),
+		"Enable the bare-metal-pool controller.")
 	return flags
 }
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
 func (f *controllerFlags) enableAllIfNoneSet() {
-	if !f.Tenant && !f.HostPool && !f.ComputeInstance && !f.Cluster && !f.Networking {
+	if !f.Tenant && !f.HostPool && !f.ComputeInstance && !f.Cluster && !f.Networking && !f.BareMetalPool {
 		f.Tenant = true
 		f.HostPool = true
 		f.ComputeInstance = true
 		f.Cluster = true
 		f.Networking = true
+		f.BareMetalPool = true
 		setupLog.Info("no controller flags set, enabling all controllers")
 	}
 }
@@ -171,7 +177,7 @@ func (f *controllerFlags) enableAllIfNoneSet() {
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
 	localScheme *runtime.Scheme,
-	enableCluster, enableHostPool, enableComputeInstance, enableTenant, enableNetworking bool,
+	enableCluster, enableHostPool, enableComputeInstance, enableTenant, enableNetworking, enableBareMetalPool bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
@@ -562,6 +568,18 @@ func setupNetworkingControllers(
 	return nil
 }
 
+// setupBareMetalPoolController registers the BareMetalPool controller.
+func setupBareMetalPoolController(mgr mcmanager.Manager) error {
+	localMgr := mgr.GetLocalManager()
+	if err := (&controller.BareMetalPoolReconciler{
+		Client: localMgr.GetClient(),
+		Scheme: localMgr.GetScheme(),
+	}).SetupWithManager(localMgr); err != nil {
+		return fmt.Errorf("baremetalpool controller: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	var err error
 
@@ -695,6 +713,7 @@ func main() {
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Networking,
+			ctrlFlags.BareMetalPool,
 		)
 	} else {
 		remoteScheme = runtime.NewScheme()
@@ -783,7 +802,12 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
+	if ctrlFlags.BareMetalPool {
+		if err := setupBareMetalPoolController(mgr); err != nil {
+			setupLog.Error(err, "unable to setup baremetalpool controller")
+			os.Exit(1)
+		}
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
