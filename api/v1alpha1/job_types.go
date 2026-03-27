@@ -62,22 +62,6 @@ func (s JobState) IsSuccessful() bool {
 	return s == JobStateSucceeded
 }
 
-// FindLatestJobByType finds the most recent job of the specified type by timestamp.
-// Returns nil if no job of that type exists.
-// This function explicitly compares timestamps rather than assuming array order,
-// as order may not be preserved through etcd/K8s API operations.
-func FindLatestJobByType(jobs []JobStatus, jobType JobType) *JobStatus {
-	var latest *JobStatus
-	for i := range jobs {
-		if jobs[i].Type == jobType {
-			if latest == nil || jobs[i].Timestamp.After(latest.Timestamp.Time) {
-				latest = &jobs[i]
-			}
-		}
-	}
-	return latest
-}
-
 // JobStatus represents the status of a provisioning or deprovisioning job
 type JobStatus struct {
 	// JobID is the job identifier from the provisioning provider

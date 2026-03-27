@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -408,7 +407,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 
 			// Verify job was created
-			latestJob := osacv1alpha1.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -563,7 +562,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(deprovisionCalled).To(BeTrue())
 
 			// Verify deprovision job was added to the in-memory object
-			latestJob := osacv1alpha1.FindLatestJobByType(toDelete.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(toDelete.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
 		})
@@ -627,7 +626,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					Timestamp: metav1.Now(),
 					State:     osacv1alpha1.JobStatePending,
 				}
-				jobs = helpers.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
+				jobs = provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only have MaxJobHistory jobs
@@ -660,7 +659,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				Message: "Updated message",
 			}
 
-			helpers.UpdateJob(jobs, updatedJob)
+			provisioning.UpdateJob(jobs, updatedJob)
 
 			// Verify job was updated
 			Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateRunning))

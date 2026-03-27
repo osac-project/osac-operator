@@ -3,6 +3,7 @@ package provisioning
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -123,4 +124,12 @@ type ProvisionStatus struct {
 
 	// ErrorDetails contains detailed error information when State is JobStateFailed.
 	ErrorDetails string
+}
+
+// MessageWithDetails returns the message with error details appended, if present.
+func (s *ProvisionStatus) MessageWithDetails() string {
+	if s.ErrorDetails != "" {
+		return fmt.Sprintf("%s: %s", s.Message, s.ErrorDetails)
+	}
+	return s.Message
 }

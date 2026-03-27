@@ -30,7 +30,6 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -186,9 +185,9 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 	}
 
 	// Check if we need to trigger a provision job
-	latestProvisionJob := v1alpha1.FindLatestJobByType(sg.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := provisioning.FindLatestJobByType(sg.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if helpers.NeedsProvisionJob(latestProvisionJob) {
+	if provisioning.NeedsProvisionJob(latestProvisionJob) {
 		// Fetch fresh CR from API server to avoid stale cache issues (see PR #131)
 		freshSG := &v1alpha1.SecurityGroup{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(sg), freshSG); err != nil {
@@ -196,8 +195,8 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		}
 
 		// Re-check with fresh data
-		latestProvisionJob = v1alpha1.FindLatestJobByType(freshSG.Status.Jobs, v1alpha1.JobTypeProvision)
-		if !helpers.NeedsProvisionJob(latestProvisionJob) {
+		latestProvisionJob = provisioning.FindLatestJobByType(freshSG.Status.Jobs, v1alpha1.JobTypeProvision)
+		if !provisioning.NeedsProvisionJob(latestProvisionJob) {
 			log.Info("provision job already exists (cache was stale), skipping trigger")
 			// Update local copy with fresh status
 			sg.Status = freshSG.Status
@@ -215,7 +214,7 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 				State:     v1alpha1.JobStateFailed,
 				Message:   fmt.Sprintf("Failed to trigger provisioning: %v", err),
 			}
-			sg.Status.Jobs = helpers.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
+			sg.Status.Jobs = provisioning.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
 			sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
@@ -228,7 +227,7 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 			Message:                result.Message,
 			BlockDeletionOnFailure: false,
 		}
-		sg.Status.Jobs = helpers.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
+		sg.Status.Jobs = provisioning.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
 		log.Info("provisioning job triggered", "jobID", result.JobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
@@ -239,18 +238,15 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		log.Error(err, "failed to get provision job status", "jobID", latestProvisionJob.JobID)
 		updatedJob := *latestProvisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		helpers.UpdateJob(sg.Status.Jobs, updatedJob)
+		provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update job status
 	updatedJob := *latestProvisionJob
 	updatedJob.State = status.State
-	updatedJob.Message = status.Message
-	if status.ErrorDetails != "" {
-		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
-	}
-	helpers.UpdateJob(sg.Status.Jobs, updatedJob)
+	updatedJob.Message = status.MessageWithDetails()
+	provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
@@ -284,7 +280,7 @@ func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *
 	}
 
 	// Check if we already have a deprovision job
-	latestDeprovisionJob := v1alpha1.FindLatestJobByType(sg.Status.Jobs, v1alpha1.JobTypeDeprovision)
+	latestDeprovisionJob := provisioning.FindLatestJobByType(sg.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// Trigger deprovisioning
 	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
@@ -315,7 +311,7 @@ func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			sg.Status.Jobs = helpers.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
+			sg.Status.Jobs = provisioning.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
@@ -327,18 +323,15 @@ func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *
 		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		helpers.UpdateJob(sg.Status.Jobs, updatedJob)
+		provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update job status
 	updatedJob := *latestDeprovisionJob
 	updatedJob.State = status.State
-	updatedJob.Message = status.Message
-	if status.ErrorDetails != "" {
-		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
-	}
-	helpers.UpdateJob(sg.Status.Jobs, updatedJob)
+	updatedJob.Message = status.MessageWithDetails()
+	provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {

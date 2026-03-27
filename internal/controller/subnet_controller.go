@@ -30,7 +30,6 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -206,9 +205,9 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 	}
 
 	// Check if we need to trigger a (new) provision job
-	latestProvisionJob := v1alpha1.FindLatestJobByType(subnet.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if helpers.NeedsProvisionJob(latestProvisionJob) {
+	if provisioning.NeedsProvisionJob(latestProvisionJob) {
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, subnet)
 		if err != nil {
@@ -223,7 +222,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			State:     result.InitialState,
 			Message:   result.Message,
 		}
-		subnet.Status.Jobs = helpers.AppendJob(subnet.Status.Jobs, newJob, r.getMaxJobHistory())
+		subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, r.getMaxJobHistory())
 		log.Info("provisioning job triggered", "jobID", result.JobID)
 		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
 	}
@@ -239,7 +238,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 	updatedJob := *latestProvisionJob
 	updatedJob.State = status.State
 	updatedJob.Message = status.Message
-	helpers.UpdateJob(subnet.Status.Jobs, updatedJob)
+	provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
@@ -271,7 +270,7 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 	}
 
 	// Check if we already have a deprovision job
-	latestDeprovisionJob := v1alpha1.FindLatestJobByType(subnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
+	latestDeprovisionJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// Trigger deprovisioning - provider decides internally if ready
 	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
@@ -302,7 +301,7 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			subnet.Status.Jobs = helpers.AppendJob(subnet.Status.Jobs, newJob, r.getMaxJobHistory())
+			subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, r.getMaxJobHistory())
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
 		}
@@ -314,18 +313,15 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		helpers.UpdateJob(subnet.Status.Jobs, updatedJob)
+		provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
 	}
 
 	// Update job status
 	updatedJob := *latestDeprovisionJob
 	updatedJob.State = status.State
-	updatedJob.Message = status.Message
-	if status.ErrorDetails != "" {
-		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
-	}
-	helpers.UpdateJob(subnet.Status.Jobs, updatedJob)
+	updatedJob.Message = status.MessageWithDetails()
+	provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {

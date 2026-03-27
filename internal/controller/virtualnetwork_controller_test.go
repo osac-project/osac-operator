@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -135,7 +134,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			// Verify job was triggered (confirms ImplementationStrategy was read successfully)
 			updatedVnet := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updatedVnet)).To(Succeed())
-			latestJob := osacv1alpha1.FindLatestJobByType(updatedVnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(updatedVnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 		})
 
@@ -185,7 +184,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("new-job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -215,7 +214,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
@@ -283,7 +282,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					State:     osacv1alpha1.JobStatePending,
 					Message:   "Job triggered",
 				}
-				vnet.Status.Jobs = helpers.AppendJob(vnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
+				vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only keep last 3 jobs
@@ -311,7 +310,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())

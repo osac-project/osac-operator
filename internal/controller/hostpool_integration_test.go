@@ -100,7 +100,7 @@ var _ = Describe("HostPool Integration Tests", func() {
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			instance = getHostPool(name)
-			job := osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			job := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(job).NotTo(BeNil())
 			Expect(job.State).To(Equal(osacv1alpha1.JobStatePending))
 			Expect(job.ConfigVersion).To(Equal("v1"), "job should record the DesiredConfigVersion it was triggered for")
@@ -120,7 +120,7 @@ var _ = Describe("HostPool Integration Tests", func() {
 
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 			instance = getHostPool(name)
-			job = osacv1alpha1.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			job = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(job.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
 

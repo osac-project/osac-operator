@@ -36,7 +36,6 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -265,7 +264,7 @@ func (r *HostPoolReconciler) handleUpdate(ctx context.Context, req reconcile.Req
 	}
 
 	// Check provision job status before setting Ready
-	latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 	if latestProvisionJob != nil {
 		if latestProvisionJob.State == v1alpha1.JobStateSucceeded {
 			instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "HostPoolReady", "HostPool is ready")
@@ -387,16 +386,18 @@ func (r *HostPoolReconciler) handleProvisioning(ctx context.Context, instance *v
 	case provisioning.Skip:
 		return ctrl.Result{}, nil
 	case provisioning.Requeue:
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	case provisioning.Trigger:
 		return trigger()
 	case provisioning.Backoff:
-		return provisioning.HandleBackoff(ctx, *provState.Jobs, provState.DesiredConfigVersion, latestProvisionJob, trigger)
+		return provisioning.HandleBackoff(ctx, provState, latestProvisionJob, trigger)
 	default: // provisioning.Poll
-		return provisioning.PollJob(ctx, r.ProvisioningProvider, instance, provState, latestProvisionJob, r.StatusPollInterval, func(message string) {
-			instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "ProvisionJobFailed",
-				fmt.Sprintf("Provision job %s failed: %s", latestProvisionJob.JobID, message))
-			instance.Status.Phase = v1alpha1.HostPoolPhaseFailed
+		return provisioning.PollJob(ctx, r.ProvisioningProvider, instance, provState, latestProvisionJob, r.StatusPollInterval, &provisioning.PollCallbacks{
+			OnFailed: func(message string) {
+				instance.SetCondition(v1alpha1.HostPoolConditionProgressing, metav1.ConditionFalse, "ProvisionJobFailed",
+					fmt.Sprintf("Provision job %s failed: %s", latestProvisionJob.JobID, message))
+				instance.Status.Phase = v1alpha1.HostPoolPhaseFailed
+			},
 		})
 	}
 }
@@ -433,10 +434,10 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 	}
 
 	// Check if deprovision job already exists
-	latestDeprovisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// If no deprovision job exists, trigger one
-	if latestDeprovisionJob == nil {
+	if !provisioning.HasJobID(latestDeprovisionJob) {
 		log.Info("triggering deprovision job")
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)
 		if err != nil {
@@ -457,12 +458,12 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 			log.Info("waiting for provision job to terminate before deprovisioning")
 			// Update provision job status if provided
 			if result.ProvisionJobStatus != nil {
-				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 				if latestProvisionJob != nil {
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
-					updatedJob.Message = result.ProvisionJobStatus.Message
-					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+					updatedJob.Message = result.ProvisionJobStatus.MessageWithDetails()
+					provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
 				}
 			}
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
@@ -471,16 +472,16 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 			log.Info("deprovision job triggered", "jobID", result.JobID)
 			// Update provision job status if provided
 			if result.ProvisionJobStatus != nil {
-				latestProvisionJob := v1alpha1.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
 				if latestProvisionJob != nil {
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
-					updatedJob.Message = result.ProvisionJobStatus.Message
-					helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+					updatedJob.Message = result.ProvisionJobStatus.MessageWithDetails()
+					provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
 				}
 			}
 			// Append deprovision job
-			instance.Status.Jobs = helpers.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
+			instance.Status.Jobs = provisioning.AppendJob(instance.Status.Jobs, v1alpha1.JobStatus{
 				JobID:                  result.JobID,
 				Type:                   v1alpha1.JobTypeDeprovision,
 				State:                  v1alpha1.JobStatePending,
@@ -510,8 +511,8 @@ func (r *HostPoolReconciler) handleDeprovisioning(ctx context.Context, instance 
 			log.Info("deprovision job status changed", "jobID", latestDeprovisionJob.JobID, "oldState", latestDeprovisionJob.State, "newState", status.State)
 			updatedJob := *latestDeprovisionJob
 			updatedJob.State = status.State
-			updatedJob.Message = status.Message
-			helpers.UpdateJob(instance.Status.Jobs, updatedJob)
+			updatedJob.Message = status.MessageWithDetails()
+			provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
 		}
 
 		// Continue polling if still running

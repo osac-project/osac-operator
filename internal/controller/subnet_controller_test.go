@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -263,7 +262,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("test-job-123"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -292,7 +291,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("new-job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -321,7 +320,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
@@ -389,7 +388,7 @@ var _ = Describe("SubnetReconciler", func() {
 					State:     osacv1alpha1.JobStatePending,
 					Message:   "Job triggered",
 				}
-				subnet.Status.Jobs = helpers.AppendJob(subnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
+				subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only have last 3 jobs
@@ -414,7 +413,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := osacv1alpha1.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())

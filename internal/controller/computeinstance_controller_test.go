@@ -34,7 +34,6 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -436,10 +435,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 	})
 
 	Context("Helper functions", func() {
-		Describe("helpers.FindJobByID", func() {
+		Describe("provisioning.FindJobByID", func() {
 			It("should return nil when jobs slice is empty", func() {
 				jobs := []osacv1alpha1.JobStatus{}
-				result := helpers.FindJobByID(jobs, "job-123")
+				result := provisioning.FindJobByID(jobs, "job-123")
 				Expect(result).To(BeNil())
 			})
 
@@ -458,7 +457,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						State:     osacv1alpha1.JobStateRunning,
 					},
 				}
-				result := helpers.FindJobByID(jobs, "job-999")
+				result := provisioning.FindJobByID(jobs, "job-999")
 				Expect(result).To(BeNil())
 			})
 
@@ -479,7 +478,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Message:   "Second job",
 					},
 				}
-				result := helpers.FindJobByID(jobs, "job-2")
+				result := provisioning.FindJobByID(jobs, "job-2")
 				Expect(result).NotTo(BeNil())
 				Expect(result.JobID).To(Equal("job-2"))
 				Expect(result.State).To(Equal(osacv1alpha1.JobStateRunning))
@@ -502,7 +501,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Timestamp: metav1.NewTime(time.Now().UTC()),
 					State:     osacv1alpha1.JobStatePending,
 				}
-				result := helpers.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
+				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				Expect(result).To(HaveLen(1))
 				Expect(result[0].JobID).To(Equal("job-1"))
 			})
@@ -522,7 +521,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Timestamp: metav1.NewTime(time.Now().UTC()),
 					State:     osacv1alpha1.JobStateRunning,
 				}
-				result := helpers.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
+				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				Expect(result).To(HaveLen(2))
 				Expect(result[0].JobID).To(Equal("job-1"))
 				Expect(result[1].JobID).To(Equal("job-2"))
@@ -557,7 +556,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					State:     osacv1alpha1.JobStatePending,
 				}
 				// MaxJobHistory is 3, so adding 4th job should remove job-1
-				result := helpers.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
+				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				Expect(result).To(HaveLen(3))
 				Expect(result[0].JobID).To(Equal("job-2"))
 				Expect(result[1].JobID).To(Equal("job-3"))
@@ -587,7 +586,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				}
 				// Add job-4 (removes job-1)
-				jobs = helpers.AppendJob(jobs, osacv1alpha1.JobStatus{
+				jobs = provisioning.AppendJob(jobs, osacv1alpha1.JobStatus{
 					JobID:     "job-4",
 					Type:      osacv1alpha1.JobTypeProvision,
 					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
@@ -597,7 +596,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(jobs[0].JobID).To(Equal("job-2"))
 
 				// Add job-5 (removes job-2)
-				jobs = helpers.AppendJob(jobs, osacv1alpha1.JobStatus{
+				jobs = provisioning.AppendJob(jobs, osacv1alpha1.JobStatus{
 					JobID:     "job-5",
 					Type:      osacv1alpha1.JobTypeDeprovision,
 					Timestamp: metav1.NewTime(baseTime.Add(4 * time.Second)),
@@ -621,7 +620,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Second)),
 						State:     osacv1alpha1.JobStatePending,
 					}
-					jobs = helpers.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
+					jobs = provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				}
 				// Should keep only last 10
 				Expect(jobs).To(HaveLen(DefaultMaxJobHistory))
@@ -644,7 +643,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Timestamp: metav1.NewTime(time.Now().UTC()),
 					State:     osacv1alpha1.JobStateSucceeded,
 				}
-				result := helpers.UpdateJob(jobs, updatedJob)
+				result := provisioning.UpdateJob(jobs, updatedJob)
 				Expect(result).To(BeFalse())
 				// Original job should be unchanged
 				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
@@ -658,7 +657,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Timestamp: metav1.NewTime(time.Now().UTC()),
 					State:     osacv1alpha1.JobStateSucceeded,
 				}
-				result := helpers.UpdateJob(jobs, updatedJob)
+				result := provisioning.UpdateJob(jobs, updatedJob)
 				Expect(result).To(BeFalse())
 			})
 
@@ -681,7 +680,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					State:     osacv1alpha1.JobStateSucceeded,
 					Message:   "Updated message",
 				}
-				result := helpers.UpdateJob(jobs, updatedJob)
+				result := provisioning.UpdateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
 				// Job should be fully updated
 				Expect(jobs[0].JobID).To(Equal("job-1"))
@@ -722,7 +721,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					State:     osacv1alpha1.JobStateSucceeded,
 					Message:   "Second job completed",
 				}
-				result := helpers.UpdateJob(jobs, updatedJob)
+				result := provisioning.UpdateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
 				// Only job-2 should be updated
 				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
@@ -753,7 +752,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Message:                "Failed with error",
 					BlockDeletionOnFailure: true,
 				}
-				result := helpers.UpdateJob(jobs, updatedJob)
+				result := provisioning.UpdateJob(jobs, updatedJob)
 				Expect(result).To(BeTrue())
 				Expect(jobs[0].Type).To(Equal(osacv1alpha1.JobTypeDeprovision))
 				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))

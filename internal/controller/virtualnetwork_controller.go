@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
@@ -141,9 +140,9 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 	}
 
 	// Check if we need to trigger a (new) provision job
-	latestProvisionJob := v1alpha1.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeProvision)
+	latestProvisionJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeProvision)
 
-	if helpers.NeedsProvisionJob(latestProvisionJob) {
+	if provisioning.NeedsProvisionJob(latestProvisionJob) {
 		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
 		result, err := r.ProvisioningProvider.TriggerProvision(ctx, vnet)
 		if err != nil {
@@ -158,7 +157,7 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 			State:     result.InitialState,
 			Message:   result.Message,
 		}
-		vnet.Status.Jobs = helpers.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
+		vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
 		log.Info("provisioning job triggered", "jobID", result.JobID)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
@@ -174,7 +173,7 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 	updatedJob := *latestProvisionJob
 	updatedJob.State = status.State
 	updatedJob.Message = status.Message
-	helpers.UpdateJob(vnet.Status.Jobs, updatedJob)
+	provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
@@ -233,7 +232,7 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 	log := ctrllog.FromContext(ctx)
 
 	// Check if we already have a deprovision job
-	latestDeprovisionJob := v1alpha1.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
+	latestDeprovisionJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	// Trigger deprovisioning - provider decides internally if ready
 	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
@@ -264,7 +263,7 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			vnet.Status.Jobs = helpers.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
+			vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
@@ -276,18 +275,15 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		helpers.UpdateJob(vnet.Status.Jobs, updatedJob)
+		provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update job status
 	updatedJob := *latestDeprovisionJob
 	updatedJob.State = status.State
-	updatedJob.Message = status.Message
-	if status.ErrorDetails != "" {
-		updatedJob.Message = fmt.Sprintf("%s: %s", status.Message, status.ErrorDetails)
-	}
-	helpers.UpdateJob(vnet.Status.Jobs, updatedJob)
+	updatedJob.Message = status.MessageWithDetails()
+	provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {

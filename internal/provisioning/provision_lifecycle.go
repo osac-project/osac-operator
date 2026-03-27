@@ -30,20 +30,36 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/helpers"
 )
 
 // State points into the resource's status fields used by the provisioning lifecycle.
 // Jobs is a pointer so shared functions can modify the slice in place.
+// DesiredConfigVersion and ReconciledConfigVersion are value snapshots captured at
+// construction time — they are not updated if the instance status changes afterward.
 type State struct {
 	Jobs                    *[]v1alpha1.JobStatus
 	DesiredConfigVersion    string
 	ReconciledConfigVersion string
 }
 
+// GetJobsFromResource extracts the jobs array from a resource.
+// Returns an empty slice for resource types that don't track jobs.
+func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
+	switch r := resource.(type) {
+	case *v1alpha1.ComputeInstance:
+		return r.Status.Jobs
+	case *v1alpha1.ClusterOrder:
+		return r.Status.Jobs
+	case *v1alpha1.HostPool:
+		return r.Status.Jobs
+	default:
+		return nil
+	}
+}
+
 // EvaluateAction determines the next provisioning action based on job history and config versions.
 func EvaluateAction(provState *State, checkAPIServer func() bool) (Action, *v1alpha1.JobStatus) {
-	latestJob := v1alpha1.FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+	latestJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
 
 	if !HasJobID(latestJob) {
 		if provState.DesiredConfigVersion == provState.ReconciledConfigVersion {
@@ -76,7 +92,7 @@ func CheckAPIServerForNonTerminalProvisionJob(ctx context.Context, apiReader cli
 		return false
 	}
 	freshJobs := GetJobsFromResource(fresh)
-	freshJob := v1alpha1.FindLatestJobByType(freshJobs, v1alpha1.JobTypeProvision)
+	freshJob := FindLatestJobByType(freshJobs, v1alpha1.JobTypeProvision)
 	if HasJobID(freshJob) && !freshJob.State.IsTerminal() {
 		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
 		return true
@@ -98,7 +114,7 @@ func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource cli
 		return ctrl.Result{}, fmt.Errorf("failed to trigger provision: %w", err)
 	}
 
-	*provState.Jobs = helpers.AppendJob(*provState.Jobs, v1alpha1.JobStatus{
+	*provState.Jobs = AppendJob(*provState.Jobs, v1alpha1.JobStatus{
 		JobID:         result.JobID,
 		Type:          v1alpha1.JobTypeProvision,
 		State:         result.InitialState,
@@ -107,20 +123,30 @@ func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource cli
 		ConfigVersion: provState.DesiredConfigVersion,
 	}, maxHistory)
 
-	latestJob := v1alpha1.FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+	latestJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
 	log.Info("provision job triggered", "jobID", latestJob.JobID, "configVersion", latestJob.ConfigVersion)
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
+// PollCallbacks holds optional callbacks for provision job state transitions.
+type PollCallbacks struct {
+	// OnFailed is called when the job transitions to Failed state.
+	OnFailed func(message string)
+	// OnSuccess is called when the job succeeds (e.g. to update ReconciledVersion).
+	OnSuccess func(status ProvisionStatus)
+}
+
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
-// onFailed is called when the job transitions to Failed state (e.g. to set the resource phase).
-func PollJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, latestJob *v1alpha1.JobStatus, pollInterval time.Duration, onFailed func(message string)) (ctrl.Result, error) {
+func PollJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, latestJob *v1alpha1.JobStatus, pollInterval time.Duration, callbacks *PollCallbacks) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("polling provision job status", "jobID", latestJob.JobID, "currentState", latestJob.State)
 
 	status, err := provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
 	if err != nil {
 		log.Error(err, "failed to get provision status", "jobID", latestJob.JobID)
+		updatedJob := *latestJob
+		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
+		UpdateJob(*provState.Jobs, updatedJob)
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
@@ -128,13 +154,13 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 		log.Info("provision job status changed", "jobID", latestJob.JobID, "oldState", latestJob.State, "newState", status.State)
 		updatedJob := *latestJob
 		updatedJob.State = status.State
-		updatedJob.Message = status.Message
-		helpers.UpdateJob(*provState.Jobs, updatedJob)
+		updatedJob.Message = status.MessageWithDetails()
+		UpdateJob(*provState.Jobs, updatedJob)
 
 		if status.State == v1alpha1.JobStateFailed {
 			log.Info("provision job failed", "jobID", latestJob.JobID)
-			if onFailed != nil {
-				onFailed(status.Message)
+			if callbacks != nil && callbacks.OnFailed != nil {
+				callbacks.OnFailed(updatedJob.Message)
 			}
 		}
 	}
@@ -142,11 +168,16 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 	if !status.State.IsTerminal() {
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
+
+	if status.State.IsSuccessful() && callbacks != nil && callbacks.OnSuccess != nil {
+		callbacks.OnSuccess(status)
+	}
 	return ctrl.Result{}, nil
 }
 
 // ComputeDesiredConfigVersion computes a hash of the spec and returns it.
-func ComputeDesiredConfigVersion(spec interface{}) (string, error) {
+// The caller must pass the resource's Spec field (not the entire resource).
+func ComputeDesiredConfigVersion(spec any) (string, error) {
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal spec to JSON: %w", err)

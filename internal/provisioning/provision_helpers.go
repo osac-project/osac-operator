@@ -37,6 +37,23 @@ const (
 	Backoff               // failed job with same config, retry after backoff
 )
 
+func (a Action) String() string {
+	switch a {
+	case Skip:
+		return "Skip"
+	case Trigger:
+		return "Trigger"
+	case Poll:
+		return "Poll"
+	case Requeue:
+		return "Requeue"
+	case Backoff:
+		return "Backoff"
+	default:
+		return "Unknown"
+	}
+}
+
 const (
 	BackoffBaseDelay = 2 * time.Minute
 	BackoffMaxDelay  = 30 * time.Minute
@@ -44,9 +61,9 @@ const (
 
 // HandleBackoff checks if the backoff period has elapsed since the last failed job.
 // If elapsed, it calls triggerFn to retry. Otherwise, it returns a RequeueAfter with the remaining delay.
-func HandleBackoff(ctx context.Context, jobs []v1alpha1.JobStatus, configVersion string, latestJob *v1alpha1.JobStatus, triggerFn func() (ctrl.Result, error)) (ctrl.Result, error) {
+func HandleBackoff(ctx context.Context, provState *State, latestJob *v1alpha1.JobStatus, triggerFn func() (ctrl.Result, error)) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-	backoff := ComputeBackoffFromJobs(jobs, configVersion)
+	backoff := ComputeBackoffFromJobs(*provState.Jobs, provState.DesiredConfigVersion)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
 		log.Info("backoff elapsed, retrying provision", "jobID", latestJob.JobID, "backoff", backoff, "elapsed", elapsed)
