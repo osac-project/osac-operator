@@ -1,120 +1,132 @@
 # OSAC operator
 
-Reconciles `ClusterOrder`, `HostPool`, `ComputeInstance`, and `Tenant` custom
-resources created by the [fulfillment
+Reconciles custom resources created by the [fulfillment
 service](https://github.com/osac-project/fulfillment-service/) or elsewhere.
-`ClusterOrder` deploys OpenShift clusters via [Hosted Control
-Planes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/hosted-control-planes-overview).
-`ComputeInstance` provisions virtual machines via
-[KubeVirt](https://kubevirt.io/). `HostPool` creates a namespace and notifies an
-external system via webhooks. `Tenant` provisions a namespace and an
-[OVN-Kubernetes
-UserDefinedNetwork](https://github.com/ovn-org/ovn-kubernetes/blob/master/go-controller/pkg/crd/userdefinednetwork/v1/network.go)
-for tenant networking.
 
 ## Description
 
 OSAC operator is part of the [Open Sovereign AI Cloud
-(OSAC)](https://github.com/osac-project) project. All four resource types are
-created by the fulfillment service (or elsewhere); the operator reconciles them.
-For `ClusterOrder` it drives cluster deployment using Hosted Control Planes. For
-`ComputeInstance` it provisions VMs using KubeVirt. For `HostPool` it creates a
-dedicated namespace and calls create/delete webhooks so an external system can
-provision the hosts. For `Tenant` it creates a namespace and an OVN-Kubernetes
-UserDefinedNetwork (layer-2, persistent IPAM) for tenant isolation.
+(OSAC)](https://github.com/osac-project) project. It watches the following
+custom resources and reconciles them to their desired state:
+
+- **ClusterOrder** (`cord`) — deploys OpenShift clusters via [Hosted Control
+  Planes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/hosted-control-planes-overview).
+- **HostPool** (`hp`) — creates a dedicated namespace and provisions a pool of
+  hosts for cluster deployments.
+- **ComputeInstance** (`ci`) — provisions virtual machines via
+  [KubeVirt](https://kubevirt.io/).
+- **Tenant** — creates a namespace and an [OVN-Kubernetes
+  UserDefinedNetwork](https://github.com/ovn-org/ovn-kubernetes/blob/master/go-controller/pkg/crd/userdefinednetwork/v1/network.go)
+  (layer-2, persistent IPAM) for tenant isolation.
+- **VirtualNetwork** (`vnet`) — represents a cloud virtual network / VPC with
+  IPv4/IPv6 CIDR blocks and a NetworkClass.
+- **Subnet** (`subnet`) — represents a subnet within a VirtualNetwork.
+- **SecurityGroup** (`sg`) — defines network security (firewall) rules with
+  ingress/egress rules, protocols, port ranges, and CIDR blocks.
 
 ## Configuration
 
-Configuration is supplied via environment variables (e.g. from a Secret mounted
+Configuration is supplied via environment variables (e.g. from a Secret mounted
 into the manager deployment). The following are supported:
 
-### Cluster provisioning
+### Provisioning providers
 
-- `OSAC_CLUSTER_CREATE_WEBHOOK` — URL to POST the JSON-serialized ClusterOrder
-  after creating the target namespace, service account, and rolebinding.
-- `OSAC_CLUSTER_DELETE_WEBHOOK` — URL to POST the JSON-serialized ClusterOrder
-  before deleting the target namespace.
-- `OSAC_CLUSTER_ORDER_NAMESPACE` — namespace to watch for ClusterOrder resources
+The operator supports two provisioning providers. The provider is selected
+**per-deployment** (not per-resource-type) and applies to all controllers that
+perform provisioning (ClusterOrder, ComputeInstance, HostPool). Networking
+controllers (VirtualNetwork, Subnet, SecurityGroup) always use AAP.
+
+- `OSAC_PROVISIONING_PROVIDER` — `"eda"` or `"aap"` (default: `"aap"`).
+  Ignored by networking controllers, which always use AAP.
+
+**EDA provider** — triggers external automation via webhooks. Job IDs are
+synthetic (`eda-webhook-N`). The EDA provider cannot poll for job status;
+completion is tracked via resource phase changes and finalizers.
+
+- `OSAC_CLUSTER_CREATE_WEBHOOK` — webhook URL for cluster provisioning.
+- `OSAC_CLUSTER_DELETE_WEBHOOK` — webhook URL for cluster deprovisioning.
+- `OSAC_HOSTPOOL_PROVISION_WEBHOOK` — webhook URL for host pool provisioning.
+- `OSAC_HOSTPOOL_DEPROVISION_WEBHOOK` — webhook URL for host pool
+  deprovisioning.
+- `OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK` — webhook URL for compute instance
+  provisioning.
+- `OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` — webhook URL for compute instance
+  deprovisioning.
+
+**AAP provider** — integrates directly with the Ansible Automation Platform REST
+API. Launches job/workflow templates and polls AAP for job status.
+
+- `OSAC_AAP_URL` — AAP server URL (required).
+- `OSAC_AAP_TOKEN` — AAP authentication token (required).
+- `OSAC_AAP_PROVISION_TEMPLATE` — default AAP template name for provisioning
   (optional).
+- `OSAC_AAP_DEPROVISION_TEMPLATE` — default AAP template name for
+  deprovisioning (optional).
+- `OSAC_AAP_TEMPLATE_PREFIX` — prefix for convention-based template name
+  resolution (default: `"osac"`). Used by networking controllers to derive
+  template names (e.g. `osac-create-virtual-network`).
+- `OSAC_AAP_STATUS_POLL_INTERVAL` — job status polling interval (default:
+  `30s`). Duration string, e.g. `30s`, `1m`.
+- `OSAC_AAP_INSECURE_SKIP_VERIFY` — skip TLS verification for AAP (default:
+  `false`).
 
-### HostPool provisioning
+**Per-resource AAP template overrides** (optional, override the shared
+defaults):
 
-- `OSAC_HOSTPOOL_CREATE_WEBHOOK` — URL to POST when a HostPool’s namespace is
-  created.
-- `OSAC_HOSTPOOL_DELETE_WEBHOOK` — URL to POST before deleting the HostPool
-  namespace.
-- `OSAC_HOSTPOOL_ORDER_NAMESPACE` — namespace to watch for HostPool resources
+- `OSAC_CLUSTER_AAP_PROVISION_TEMPLATE` /
+  `OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE` — override for ClusterOrder.
+- `OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE` /
+  `OSAC_HOSTPOOL_AAP_DEPROVISION_TEMPLATE` — override for HostPool.
+
+Networking controllers derive template names from the prefix:
+`{prefix}-{action}-{kind}` (e.g. `osac-create-subnet`,
+`osac-delete-security-group`).
+
+### Namespaces
+
+- `OSAC_CLUSTER_ORDER_NAMESPACE` — namespace for ClusterOrder resources
   (optional).
-
-### ComputeInstance provisioning
-
-The operator supports two providers: **EDA** (webhooks) and **AAP** (Ansible
-Automation Platform).
-
-**Provider selection:**
-
-- `OSAC_PROVISIONING_PROVIDER` — `"eda"` (default) or `"aap"`.
-
-**EDA provider (default):**
-
-- `OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK` — webhook URL for provisioning.
-- `OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` — webhook URL for deprovisioning.
-
-**AAP provider:**
-
-- `OSAC_AAP_URL` — AAP server URL (required when using AAP).
-- `OSAC_AAP_TOKEN` — AAP authentication token (required when using AAP).
-- `OSAC_AAP_PROVISION_TEMPLATE` — template name for provisioning (optional).
-- `OSAC_AAP_DEPROVISION_TEMPLATE` — template name for deprovisioning (optional).
-- `OSAC_AAP_STATUS_POLL_INTERVAL` — job status polling interval (optional,
-  default: 30s). Duration strings e.g. `30s`, `1m`. -
-- `OSAC_AAP_INSECURE_SKIP_VERIFY` — skip TLS verification for AAP (optional,
-  default: false). Set to a truthy value to enable.
-
-**Namespaces and remote cluster:**
-
+- `OSAC_HOSTPOOL_ORDER_NAMESPACE` — namespace for HostPool resources (optional).
 - `OSAC_COMPUTE_INSTANCE_NAMESPACE` — namespace for ComputeInstance resources
   (optional).
 - `OSAC_TENANT_NAMESPACE` — namespace for Tenant resources (optional).
+- `OSAC_NETWORKING_NAMESPACE` — namespace for networking resources
+  (VirtualNetwork, Subnet, SecurityGroup) (optional).
+
+### Remote cluster
+
 - `OSAC_REMOTE_CLUSTER_KUBECONFIG` — path to kubeconfig for the remote cluster
-  used by tenant and compute-instance controllers (optional). Not supported when
-  cluster or host-pool controllers are enabled.
-
-### Networking (VirtualNetwork, Subnet, SecurityGroup)
-
-Networking controllers use AAP only (no EDA webhook support).
-
-- `OSAC_NETWORKING_NAMESPACE` — namespace for networking resources (optional).
-- AAP-related variables above (`OSAC_AAP_URL`, `OSAC_AAP_TOKEN`, etc.) apply
-  when using networking controllers.
+  used by Tenant and ComputeInstance controllers (optional). Not supported when
+  Cluster or HostPool controllers are enabled.
 
 ### Job history
 
-- `OSAC_MAX_JOB_HISTORY` — maximum number of job history entries to retain
-  (optional).
+- `OSAC_MAX_JOB_HISTORY` — maximum number of job history entries to retain per
+  resource (default: 10).
 
 ### Fulfillment service (gRPC)
 
 - `OSAC_FULFILLMENT_SERVER_ADDRESS` — fulfillment service gRPC address
-  (e.g. `fulfillment-service:50051`).
+  (e.g. `fulfillment-service:50051`).
 - `OSAC_FULFILLMENT_TOKEN_FILE` — path to file containing the gRPC auth token.
 - `OSAC_MINIMUM_REQUEST_INTERVAL` — minimum duration between calls to the same
-  webhook URL (optional). Duration string, default: 0.
+  webhook URL (optional). Duration string, default: `0`.
 
 ### Controller enable flags
 
 Each controller can be enabled or disabled. If none of these are set, all
-controllers are enabled.
+controllers are enabled. If any flag is set, only the flagged controllers are
+enabled.
 
-- `OSAC_ENABLE_TENANT_CONTROLLER` — enable Tenant controller (truthy/falsy).
+- `OSAC_ENABLE_CLUSTER_CONTROLLER` — enable ClusterOrder controller
+  (truthy/falsy).
 - `OSAC_ENABLE_HOST_POOL_CONTROLLER` — enable HostPool controller
   (truthy/falsy).
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` — enable ComputeInstance controller
   (truthy/falsy).
-- `OSAC_ENABLE_CLUSTER_CONTROLLER` — enable ClusterOrder controller
-  (truthy/falsy).
+- `OSAC_ENABLE_TENANT_CONTROLLER` — enable Tenant controller (truthy/falsy).
 - `OSAC_ENABLE_NETWORKING_CONTROLLER` — enable networking controllers
-  (truthy/falsy).
+  (VirtualNetwork, Subnet, SecurityGroup) (truthy/falsy).
 
 See `config/samples/osac-config-secret.yaml` for a complete configuration
 example.
@@ -139,7 +151,7 @@ make image-build image-push IMG=<some-registry>/osac-operator:tag
 **NOTE:** This image ought to be published in the personal registry you
 specified. And it is required to have access to pull the image from the working
 environment. Make sure you have the proper permission to the registry if the
-above commands don’t work.
+above commands don't work.
 
 **Install the CRDs into the cluster:**
 
@@ -197,7 +209,7 @@ users.
 make build-installer IMG=<some-registry>/osac-operator:tag
 ```
 
-NOTE: The makefile target mentioned above generates an ‘install.yaml’ file in
+NOTE: The makefile target mentioned above generates an 'install.yaml' file in
 the dist directory. This file contains all the resources built with Kustomize,
 which are necessary to install this project without its dependencies.
 
@@ -224,13 +236,13 @@ Documentation](https://book.kubebuilder.io/introduction.html)
 
 Copyright 2025.
 
-Licensed under the Apache License, Version 2.0 (the “License”); you may not use
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
 this file except in compliance with the License. You may obtain a copy of the
 License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software distributed
-under the License is distributed on an “AS IS” BASIS, WITHOUT WARRANTIES OR
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
