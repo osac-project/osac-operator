@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -67,6 +68,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 		mockServer = &mockSubnetsServer{
 			subnets: make(map[string]*privatev1.Subnet),
 			updates: make([]*privatev1.Subnet, 0),
+			signals: make([]string, 0),
 		}
 		listener = bufconn.Listen(1024 * 1024)
 		grpcServer = grpc.NewServer()
@@ -148,6 +150,11 @@ var _ = Describe("SubnetFeedbackController", func() {
 			// Assert gRPC Update called with state=READY
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+
+			// Assert finalizer was added
+			updated := &v1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: subnetNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacSubnetFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should sync Phase=Progressing to database state=PENDING", func() {
@@ -321,7 +328,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 
-		It("should skip CRs being deleted", func() {
+		It("should sync Phase=Deleting to database state=DELETING during deletion", func() {
 			ipv4Cidr := testIPv4CIDR
 			subnet := &privatev1.Subnet{
 				Id: subnetID,
@@ -333,20 +340,20 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
-					State: privatev1.SubnetState_SUBNET_STATE_PENDING,
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
 				},
 			}
 			mockServer.addSubnet(subnet)
 
-			now := metav1.Now()
+			// Create CR with finalizer first (simulating a previously reconciled CR)
 			cr := &v1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              subnetName,
-					Namespace:         subnetNamespace,
-					DeletionTimestamp: &now,
+					Name:      subnetName,
+					Namespace: subnetNamespace,
 					Labels: map[string]string{
 						osacSubnetIDLabel: subnetID,
 					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer, osacSubnetFinalizer},
 				},
 				Spec: v1alpha1.SubnetSpec{
 					VirtualNetwork: "vnet-123",
@@ -358,6 +365,9 @@ var _ = Describe("SubnetFeedbackController", func() {
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
 
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      subnetName,
@@ -366,8 +376,129 @@ var _ = Describe("SubnetFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called
-			Expect(mockServer.updates).To(BeEmpty())
+			// Assert Update RPC was called with DELETING state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_DELETING))
+
+			// Feedback finalizer should still be present (other finalizers remain)
+			updated := &v1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: subnetNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacSubnetFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should sync Phase=Failed during deletion to database state=DELETE_FAILED", func() {
+			ipv4Cidr := testIPv4CIDR
+			subnet := &privatev1.Subnet{
+				Id: subnetID,
+				Metadata: &privatev1.Metadata{
+					Name: subnetName,
+				},
+				Spec: &privatev1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					Ipv4Cidr:       &ipv4Cidr,
+				},
+				Status: &privatev1.SubnetStatus{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				},
+			}
+			mockServer.addSubnet(subnet)
+
+			// Create CR with finalizers (simulating a previously reconciled CR)
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+					Labels: map[string]string{
+						osacSubnetIDLabel: subnetID,
+					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer, osacSubnetFinalizer},
+				},
+				Spec: v1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.1.0/24",
+				},
+				Status: v1alpha1.SubnetStatus{
+					Phase: v1alpha1.SubnetPhaseFailed,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Assert Update RPC was called with DELETE_FAILED state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_DELETE_FAILED))
+		})
+
+		It("should remove feedback finalizer and signal when it is the last finalizer", func() {
+			ipv4Cidr := testIPv4CIDR
+			subnet := &privatev1.Subnet{
+				Id: subnetID,
+				Metadata: &privatev1.Metadata{
+					Name: subnetName,
+				},
+				Spec: &privatev1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					Ipv4Cidr:       &ipv4Cidr,
+				},
+				Status: &privatev1.SubnetStatus{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				},
+			}
+			mockServer.addSubnet(subnet)
+
+			// Create CR with only feedback finalizer (simulating other finalizers already removed)
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+					Labels: map[string]string{
+						osacSubnetIDLabel: subnetID,
+					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.1.0/24",
+				},
+				Status: v1alpha1.SubnetStatus{
+					Phase: v1alpha1.SubnetPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Assert Update RPC was called with DELETING state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_DELETING))
+
+			// Assert Signal RPC was called
+			Expect(mockServer.signals).To(HaveLen(1))
+			Expect(mockServer.signals[0]).To(Equal(subnetID))
+
+			// Assert finalizer was removed (CR should be gone since it was the last finalizer)
+			updated := &v1alpha1.Subnet{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: subnetNamespace}, updated)
+			Expect(err).To(HaveOccurred()) // CR should be garbage collected
 		})
 
 		It("should not update if status unchanged", func() {
@@ -394,6 +525,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Labels: map[string]string{
 						osacSubnetIDLabel: subnetID,
 					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer},
 				},
 				Spec: v1alpha1.SubnetSpec{
 					VirtualNetwork: "vnet-123",
@@ -413,7 +545,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called (state already READY)
+			// Assert no Update RPC was called (state already READY, finalizer pre-seeded)
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 	})
@@ -425,6 +557,7 @@ type mockSubnetsServer struct {
 	mu      sync.Mutex
 	subnets map[string]*privatev1.Subnet
 	updates []*privatev1.Subnet
+	signals []string
 }
 
 func (m *mockSubnetsServer) addSubnet(subnet *privatev1.Subnet) {
@@ -458,4 +591,13 @@ func (m *mockSubnetsServer) Update(ctx context.Context, req *privatev1.SubnetsUp
 	return &privatev1.SubnetsUpdateResponse{
 		Object: subnet,
 	}, nil
+}
+
+func (m *mockSubnetsServer) Signal(ctx context.Context, req *privatev1.SubnetsSignalRequest) (*privatev1.SubnetsSignalResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.signals = append(m.signals, req.GetId())
+
+	return &privatev1.SubnetsSignalResponse{}, nil
 }

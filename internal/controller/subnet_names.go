@@ -21,5 +21,6 @@ import (
 )
 
 var (
-	osacSubnetIDLabel string = fmt.Sprintf("%s/subnet-uuid", osacPrefix)
+	osacSubnetIDLabel           string = fmt.Sprintf("%s/subnet-uuid", osacPrefix)
+	osacSubnetFeedbackFinalizer string = fmt.Sprintf("%s/subnet-feedback", osacPrefix)
 )
