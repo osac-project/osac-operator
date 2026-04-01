@@ -139,6 +139,10 @@ spec:
                   - type
                   type: object
                 type: array
+              desiredConfigVersion:
+                description: DesiredConfigVersion is a hash of the spec, used to detect
+                  spec changes and control retry behavior.
+                type: string
               jobs:
                 description: Jobs holds an array of JobStatus tracking provisioning
                   and deprovisioning operations

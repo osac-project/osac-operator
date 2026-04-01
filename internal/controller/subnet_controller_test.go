@@ -269,13 +269,15 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should trigger new job when previous job failed", func() {
+			subnet.Status.DesiredConfigVersion = "new-version"
 			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
-					JobID:     "old-failed-job",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStateFailed,
-					Message:   "Previous job failed",
+					JobID:         "old-failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "Previous job failed",
+					ConfigVersion: "old-version",
 				},
 			}
 

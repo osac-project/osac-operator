@@ -51,6 +51,12 @@ func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
 		return r.Status.Jobs
 	case *v1alpha1.HostPool:
 		return r.Status.Jobs
+	case *v1alpha1.VirtualNetwork:
+		return r.Status.Jobs
+	case *v1alpha1.Subnet:
+		return r.Status.Jobs
+	case *v1alpha1.SecurityGroup:
+		return r.Status.Jobs
 	default:
 		return nil
 	}
@@ -186,6 +192,39 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 		callbacks.OnSuccess(status)
 	}
 	return ctrl.Result{}, nil
+}
+
+// RunProvisioningLifecycle encapsulates the full provisioning flow: evaluate action,
+// trigger/poll/backoff as needed. Controllers call this instead of duplicating the
+// switch statement. The callbacks customize behavior on success and failure.
+func RunProvisioningLifecycle(
+	ctx context.Context,
+	provider ProvisioningProvider,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	callbacks *PollCallbacks,
+	checkAPIServer func() bool,
+) (ctrl.Result, error) {
+	action, latestJob := EvaluateAction(provState, checkAPIServer)
+
+	trigger := func() (ctrl.Result, error) {
+		return TriggerJob(ctx, provider, resource, provState, maxHistory, pollInterval)
+	}
+
+	switch action {
+	case Skip:
+		return ctrl.Result{}, nil
+	case Trigger:
+		return trigger()
+	case Requeue:
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
+	case Backoff:
+		return HandleBackoff(ctx, provState, latestJob, trigger)
+	default: // Poll
+		return PollJob(ctx, provider, resource, provState, latestJob, pollInterval, callbacks)
+	}
 }
 
 // IsConfigApplied returns true if the latest provision job succeeded with a ConfigVersion

@@ -124,73 +124,36 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 		vnet.Status = *currentStatus
 	}
 
+	// Compute desired config version from spec
+	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(vnet.Spec)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
+	}
+	vnet.Status.DesiredConfigVersion = desiredVersion
+
 	// Handle provisioning
 	return r.handleProvisioning(ctx, vnet)
 }
 
 // handleProvisioning manages the provisioning job lifecycle for a VirtualNetwork.
-// It triggers provisioning if needed and polls job status until completion.
+// Uses shared RunProvisioningLifecycle with config-version-based backoff on failure.
 func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// If no provider configured, skip provisioning
 	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping provisioning")
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
 		return ctrl.Result{}, nil
 	}
 
-	// Check if we need to trigger a (new) provision job
-	latestProvisionJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeProvision)
-
-	if provisioning.NeedsProvisionJob(latestProvisionJob) {
-		log.Info("triggering provisioning", "provider", r.ProvisioningProvider.Name())
-		result, err := r.ProvisioningProvider.TriggerProvision(ctx, vnet)
-		if err != nil {
-			log.Error(err, "failed to trigger provisioning")
-			return ctrl.Result{}, err
-		}
-
-		newJob := v1alpha1.JobStatus{
-			JobID:     result.JobID,
-			Type:      v1alpha1.JobTypeProvision,
-			Timestamp: metav1.NewTime(time.Now().UTC()),
-			State:     result.InitialState,
-			Message:   result.Message,
-		}
-		vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
-		log.Info("provisioning job triggered", "jobID", result.JobID)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, vnet, latestProvisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get provision job status", "jobID", latestProvisionJob.JobID)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update job status
-	updatedJob := *latestProvisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
-
-	// If job is still running, requeue
-	if !status.State.IsTerminal() {
-		log.Info("provision job still running", "jobID", latestProvisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Job is complete
-	if status.State.IsSuccessful() {
-		log.Info("provision job succeeded", "jobID", latestProvisionJob.JobID)
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
-	} else {
-		log.Info("provision job failed", "jobID", latestProvisionJob.JobID, "message", updatedJob.Message)
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
-	}
-
-	return ctrl.Result{}, nil
+	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
+		&provisioning.State{Jobs: &vnet.Status.Jobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
+		r.MaxJobHistory, r.StatusPollInterval,
+		&provisioning.PollCallbacks{
+			OnFailed:  func(_ string) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed },
+			OnSuccess: func(_ provisioning.ProvisionStatus) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady },
+		},
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.Client, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{})
+		},
+	)
 }
 
 // handleDelete processes VirtualNetwork deletion
