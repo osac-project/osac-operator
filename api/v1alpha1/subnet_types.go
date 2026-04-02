@@ -83,6 +83,10 @@ type SubnetStatus struct {
 	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
 	Phase SubnetPhaseType `json:"phase,omitempty"`
 
+	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
+	// +kubebuilder:validation:Optional
+	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+
 	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
 	Jobs []JobStatus `json:"jobs,omitempty"`

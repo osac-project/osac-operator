@@ -506,6 +506,7 @@ func setupNetworkingControllers(
 
 	if err := (&controller.VirtualNetworkReconciler{
 		Client:               localMgr.GetClient(),
+		APIReader:            localMgr.GetAPIReader(),
 		Scheme:               localMgr.GetScheme(),
 		NetworkingNamespace:  networkingNamespace,
 		ProvisioningProvider: networkingProvider,
@@ -528,6 +529,7 @@ func setupNetworkingControllers(
 
 	if err := (&controller.SubnetReconciler{
 		Client:               localMgr.GetClient(),
+		APIReader:            localMgr.GetAPIReader(),
 		Scheme:               localMgr.GetScheme(),
 		NetworkingNamespace:  networkingNamespace,
 		ProvisioningProvider: networkingProvider,
@@ -550,6 +552,7 @@ func setupNetworkingControllers(
 
 	if err := (&controller.SecurityGroupReconciler{
 		Client:               localMgr.GetClient(),
+		APIReader:            localMgr.GetAPIReader(),
 		Scheme:               localMgr.GetScheme(),
 		NetworkingNamespace:  networkingNamespace,
 		ProvisioningProvider: networkingProvider,

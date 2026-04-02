@@ -44,6 +44,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		mockProvider = &mockVirtualNetworkProvider{}
 		reconciler = &VirtualNetworkReconciler{
 			Client:               k8sClient,
+			APIReader:            k8sClient,
 			Scheme:               k8sClient.Scheme(),
 			NetworkingNamespace:  "default",
 			ProvisioningProvider: mockProvider,
@@ -266,6 +267,73 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
+		})
+	})
+
+	Context("backoff on failure", func() {
+		It("should backoff when latest job failed with matching ConfigVersion", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "provision failed",
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffMaxDelay))
+		})
+
+		It("should trigger immediately when spec changed after failure", func() {
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "retry-job",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			vnet.Status.DesiredConfigVersion = testConfigVersionUpdated
+			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "provision failed",
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
+
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("retry-job"))
+		})
+
+		It("should skip when config already applied", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "succeeded-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateSucceeded,
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Duration(0)))
 		})
 	})
 

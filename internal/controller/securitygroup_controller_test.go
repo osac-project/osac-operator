@@ -35,6 +35,13 @@ import (
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
+const (
+	testConfigVersion        = "version-1"
+	testConfigVersionUpdated = "version-2"
+	testConfigVersionOld     = "old-version"
+	testConfigVersionNew     = "new-version"
+)
+
 var _ = Describe("SecurityGroupReconciler", func() {
 	var (
 		reconciler   *SecurityGroupReconciler
@@ -102,6 +109,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		// Create reconciler
 		reconciler = &SecurityGroupReconciler{
 			Client:               fakeClient,
+			APIReader:            fakeClient,
 			Scheme:               testScheme,
 			NetworkingNamespace:  "test-namespace",
 			ProvisioningProvider: mockProvider,
@@ -611,6 +619,73 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			// Verify finalizer was removed from in-memory object
 			// (the actual Update call fails with fake client, but the logic is correct)
 			Expect(toDelete.Finalizers).NotTo(ContainElement(osacSecurityGroupFinalizer))
+		})
+	})
+
+	Context("backoff on failure", func() {
+		It("should backoff when latest job failed with matching ConfigVersion", func() {
+			sg.Status.DesiredConfigVersion = testConfigVersion
+			sg.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "provision failed",
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffMaxDelay))
+		})
+
+		It("should trigger immediately when spec changed after failure", func() {
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "retry-job",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			sg.Status.DesiredConfigVersion = testConfigVersionUpdated
+			sg.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "provision failed",
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
+
+			latestJob := provisioning.FindLatestJobByType(sg.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("retry-job"))
+		})
+
+		It("should skip when config already applied", func() {
+			sg.Status.DesiredConfigVersion = testConfigVersion
+			sg.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "succeeded-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateSucceeded,
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Duration(0)))
 		})
 	})
 

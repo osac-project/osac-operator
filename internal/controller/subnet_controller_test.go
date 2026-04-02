@@ -45,6 +45,7 @@ var _ = Describe("SubnetReconciler", func() {
 		mockProvider = &mockSubnetProvider{}
 		reconciler = &SubnetReconciler{
 			Client:               k8sClient,
+			APIReader:            k8sClient,
 			Scheme:               k8sClient.Scheme(),
 			NetworkingNamespace:  "default",
 			ProvisioningProvider: mockProvider,
@@ -269,13 +270,15 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should trigger new job when previous job failed", func() {
+			subnet.Status.DesiredConfigVersion = testConfigVersionNew
 			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
-					JobID:     "old-failed-job",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStateFailed,
-					Message:   "Previous job failed",
+					JobID:         "old-failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "Previous job failed",
+					ConfigVersion: testConfigVersionOld,
 				},
 			}
 
@@ -372,6 +375,44 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseFailed))
+		})
+	})
+
+	Context("backoff on failure", func() {
+		It("should backoff when latest job failed with matching ConfigVersion", func() {
+			subnet.Status.DesiredConfigVersion = testConfigVersion
+			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateFailed,
+					Message:       "provision failed",
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, subnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffMaxDelay))
+		})
+
+		It("should skip when config already applied", func() {
+			subnet.Status.DesiredConfigVersion = testConfigVersion
+			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "succeeded-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					State:         osacv1alpha1.JobStateSucceeded,
+					ConfigVersion: testConfigVersion,
+				},
+			}
+
+			result, err := reconciler.handleProvisioning(ctx, subnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Duration(0)))
 		})
 	})
 
