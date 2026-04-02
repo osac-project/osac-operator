@@ -7,3 +7,14 @@ updates:
   schedule:
     # Check for updates to GitHub Actions every week
     interval: "weekly"
+- package-ecosystem: "gomod"
+  directory: "/"
+  schedule:
+    # Check for updates to Go modules every week
+    interval: "weekly"
+  groups:
+    go-dependencies:
+      patterns:
+        - "*"
+  commit-message:
+    prefix: "NO-ISSUE"
