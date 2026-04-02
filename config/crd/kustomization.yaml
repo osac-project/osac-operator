@@ -10,6 +10,7 @@ resources:
 - bases/osac.openshift.io_virtualnetworks.yaml
 - bases/osac.openshift.io_subnets.yaml
 - bases/osac.openshift.io_baremetalpools.yaml
+- bases/osac.openshift.io_hosts.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
