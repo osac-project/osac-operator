@@ -37,6 +37,7 @@ import (
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -74,7 +75,7 @@ type ComputeInstanceReconciler struct {
 	StatusPollInterval time.Duration
 	// MaxJobHistory defines how many jobs to keep in status.jobs array
 	MaxJobHistory int
-	targetCluster string
+	targetCluster mc.ClusterName
 }
 
 func NewComputeInstanceReconciler(
@@ -84,7 +85,7 @@ func NewComputeInstanceReconciler(
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
-	targetCluster string,
+	targetCluster mc.ClusterName,
 ) *ComputeInstanceReconciler {
 
 	if computeInstanceNamespace == "" {

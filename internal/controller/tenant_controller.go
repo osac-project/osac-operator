@@ -36,6 +36,7 @@ import (
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -48,7 +49,7 @@ type TenantReconciler struct {
 	Recorder        events.EventRecorder
 	tenantNamespace string
 	mgr             mcmanager.Manager
-	targetCluster   string
+	targetCluster   mc.ClusterName
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
@@ -59,7 +60,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
-func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string, targetCluster string) *TenantReconciler {
+func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string, targetCluster mc.ClusterName) *TenantReconciler {
 	return &TenantReconciler{
 		Client:          mgr.GetLocalManager().GetClient(),
 		Scheme:          mgr.GetLocalManager().GetScheme(),
