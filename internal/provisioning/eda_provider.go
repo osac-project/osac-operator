@@ -25,7 +25,6 @@ const (
 	// and removed during deprovisioning to signal completion.
 	ComputeInstanceAAPFinalizer = "osac.openshift.io/computeinstance-aap"
 	ClusterOrderAAPFinalizer    = "osac.openshift.io/clusterorder-aap"
-	HostPoolAAPFinalizer        = "osac.openshift.io/hostpool-aap"
 )
 
 // IsEDAJobID returns true if the job ID is from the EDA provider.
@@ -68,8 +67,6 @@ func getAAPFinalizerName(resource client.Object) (string, error) {
 		return ComputeInstanceAAPFinalizer, nil
 	case *v1alpha1.ClusterOrder:
 		return ClusterOrderAAPFinalizer, nil
-	case *v1alpha1.HostPool:
-		return HostPoolAAPFinalizer, nil
 	default:
 		return "", fmt.Errorf("unsupported resource type for AAP finalizer: %T", resource)
 	}

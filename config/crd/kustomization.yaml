@@ -3,7 +3,6 @@
 # It should be run by config/default
 resources:
 - bases/osac.openshift.io_clusterorders.yaml
-- bases/osac.openshift.io_hostpools.yaml
 - bases/osac.openshift.io_computeinstances.yaml
 - bases/osac.openshift.io_tenants.yaml
 - bases/osac.openshift.io_securitygroups.yaml

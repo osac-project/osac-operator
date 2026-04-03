@@ -11,8 +11,6 @@ custom resources and reconciles them to their desired state:
 
 - **ClusterOrder** (`cord`) — deploys OpenShift clusters via [Hosted Control
   Planes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/hosted-control-planes-overview).
-- **HostPool** (`hp`) — creates a dedicated namespace and provisions a pool of
-  hosts for cluster deployments.
 - **ComputeInstance** (`ci`) — provisions virtual machines via
   [KubeVirt](https://kubevirt.io/).
 - **Tenant** — creates a namespace and an [OVN-Kubernetes
@@ -33,8 +31,8 @@ into the manager deployment). The following are supported:
 
 The operator supports two provisioning providers. The provider is selected
 **per-deployment** (not per-resource-type) and applies to all controllers that
-perform provisioning (ClusterOrder, ComputeInstance, HostPool). Networking
-controllers (VirtualNetwork, Subnet, SecurityGroup) always use AAP.
+perform provisioning (ClusterOrder, ComputeInstance). Networking controllers
+(VirtualNetwork, Subnet, SecurityGroup) always use AAP.
 
 - `OSAC_PROVISIONING_PROVIDER` — `"eda"` or `"aap"` (default: `"aap"`).
   Ignored by networking controllers, which always use AAP.
@@ -45,9 +43,6 @@ completion is tracked via resource phase changes and finalizers.
 
 - `OSAC_CLUSTER_CREATE_WEBHOOK` — webhook URL for cluster provisioning.
 - `OSAC_CLUSTER_DELETE_WEBHOOK` — webhook URL for cluster deprovisioning.
-- `OSAC_HOSTPOOL_PROVISION_WEBHOOK` — webhook URL for host pool provisioning.
-- `OSAC_HOSTPOOL_DEPROVISION_WEBHOOK` — webhook URL for host pool
-  deprovisioning.
 - `OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK` — webhook URL for compute instance
   provisioning.
 - `OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` — webhook URL for compute instance
@@ -75,8 +70,6 @@ defaults):
 
 - `OSAC_CLUSTER_AAP_PROVISION_TEMPLATE` /
   `OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE` — override for ClusterOrder.
-- `OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE` /
-  `OSAC_HOSTPOOL_AAP_DEPROVISION_TEMPLATE` — override for HostPool.
 
 Networking controllers derive template names from the prefix:
 `{prefix}-{action}-{kind}` (e.g. `osac-create-subnet`,
@@ -86,7 +79,6 @@ Networking controllers derive template names from the prefix:
 
 - `OSAC_CLUSTER_ORDER_NAMESPACE` — namespace for ClusterOrder resources
   (optional).
-- `OSAC_HOSTPOOL_ORDER_NAMESPACE` — namespace for HostPool resources (optional).
 - `OSAC_COMPUTE_INSTANCE_NAMESPACE` — namespace for ComputeInstance resources
   (optional).
 - `OSAC_TENANT_NAMESPACE` — namespace for Tenant resources (optional).
@@ -97,7 +89,7 @@ Networking controllers derive template names from the prefix:
 
 - `OSAC_REMOTE_CLUSTER_KUBECONFIG` — path to kubeconfig for the remote cluster
   used by Tenant and ComputeInstance controllers (optional). Not supported when
-  Cluster or HostPool controllers are enabled.
+  ClusterOrder controller is enabled.
 
 ### Job history
 
@@ -119,8 +111,6 @@ controllers are enabled. If any flag is set, only the flagged controllers are
 enabled.
 
 - `OSAC_ENABLE_CLUSTER_CONTROLLER` — enable ClusterOrder controller
-  (truthy/falsy).
-- `OSAC_ENABLE_HOST_POOL_CONTROLLER` — enable HostPool controller
   (truthy/falsy).
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` — enable ComputeInstance controller
   (truthy/falsy).

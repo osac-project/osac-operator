@@ -88,8 +88,6 @@ func isResourceReady(resource client.Object) (bool, error) {
 		return r.Status.Phase == v1alpha1.ComputeInstancePhaseRunning, nil
 	case *v1alpha1.ClusterOrder:
 		return r.Status.Phase == v1alpha1.ClusterOrderPhaseReady, nil
-	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseReady, nil
 	default:
 		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
@@ -102,8 +100,6 @@ func isResourceFailed(resource client.Object) (bool, error) {
 		return r.Status.Phase == v1alpha1.ComputeInstancePhaseFailed, nil
 	case *v1alpha1.ClusterOrder:
 		return r.Status.Phase == v1alpha1.ClusterOrderPhaseFailed, nil
-	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseFailed, nil
 	default:
 		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
@@ -116,8 +112,6 @@ func isResourceDeleting(resource client.Object) (bool, error) {
 		return r.Status.Phase == v1alpha1.ComputeInstancePhaseDeleting, nil
 	case *v1alpha1.ClusterOrder:
 		return r.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting, nil
-	case *v1alpha1.HostPool:
-		return r.Status.Phase == v1alpha1.HostPoolPhaseDeleting, nil
 	default:
 		return false, fmt.Errorf("unsupported resource type: %T", resource)
 	}
@@ -129,8 +123,6 @@ func getResourcePhase(resource client.Object) (string, error) {
 	case *v1alpha1.ComputeInstance:
 		return string(r.Status.Phase), nil
 	case *v1alpha1.ClusterOrder:
-		return string(r.Status.Phase), nil
-	case *v1alpha1.HostPool:
 		return string(r.Status.Phase), nil
 	default:
 		return "", fmt.Errorf("unsupported resource type: %T", resource)

@@ -74,17 +74,12 @@ const (
 	envComputeInstanceNamespace          = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace               = "OSAC_NETWORKING_NAMESPACE"
 	envClusterOrderNamespace             = "OSAC_CLUSTER_ORDER_NAMESPACE"
-	envHostPoolOrderNamespace            = "OSAC_HOSTPOOL_ORDER_NAMESPACE"
 	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
 	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
 
 	// Cluster (ClusterOrder) EDA webhook environment variables
 	envClusterCreateWebhook = "OSAC_CLUSTER_CREATE_WEBHOOK"
 	envClusterDeleteWebhook = "OSAC_CLUSTER_DELETE_WEBHOOK"
-
-	// HostPool EDA webhook environment variables
-	envHostPoolProvisionWebhook   = "OSAC_HOSTPOOL_PROVISION_WEBHOOK"
-	envHostPoolDeprovisionWebhook = "OSAC_HOSTPOOL_DEPROVISION_WEBHOOK"
 
 	// Provider selection
 	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
@@ -101,10 +96,6 @@ const (
 	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
-	// HostPool AAP template overrides
-	envHostPoolAAPProvisionTemplate   = "OSAC_HOSTPOOL_AAP_PROVISION_TEMPLATE"
-	envHostPoolAAPDeprovisionTemplate = "OSAC_HOSTPOOL_AAP_DEPROVISION_TEMPLATE"
-
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
@@ -116,7 +107,6 @@ const (
 
 	// Controller enable flags (defaults when flag is not set)
 	envEnableTenantController          = "OSAC_ENABLE_TENANT_CONTROLLER"
-	envEnableHostPoolController        = "OSAC_ENABLE_HOST_POOL_CONTROLLER"
 	envEnableComputeInstanceController = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
 	envEnableClusterController         = "OSAC_ENABLE_CLUSTER_CONTROLLER"
 	envEnableNetworkingController      = "OSAC_ENABLE_NETWORKING_CONTROLLER"
@@ -127,7 +117,6 @@ const (
 // controllerFlags holds the enable flags for all controllers.
 type controllerFlags struct {
 	Tenant          bool
-	HostPool        bool
 	ComputeInstance bool
 	Cluster         bool
 	Networking      bool
@@ -140,9 +129,6 @@ func registerControllerFlags() *controllerFlags {
 	flag.BoolVar(&flags.Tenant, "enable-tenant-controller",
 		helpers.GetEnvWithDefault(envEnableTenantController, false),
 		"Enable the tenant controller.")
-	flag.BoolVar(&flags.HostPool, "enable-host-pool-controller",
-		helpers.GetEnvWithDefault(envEnableHostPoolController, false),
-		"Enable the host-pool controller.")
 	flag.BoolVar(&flags.ComputeInstance, "enable-compute-instance-controller",
 		helpers.GetEnvWithDefault(envEnableComputeInstanceController, false),
 		"Enable the compute-instance controller.")
@@ -157,9 +143,8 @@ func registerControllerFlags() *controllerFlags {
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
 func (f *controllerFlags) enableAllIfNoneSet() {
-	if !f.Tenant && !f.HostPool && !f.ComputeInstance && !f.Cluster && !f.Networking {
+	if !f.Tenant && !f.ComputeInstance && !f.Cluster && !f.Networking {
 		f.Tenant = true
-		f.HostPool = true
 		f.ComputeInstance = true
 		f.Cluster = true
 		f.Networking = true
@@ -171,7 +156,7 @@ func (f *controllerFlags) enableAllIfNoneSet() {
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
 	localScheme *runtime.Scheme,
-	enableCluster, enableHostPool, enableComputeInstance, enableTenant, enableNetworking bool,
+	enableCluster, enableComputeInstance, enableTenant, enableNetworking bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
@@ -367,37 +352,6 @@ func setupClusterControllers(
 			return controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
-				provider, pollInterval, maxJobHistory,
-			).SetupWithManager(mgr)
-		},
-	)
-}
-
-// setupHostPoolControllers registers the HostPool controller and, when grpcConn is set,
-// the HostPool Feedback controller.
-func setupHostPoolControllers(
-	mgr mcmanager.Manager, grpcConn *grpc.ClientConn, minimumRequestInterval time.Duration,
-	maxJobHistory int,
-) error {
-	localMgr := mgr.GetLocalManager()
-	return setupWebhookController(
-		minimumRequestInterval,
-		envHostPoolProvisionWebhook, envHostPoolDeprovisionWebhook,
-		envHostPoolAAPProvisionTemplate, envHostPoolAAPDeprovisionTemplate,
-		func() error {
-			if grpcConn == nil {
-				return nil
-			}
-			return controller.NewHostPoolFeedbackReconciler(
-				ctrl.Log.WithName("feedback"),
-				localMgr.GetClient(), grpcConn,
-				os.Getenv(envHostPoolOrderNamespace),
-			).SetupWithManager(mgr)
-		},
-		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
-			return controller.NewHostPoolReconciler(
-				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
-				os.Getenv(envHostPoolOrderNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)
 		},
@@ -637,8 +591,8 @@ func main() {
 
 	ctrlFlags.enableAllIfNoneSet()
 
-	if remoteClusterKubeconfig != "" && (ctrlFlags.HostPool || ctrlFlags.Cluster) {
-		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with host-pool and cluster controllers")
+	if remoteClusterKubeconfig != "" && ctrlFlags.Cluster {
+		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with cluster controller")
 		os.Exit(1)
 	}
 
@@ -694,7 +648,6 @@ func main() {
 		localScheme = runtime.NewScheme()
 		addSchemesForLocalControllers(localScheme,
 			ctrlFlags.Cluster,
-			ctrlFlags.HostPool,
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Networking,
@@ -759,12 +712,6 @@ func main() {
 	if ctrlFlags.Cluster {
 		if err := setupClusterControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup cluster controllers")
-			os.Exit(1)
-		}
-	}
-	if ctrlFlags.HostPool {
-		if err := setupHostPoolControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
-			setupLog.Error(err, "unable to setup hostpool controllers")
 			os.Exit(1)
 		}
 	}

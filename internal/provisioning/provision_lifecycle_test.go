@@ -327,11 +327,6 @@ var _ = ginkgo.Describe("GetJobsFromResource", func() {
 		Expect(GetJobsFromResource(co)).To(HaveLen(2))
 	})
 
-	ginkgo.It("returns jobs from HostPool", func() {
-		hp := &v1alpha1.HostPool{}
-		Expect(GetJobsFromResource(hp)).To(BeEmpty())
-	})
-
 	ginkgo.It("returns nil for unsupported type", func() {
 		subnet := &v1alpha1.Subnet{}
 		Expect(GetJobsFromResource(subnet)).To(BeNil())

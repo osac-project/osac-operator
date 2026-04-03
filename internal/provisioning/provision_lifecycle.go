@@ -49,8 +49,6 @@ func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
 		return r.Status.Jobs
 	case *v1alpha1.ClusterOrder:
 		return r.Status.Jobs
-	case *v1alpha1.HostPool:
-		return r.Status.Jobs
 	case *v1alpha1.VirtualNetwork:
 		return r.Status.Jobs
 	case *v1alpha1.Subnet:

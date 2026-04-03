@@ -384,7 +384,7 @@ var _ = Describe("EDAProvider", func() {
 		})
 	})
 
-	Describe("ClusterOrder and HostPool support", func() {
+	Describe("ClusterOrder support", func() {
 		It("should use correct finalizer name for ClusterOrder deprovision", func() {
 			provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
 			clusterOrder := &v1alpha1.ClusterOrder{
@@ -402,27 +402,6 @@ var _ = Describe("EDAProvider", func() {
 				return 0, nil
 			}
 			result, err := provider.TriggerDeprovision(ctx, clusterOrder)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
-		})
-
-		It("should use correct finalizer name for HostPool deprovision", func() {
-			provider = provisioning.NewEDAProvider(webhookClient, "http://create-url", "http://delete-url")
-			hostPool := &v1alpha1.HostPool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       "test-host-pool",
-					Namespace:  "default",
-					Finalizers: []string{provisioning.HostPoolAAPFinalizer},
-				},
-				Status: v1alpha1.HostPoolStatus{
-					Phase: v1alpha1.HostPoolPhaseReady,
-				},
-			}
-			webhookClient.triggerWebhookFunc = func(ctx context.Context, url string, resource webhook.Resource) (time.Duration, error) {
-				Expect(url).To(Equal("http://delete-url"))
-				return 0, nil
-			}
-			result, err := provider.TriggerDeprovision(ctx, hostPool)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
 		})
