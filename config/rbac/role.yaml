@@ -58,6 +58,7 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalpools
   - clusterorders
   - computeinstances
   - hostpools
@@ -76,6 +77,7 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalpools/finalizers
   - clusterorders/finalizers
   - computeinstances/finalizers
   - hostpools/finalizers
@@ -88,6 +90,7 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalpools/status
   - clusterorders/status
   - computeinstances/status
   - hostpools/status
@@ -99,6 +102,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - hosts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
