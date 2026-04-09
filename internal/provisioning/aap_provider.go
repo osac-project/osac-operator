@@ -57,6 +57,13 @@ func NewAAPProviderWithPrefix(client AAPClient, templatePrefix string) *AAPProvi
 	}
 }
 
+// kindToTemplateSuffix maps CRD Kind names to AAP template suffixes where the
+// convention (kebab-case of Kind) doesn't match the actual AAP template name.
+// Kinds not in this map fall through to strcase.KebabCase(kind).
+var kindToTemplateSuffix = map[string]string{
+	"ClusterOrder": "hosted-cluster",
+}
+
 // resolveTemplateName returns the template name to use for the given action and resource.
 // When explicit template names are configured, those are returned directly.
 // When a prefix is configured, the name is derived from the resource Kind.
@@ -76,7 +83,11 @@ func (p *AAPProvider) resolveTemplateName(action string, resource client.Object)
 		if kind == "" {
 			return "", fmt.Errorf("resource has no Kind set; cannot derive template name from prefix")
 		}
-		return p.templatePrefix + "-" + action + "-" + strcase.KebabCase(kind), nil
+		suffix, ok := kindToTemplateSuffix[kind]
+		if !ok {
+			suffix = strcase.KebabCase(kind)
+		}
+		return p.templatePrefix + "-" + action + "-" + suffix, nil
 	}
 	return "", fmt.Errorf("%s template not configured", action)
 }

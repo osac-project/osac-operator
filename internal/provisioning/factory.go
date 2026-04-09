@@ -3,8 +3,6 @@ package provisioning
 import (
 	"fmt"
 	"time"
-
-	"github.com/osac-project/osac-operator/internal/aap"
 )
 
 // ProviderConfig contains configuration for creating a provisioning provider.
@@ -18,7 +16,7 @@ type ProviderConfig struct {
 	DeprovisionWebhook string
 
 	// AAP provider configuration
-	AAPClient           *aap.Client
+	AAPClient           AAPClient
 	ProvisionTemplate   string
 	DeprovisionTemplate string
 
@@ -48,10 +46,12 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 		if config.AAPClient == nil {
 			return nil, fmt.Errorf("AAP provider requires AAPClient")
 		}
-		if config.TemplatePrefix != "" && config.ProvisionTemplate == "" && config.DeprovisionTemplate == "" {
-			return NewAAPProviderWithPrefix(config.AAPClient, config.TemplatePrefix), nil
-		}
-		return NewAAPProvider(config.AAPClient, config.ProvisionTemplate, config.DeprovisionTemplate), nil
+		return &AAPProvider{
+			client:              config.AAPClient,
+			provisionTemplate:   config.ProvisionTemplate,
+			deprovisionTemplate: config.DeprovisionTemplate,
+			templatePrefix:      config.TemplatePrefix,
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", config.ProviderType)
