@@ -3,4 +3,5 @@ resources:
 - osac_v1alpha1_clusterorder.yaml
 - osac_v1alpha1_computeinstance.yaml
 - osac_v1alpha1_tenant.yaml
+- osac_v1alpha1_baremetalpool.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

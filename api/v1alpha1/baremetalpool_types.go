@@ -60,7 +60,7 @@ type BareMetalHostSet struct {
 	// HostClass specifies the class of the host
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	HostClass string `json:"hostClass"`
+	HostType string `json:"hostClass"`
 
 	// Replicas specifies the number of hosts required for this host class
 	// +kubebuilder:validation:Required
