@@ -55,6 +55,8 @@ func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
 		return r.Status.Jobs
 	case *v1alpha1.SecurityGroup:
 		return r.Status.Jobs
+	case *v1alpha1.PublicIPPool:
+		return r.Status.Jobs
 	default:
 		return nil
 	}

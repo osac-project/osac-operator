@@ -429,7 +429,7 @@ func setupTenantController(mgr mcmanager.Manager) error {
 	return nil
 }
 
-// setupNetworkingControllers registers the VirtualNetwork, Subnet, and SecurityGroup controllers
+// setupNetworkingControllers registers the VirtualNetwork, Subnet, SecurityGroup, and PublicIPPool controllers
 // along with their feedback controllers when grpcConn is set.
 func setupNetworkingControllers(
 	mgr mcmanager.Manager,
@@ -521,6 +521,19 @@ func setupNetworkingControllers(
 		MaxJobHistory:        maxJobHistory,
 	}).SetupWithManager(localMgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
+	}
+
+	// Setup PublicIPPool controller (feedback controller added in Phase 5)
+	if err := (&controller.PublicIPPoolReconciler{
+		Client:               localMgr.GetClient(),
+		APIReader:            localMgr.GetAPIReader(),
+		Scheme:               localMgr.GetScheme(),
+		NetworkingNamespace:  networkingNamespace,
+		ProvisioningProvider: networkingProvider,
+		StatusPollInterval:   statusPollInterval,
+		MaxJobHistory:        maxJobHistory,
+	}).SetupWithManager(localMgr); err != nil {
+		return fmt.Errorf("publicippool controller: %w", err)
 	}
 
 	return nil
