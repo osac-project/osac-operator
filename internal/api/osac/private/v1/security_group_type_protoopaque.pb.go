@@ -144,6 +144,10 @@ const (
 	// The status.message field will contain specific error details. Failed security groups typically require
 	// deletion and recreation with corrected parameters, or resolution of the parent VirtualNetwork issue.
 	SecurityGroupState_SECURITY_GROUP_STATE_FAILED SecurityGroupState = 3
+	// The security group is being deleted.
+	SecurityGroupState_SECURITY_GROUP_STATE_DELETING SecurityGroupState = 4
+	// The security group deletion has failed.
+	SecurityGroupState_SECURITY_GROUP_STATE_DELETE_FAILED SecurityGroupState = 5
 )
 
 // Enum value maps for SecurityGroupState.
@@ -153,12 +157,16 @@ var (
 		1: "SECURITY_GROUP_STATE_PENDING",
 		2: "SECURITY_GROUP_STATE_READY",
 		3: "SECURITY_GROUP_STATE_FAILED",
+		4: "SECURITY_GROUP_STATE_DELETING",
+		5: "SECURITY_GROUP_STATE_DELETE_FAILED",
 	}
 	SecurityGroupState_value = map[string]int32{
-		"SECURITY_GROUP_STATE_UNSPECIFIED": 0,
-		"SECURITY_GROUP_STATE_PENDING":     1,
-		"SECURITY_GROUP_STATE_READY":       2,
-		"SECURITY_GROUP_STATE_FAILED":      3,
+		"SECURITY_GROUP_STATE_UNSPECIFIED":   0,
+		"SECURITY_GROUP_STATE_PENDING":       1,
+		"SECURITY_GROUP_STATE_READY":         2,
+		"SECURITY_GROUP_STATE_FAILED":        3,
+		"SECURITY_GROUP_STATE_DELETING":      4,
+		"SECURITY_GROUP_STATE_DELETE_FAILED": 5,
 	}
 )
 
