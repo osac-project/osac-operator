@@ -29,11 +29,13 @@ type PublicIPPoolSpec struct {
 
 	// CIDRs is the list of CIDR blocks for this pool. All CIDRs must match the declared IPFamily.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
 	CIDRs []string `json:"cidrs"`
 
 	// IPFamily indicates the IP address family for this pool (IPv4 or IPv6)
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Enum=IPv4;IPv6
 	IPFamily string `json:"ipFamily"`
 
 	// ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).

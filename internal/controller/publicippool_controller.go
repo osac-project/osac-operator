@@ -71,7 +71,7 @@ func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	val, exists := pool.Annotations[osacManagementStateAnnotation]
-	if exists && val == ManagementStateUnmanaged {
+	if pool.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring PublicIPPool due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}

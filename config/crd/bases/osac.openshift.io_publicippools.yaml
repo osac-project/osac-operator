@@ -65,6 +65,7 @@ spec:
                   must match the declared IPFamily.
                 items:
                   type: string
+                minItems: 1
                 type: array
               implementationStrategy:
                 description: |-
@@ -74,6 +75,9 @@ spec:
               ipFamily:
                 description: IPFamily indicates the IP address family for this pool
                   (IPv4 or IPv6)
+                enum:
+                - IPv4
+                - IPv6
                 type: string
               region:
                 description: Region scopes the pool to a specific region
