@@ -18,14 +18,15 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -501,6 +502,76 @@ var _ = Describe("SubnetFeedbackController", func() {
 			Expect(err).To(HaveOccurred()) // CR should be garbage collected
 		})
 
+		It("should remove feedback finalizer when subnet record is NotFound during deletion", func() {
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+					Labels: map[string]string{
+						osacSubnetIDLabel: subnetID,
+					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.1.0/24",
+				},
+				Status: v1alpha1.SubnetStatus{
+					Phase: v1alpha1.SubnetPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// No gRPC Update or Signal should have been called
+			Expect(mockServer.updates).To(BeEmpty())
+			Expect(mockServer.signals).To(BeEmpty())
+
+			// CR should be gone (finalizer removed, it was the last one)
+			updated := &v1alpha1.Subnet{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: subnetNamespace}, updated)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error when subnet record is NotFound but CR is not being deleted", func() {
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+					Labels: map[string]string{
+						osacSubnetIDLabel: subnetID,
+					},
+					Finalizers: []string{osacSubnetFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.1.0/24",
+				},
+				Status: v1alpha1.SubnetStatus{
+					Phase: v1alpha1.SubnetPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+				},
+			})
+			Expect(err).To(HaveOccurred())
+		})
+
 		It("should not update if status unchanged", func() {
 			ipv4Cidr := testIPv4CIDR
 			subnet := &privatev1.Subnet{
@@ -572,7 +643,7 @@ func (m *mockSubnetsServer) Get(ctx context.Context, req *privatev1.SubnetsGetRe
 
 	subnet, ok := m.subnets[req.GetId()]
 	if !ok {
-		return nil, fmt.Errorf("subnet not found: %s", req.GetId())
+		return nil, grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", req.GetId())
 	}
 
 	return &privatev1.SubnetsGetResponse{

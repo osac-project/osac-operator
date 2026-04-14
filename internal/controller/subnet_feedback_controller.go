@@ -17,6 +17,8 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,6 +95,13 @@ func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 	// Step 3: Fetch the subnet from the fulfillment service so we can compare before/after.
 	subnet, err := r.fetchSubnet(ctx, subnetID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info("Subnet record not found during deletion, removing feedback finalizer", "subnetID", subnetID)
+			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		return result, err
 	}
 
