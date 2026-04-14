@@ -80,17 +80,18 @@ type PublicIPPoolStatus struct {
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// Total is the total number of IPs in the pool
+	// Total is the total number of usable IP addresses across all CIDRs in this pool.
+	// Uses int64 to accommodate large IPv6 CIDR ranges.
 	// +kubebuilder:validation:Optional
-	Total int32 `json:"total,omitempty"`
+	Total int64 `json:"total,omitempty"`
 
-	// Allocated is the number of IPs currently allocated from the pool
+	// Allocated is the number of IPs currently allocated from the pool.
 	// +kubebuilder:validation:Optional
-	Allocated int32 `json:"allocated,omitempty"`
+	Allocated int64 `json:"allocated,omitempty"`
 
-	// Available is the number of IPs available for allocation
+	// Available is the number of IPs available for allocation.
 	// +kubebuilder:validation:Optional
-	Available int32 `json:"available,omitempty"`
+	Available int64 `json:"available,omitempty"`
 }
 
 // +kubebuilder:object:root=true

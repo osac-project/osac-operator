@@ -104,8 +104,8 @@ var _ = Describe("PublicIPPoolStatus", func() {
 			Available: 246,
 		}
 
-		Expect(status.Total).To(Equal(int32(256)))
-		Expect(status.Allocated).To(Equal(int32(10)))
-		Expect(status.Available).To(Equal(int32(246)))
+		Expect(status.Total).To(Equal(int64(256)))
+		Expect(status.Allocated).To(Equal(int64(10)))
+		Expect(status.Available).To(Equal(int64(246)))
 	})
 })

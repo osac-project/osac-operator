@@ -88,12 +88,12 @@ spec:
             properties:
               allocated:
                 description: Allocated is the number of IPs currently allocated from
-                  the pool
-                format: int32
+                  the pool.
+                format: int64
                 type: integer
               available:
-                description: Available is the number of IPs available for allocation
-                format: int32
+                description: Available is the number of IPs available for allocation.
+                format: int64
                 type: integer
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
@@ -225,8 +225,10 @@ spec:
                 - Deleting
                 type: string
               total:
-                description: Total is the total number of IPs in the pool
-                format: int32
+                description: |-
+                  Total is the total number of usable IP addresses across all CIDRs in this pool.
+                  Uses int64 to accommodate large IPv6 CIDR ranges.
+                format: int64
                 type: integer
             type: object
         required:
