@@ -11,13 +11,11 @@ import (
 var _ = Describe("PublicIPPoolSpec", func() {
 	It("should accept a valid spec with all required fields", func() {
 		spec := v1alpha1.PublicIPPoolSpec{
-			Region:                 "us-east-1",
 			CIDRs:                  []string{"192.168.1.0/24", "192.168.2.0/24"},
 			IPFamily:               "IPv4",
 			ImplementationStrategy: "metallb-l2",
 		}
 
-		Expect(spec.Region).To(Equal("us-east-1"))
 		Expect(spec.CIDRs).To(Equal([]string{"192.168.1.0/24", "192.168.2.0/24"}))
 		Expect(spec.IPFamily).To(Equal("IPv4"))
 		Expect(spec.ImplementationStrategy).To(Equal("metallb-l2"))
@@ -25,12 +23,10 @@ var _ = Describe("PublicIPPoolSpec", func() {
 
 	It("should accept a minimal spec without optional fields", func() {
 		spec := v1alpha1.PublicIPPoolSpec{
-			Region:   "eu-west-1",
 			CIDRs:    []string{"10.0.0.0/16"},
 			IPFamily: "IPv4",
 		}
 
-		Expect(spec.Region).To(Equal("eu-west-1"))
 		Expect(spec.CIDRs).To(HaveLen(1))
 		Expect(spec.IPFamily).To(Equal("IPv4"))
 		Expect(spec.ImplementationStrategy).To(BeEmpty())

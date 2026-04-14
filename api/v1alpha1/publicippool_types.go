@@ -22,11 +22,6 @@ import (
 
 // PublicIPPoolSpec defines the desired state of PublicIPPool
 type PublicIPPoolSpec struct {
-	// Region scopes the pool to a specific region
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
-	Region string `json:"region"`
-
 	// CIDRs is the list of CIDR blocks for this pool. All CIDRs must match the declared IPFamily.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
@@ -99,7 +94,6 @@ type PublicIPPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=publicippool
-// +kubebuilder:printcolumn:name="Region",type=string,JSONPath=`.spec.region`
 // +kubebuilder:printcolumn:name="IPFamily",type=string,JSONPath=`.spec.ipFamily`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=`.status.total`

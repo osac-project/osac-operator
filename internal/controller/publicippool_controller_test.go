@@ -56,7 +56,6 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				Namespace: "test-namespace",
 			},
 			Spec: osacv1alpha1.PublicIPPoolSpec{
-				Region:                 "us-east-1",
 				CIDRs:                  []string{"192.168.1.0/24"},
 				IPFamily:               "IPv4",
 				ImplementationStrategy: "metallb-l2",
@@ -156,7 +155,6 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 					Namespace: "test-namespace",
 				},
 				Spec: osacv1alpha1.PublicIPPoolSpec{
-					Region:   "us-west-2",
 					CIDRs:    []string{"10.0.0.0/24"},
 					IPFamily: "IPv4",
 					// ImplementationStrategy intentionally empty
@@ -378,7 +376,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 					Finalizers: []string{osacPublicIPPoolFinalizer},
 				},
 				Spec: osacv1alpha1.PublicIPPoolSpec{
-					Region:                 "us-east-1",
+
 					CIDRs:                  []string{"10.0.0.0/24"},
 					IPFamily:               "IPv4",
 					ImplementationStrategy: "metallb-l2",
@@ -434,7 +432,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 					},
 				},
 				Spec: osacv1alpha1.PublicIPPoolSpec{
-					Region:                 "us-east-1",
+
 					CIDRs:                  []string{"10.0.0.0/24"},
 					IPFamily:               "IPv4",
 					ImplementationStrategy: "metallb-l2",

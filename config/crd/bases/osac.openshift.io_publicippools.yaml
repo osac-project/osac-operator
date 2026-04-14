@@ -17,9 +17,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.region
-      name: Region
-      type: string
     - jsonPath: .spec.ipFamily
       name: IPFamily
       type: string
@@ -79,13 +76,9 @@ spec:
                 - IPv4
                 - IPv6
                 type: string
-              region:
-                description: Region scopes the pool to a specific region
-                type: string
             required:
             - cidrs
             - ipFamily
-            - region
             type: object
           status:
             description: status defines the observed state of PublicIPPool
