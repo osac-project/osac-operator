@@ -68,6 +68,8 @@ spec:
                 description: |-
                   ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).
                   Defaults to metallb-l2 for v7.0.
+                enum:
+                - metallb-l2
                 type: string
               ipFamily:
                 description: IPFamily indicates the IP address family for this pool
