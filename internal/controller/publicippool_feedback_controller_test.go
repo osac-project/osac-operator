@@ -104,7 +104,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_PENDING,
 				},
@@ -160,7 +160,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY,
 				},
@@ -203,7 +203,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_PENDING,
 				},
@@ -275,7 +275,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY,
 				},
@@ -329,7 +329,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY,
 				},
@@ -378,7 +378,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: poolName,
 				},
-				Spec:   &privatev1.PublicIPPoolSpec{},
+				Spec: &privatev1.PublicIPPoolSpec{},
 				Status: &privatev1.PublicIPPoolStatus{
 					State: privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY,
 				},
