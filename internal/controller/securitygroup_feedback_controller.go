@@ -17,9 +17,12 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -62,7 +65,7 @@ func (r *SecurityGroupFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) err
 func (r *SecurityGroupFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
 	log := ctrllog.FromContext(ctx)
 
-	// Fetch the object to reconcile, and do nothing if it no longer exists:
+	// Step 1: Fetch the object to reconcile, and do nothing if it no longer exists:
 	object := &v1alpha1.SecurityGroup{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
@@ -70,29 +73,42 @@ func (r *SecurityGroupFeedbackReconciler) Reconcile(ctx context.Context, request
 		return //nolint:nakedret
 	}
 
-	// Get the identifier of the security group from the labels. If this isn't present it means that the object wasn't
+	// Step 2: Get the identifier of the security group from the labels. If this isn't present it means that the object wasn't
 	// created by the fulfillment service, so we ignore it.
 	securityGroupID, ok := object.Labels[osacSecurityGroupIDLabel]
 	if !ok {
+		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
+		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+			log.Info("CR without security group ID label is being deleted, removing feedback finalizer")
+			if controllerutil.RemoveFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		log.Info(
 			"There is no label containing the security group identifier, will ignore it",
 			"label", osacSecurityGroupIDLabel,
 		)
-		return
+		return result, err
 	}
 
-	// Check if the SecurityGroup is being deleted before fetching from fulfillment service
-	if !object.ObjectMeta.DeletionTimestamp.IsZero() {
-		log.Info(
-			"SecurityGroup is being deleted, skipping feedback reconciliation",
-		)
-		return
-	}
-
-	// Fetch the security group:
+	// Step 3: Fetch the security group from the fulfillment service so we can compare before/after.
 	securityGroup, err := r.fetchSecurityGroup(ctx, securityGroupID)
 	if err != nil {
-		return
+		// If the fulfillment service record is already deleted during CR deletion, remove the feedback
+		// finalizer and exit gracefully. This prevents the controller from blocking CR garbage collection
+		// when the fulfillment service record has been deleted before K8s CR cleanup completes.
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info(
+				"Security group record not found during deletion, removing feedback finalizer",
+				"security_group_id", securityGroupID,
+			)
+			if controllerutil.RemoveFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
+		return result, err
 	}
 
 	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
@@ -103,14 +119,59 @@ func (r *SecurityGroupFeedbackReconciler) Reconcile(ctx context.Context, request
 		securityGroup: clone(securityGroup),
 	}
 
-	t.handleUpdate(ctx)
+	// Step 4: Sync CR state to the fulfillment service record.
+	// handleUpdate also adds our finalizer; handleDelete syncs state (e.g. DELETING phase).
+	if object.DeletionTimestamp.IsZero() {
+		err = t.handleUpdate(ctx)
+	} else {
+		t.handleDelete()
+	}
+	if err != nil {
+		return result, err
+	}
 
-	// Save the objects that have changed:
+	// Step 5: Persist synced state to the fulfillment service.
 	err = r.saveSecurityGroup(ctx, securityGroup, t.securityGroup)
 	if err != nil {
-		return
+		return result, err
 	}
-	return
+
+	// Step 6: Handle finalizer removal and signal for deletions. This must happen after step 5 so the
+	// DELETING state is persisted before the CR is garbage collected.
+	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+		if len(object.GetFinalizers()) == 1 {
+			// We're the last finalizer. Remove it to trigger CR garbage collection, then signal the
+			// fulfillment service to immediately re-reconcile.
+			log.Info(
+				"Feedback finalizer is last remaining, removing finalizer and signaling",
+				"securityGroupID", securityGroupID,
+			)
+			if controllerutil.RemoveFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+				if err != nil {
+					return result, err
+				}
+			}
+			_, signalErr := r.securityGroupsClient.Signal(ctx, privatev1.SecurityGroupsSignalRequest_builder{
+				Id: securityGroupID,
+			}.Build())
+			if signalErr != nil {
+				log.Error(
+					signalErr,
+					"Failed to signal fulfillment service, periodic sync will handle cleanup",
+					"securityGroupID", securityGroupID,
+				)
+			}
+		} else {
+			// Other finalizers still present — another controller hasn't finished cleanup yet.
+			log.Info(
+				"Other finalizers still present, waiting",
+				"finalizers", object.GetFinalizers(),
+			)
+		}
+	}
+
+	return result, err
 }
 
 func (r *SecurityGroupFeedbackReconciler) fetchSecurityGroup(ctx context.Context, id string) (securityGroup *privatev1.SecurityGroup, err error) {
@@ -149,8 +210,27 @@ func (r *SecurityGroupFeedbackReconciler) saveSecurityGroup(ctx context.Context,
 	return nil
 }
 
-func (t *securityGroupFeedbackReconcilerTask) handleUpdate(ctx context.Context) {
+// handleUpdate ensures our finalizer is present and syncs the CR state to the
+// fulfillment service. Called when the CR is not being deleted.
+func (t *securityGroupFeedbackReconcilerTask) handleUpdate(ctx context.Context) error {
+	if controllerutil.AddFinalizer(t.object, osacSecurityGroupFeedbackFinalizer) {
+		if err := t.r.hubClient.Update(ctx, t.object); err != nil {
+			return err
+		}
+	}
 	t.syncPhase(ctx)
+	return nil
+}
+
+// handleDelete syncs the deletion phase to the fulfillment service.
+// Only the phase is synced during deletion (not other status fields),
+// because we only need to communicate DELETING/DELETE_FAILED state.
+func (t *securityGroupFeedbackReconcilerTask) handleDelete() {
+	if t.object.Status.Phase == v1alpha1.SecurityGroupPhaseFailed {
+		t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETE_FAILED)
+		return
+	}
+	t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETING)
 }
 
 func (t *securityGroupFeedbackReconcilerTask) syncPhase(ctx context.Context) {
@@ -186,6 +266,5 @@ func (t *securityGroupFeedbackReconcilerTask) syncPhaseReady() {
 }
 
 func (t *securityGroupFeedbackReconcilerTask) syncPhaseDeleting() {
-	// Deleting state maps to PENDING as deletion is in progress
-	t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+	t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETING)
 }

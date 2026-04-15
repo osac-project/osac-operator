@@ -324,7 +324,7 @@ func (t *feedbackReconcilerTask) syncNodeRequest(nodeRequest *ckv1alpha1.NodeReq
 	// Find a matching node set in the spec of the cluster:
 	var nodeSetID string
 	for candidateNodeSetID, candidateNodeSet := range t.cluster.GetSpec().GetNodeSets() {
-		if candidateNodeSet.GetHostClass() == nodeRequest.ResourceClass {
+		if candidateNodeSet.GetHostType() == nodeRequest.ResourceClass {
 			nodeSetID = candidateNodeSetID
 			break
 		}
@@ -347,7 +347,7 @@ func (t *feedbackReconcilerTask) syncNodeRequest(nodeRequest *ckv1alpha1.NodeReq
 	nodeSet := nodeSets[nodeSetID]
 	if nodeSet == nil {
 		nodeSet = privatev1.ClusterNodeSet_builder{
-			HostClass: nodeRequest.ResourceClass,
+			HostType: nodeRequest.ResourceClass,
 		}.Build()
 		nodeSets[nodeSetID] = nodeSet
 	}
