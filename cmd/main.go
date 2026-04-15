@@ -523,7 +523,17 @@ func setupNetworkingControllers(
 		return fmt.Errorf("securitygroup controller: %w", err)
 	}
 
-	// Setup PublicIPPool controller (feedback controller added in Phase 5)
+	// Setup PublicIPPool controller and feedback
+	if grpcConn != nil {
+		if err := controller.NewPublicIPPoolFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(localMgr); err != nil {
+			return fmt.Errorf("publicippool feedback controller: %w", err)
+		}
+	}
+
 	if err := (&controller.PublicIPPoolReconciler{
 		Client:               localMgr.GetClient(),
 		APIReader:            localMgr.GetAPIReader(),
