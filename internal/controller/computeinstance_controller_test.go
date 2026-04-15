@@ -1526,7 +1526,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
-	Context("resolveSubnetNamespace", func() {
+	Context("resolveSubnetTargetNamespace", func() {
 		const namespaceName = "default"
 		var (
 			reconciler *ComputeInstanceReconciler
@@ -1547,7 +1547,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
 
-			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(subnetNS).To(BeEmpty())
 		})
@@ -1585,7 +1585,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
 			}).Should(Succeed())
 
-			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(subnetNS).To(Equal(subnetRef))
 		})
@@ -1600,7 +1600,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			instance.Spec.SubnetRef = "nonexistent-subnet"
 
-			subnetNS, err := reconciler.resolveSubnetNamespace(ctx, instance)
+			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get Subnet CR"))
 			Expect(subnetNS).To(BeEmpty())
@@ -1719,7 +1719,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
 		})
 
-		It("should persist subnet-namespace annotation to the API server", func() {
+		It("should persist subnet-target-namespace annotation to the API server", func() {
 			const resourceName = "test-ci-subnet-anno-persist"
 			const tenantName = "tenant-subnet-anno-persist"
 			const subnetRef = "test-subnet-anno-persist"
@@ -1776,11 +1776,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 			ci := &osacv1alpha1.ComputeInstance{}
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Annotations).To(HaveKeyWithValue(osacSubnetNamespaceAnnotation, subnetRef))
+				g.Expect(ci.Annotations).To(HaveKeyWithValue(osacSubnetTargetNamespaceAnnotation, subnetRef))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 
-		It("should not update annotation when subnet-namespace is already correct", func() {
+		It("should not update annotation when subnet-target-namespace is already correct", func() {
 			const resourceName = "test-ci-subnet-anno-noop"
 			const tenantName = "tenant-subnet-anno-noop"
 			const subnetRef = "test-subnet-anno-noop"
@@ -1819,8 +1819,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation:          tenantName,
-						osacSubnetNamespaceAnnotation: subnetRef, // already correct
+						osacTenantAnnotation:                tenantName,
+						osacSubnetTargetNamespaceAnnotation: subnetRef, // already correct
 					},
 				},
 				Spec: spec,
@@ -1850,12 +1850,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			ciAfter := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, nn, ciAfter)).To(Succeed())
-			Expect(ciAfter.Annotations).To(HaveKeyWithValue(osacSubnetNamespaceAnnotation, subnetRef))
+			Expect(ciAfter.Annotations).To(HaveKeyWithValue(osacSubnetTargetNamespaceAnnotation, subnetRef))
 			Expect(ciAfter.Generation).To(Equal(genBefore), "Generation should not change when no spec/metadata write occurs")
 			Expect(ciAfter.Annotations).To(Equal(annotationsBefore), "Annotations should be unchanged across reconciles")
 		})
 
-		It("should not set subnet-namespace annotation when subnetRef is empty", func() {
+		It("should not set subnet-target-namespace annotation when subnetRef is empty", func() {
 			const resourceName = "test-ci-no-subnet-vm-ns"
 			const tenantName = "tenant-no-subnet-vm"
 			defer deleteCI(resourceName)
@@ -1889,7 +1889,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
 				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
-				g.Expect(ci.Annotations).NotTo(HaveKey(osacSubnetNamespaceAnnotation))
+				g.Expect(ci.Annotations).NotTo(HaveKey(osacSubnetTargetNamespaceAnnotation))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 	})
