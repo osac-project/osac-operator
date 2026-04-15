@@ -17,6 +17,8 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,6 +95,19 @@ func (r *SecurityGroupFeedbackReconciler) Reconcile(ctx context.Context, request
 	// Step 3: Fetch the security group from the fulfillment service so we can compare before/after.
 	securityGroup, err := r.fetchSecurityGroup(ctx, securityGroupID)
 	if err != nil {
+		// If the fulfillment service record is already deleted during CR deletion, remove the feedback
+		// finalizer and exit gracefully. This prevents the controller from blocking CR garbage collection
+		// when the fulfillment service record has been deleted before K8s CR cleanup completes.
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info(
+				"Security group record not found during deletion, removing feedback finalizer",
+				"security_group_id", securityGroupID,
+			)
+			if controllerutil.RemoveFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		return result, err
 	}
 
