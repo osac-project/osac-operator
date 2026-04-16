@@ -40,6 +40,34 @@ type ClusterOrderSpec struct {
 	// defaults. The selected template may limit what node types you can request.
 	// +kubebuilder:validation:Optional
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
+
+	// PullSecret contains credentials for authenticating to container image repositories.
+	// If not provided, the provider's default pull secret is used.
+	// +kubebuilder:validation:Optional
+	PullSecret string `json:"pullSecret,omitempty"`
+	// SSHPublicKey is an SSH public key installed on cluster worker nodes.
+	// If not provided, the provider's default SSH key is used.
+	// +kubebuilder:validation:Optional
+	SSHPublicKey string `json:"sshPublicKey,omitempty"`
+	// ReleaseImage is the OCP release image URL that controls the OpenShift version.
+	// If not provided, the template's default release image is used.
+	// +kubebuilder:validation:Optional
+	ReleaseImage string `json:"releaseImage,omitempty"`
+	// Network contains cluster networking configuration.
+	// +kubebuilder:validation:Optional
+	Network *ClusterNetworkSpec `json:"network,omitempty"`
+}
+
+// ClusterNetworkSpec defines networking configuration for a cluster.
+type ClusterNetworkSpec struct {
+	// PodCIDR is the CIDR for the cluster's pod network.
+	// Defaults to 10.128.0.0/14 if not specified.
+	// +kubebuilder:validation:Optional
+	PodCIDR string `json:"podCIDR,omitempty"`
+	// ServiceCIDR is the CIDR for the cluster's service network.
+	// Defaults to 172.30.0.0/16 if not specified.
+	// +kubebuilder:validation:Optional
+	ServiceCIDR string `json:"serviceCIDR,omitempty"`
 }
 
 type NodeRequest struct {
