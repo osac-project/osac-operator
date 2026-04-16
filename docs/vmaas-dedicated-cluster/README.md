@@ -32,8 +32,8 @@ standard [kubernetes.core](https://github.com/ansible-collections/kubernetes.cor
 Ansible collection, passing a kubeconfig to each task to target the remote
 cluster.
 
-The `ClusterOrder` and `HostPool` controllers are local-only and are
-incompatible with the remote cluster option (see [Constraints](#constraints)).
+Other controllers are local-only and incompatible with the remote cluster
+option (see [Constraints](#constraints)).
 
 ## Configuration
 
@@ -120,9 +120,8 @@ kubectl create secret generic <secret-name> \
 
 Set `OSAC_REMOTE_CLUSTER_KUBECONFIG` and mount the Secret (see example
 above). Enable only the controllers that should run against the remote cluster
-(`tenant` and/or `compute-instance`). The `ClusterOrder` and `HostPool`
-controllers, if needed, must run in a separate operator instance without the
-remote kubeconfig.
+(`tenant` and/or `compute-instance`). Other controllers, if needed, must run
+in a separate operator instance without the remote kubeconfig.
 
 ### 3. Configure AAP
 
@@ -143,9 +142,9 @@ be readable by the `osac-sa` service account in the AAP namespace.
 
 ## Constraints
 
-- `--remote-cluster-kubeconfig` is **incompatible** with
-  `--enable-host-pool-controller` and `--enable-cluster-controller`. The
-  operator will exit with an error if both are set simultaneously. Run those
-  controllers in a separate operator instance without the remote kubeconfig.
+- `--remote-cluster-kubeconfig` is only compatible with the `tenant` and
+  `compute-instance` controllers. The operator will exit with an error if
+  other controllers are enabled alongside it. Run those in a separate
+  operator instance without the remote kubeconfig.
 - When no remote kubeconfig is configured, the operator operates in
   single-cluster mode with no behaviour change.
