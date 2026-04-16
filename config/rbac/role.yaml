@@ -60,6 +60,7 @@ rules:
   resources:
   - clusterorders
   - computeinstances
+  - publicippools
   - securitygroups
   - subnets
   - tenants
@@ -77,6 +78,7 @@ rules:
   resources:
   - clusterorders/finalizers
   - computeinstances/finalizers
+  - publicippools/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -88,6 +90,7 @@ rules:
   resources:
   - clusterorders/status
   - computeinstances/status
+  - publicippools/status
   - securitygroups/status
   - subnets/status
   - tenants/status
