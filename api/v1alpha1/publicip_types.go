@@ -68,6 +68,9 @@ const (
 
 	// PublicIPStateReleasing means the IP is being released back to the pool
 	PublicIPStateReleasing PublicIPStateType = "Releasing"
+
+	// PublicIPStateFailed means provisioning or release failed
+	PublicIPStateFailed PublicIPStateType = "Failed"
 )
 
 // PublicIPStatus defines the observed state of PublicIP
@@ -97,7 +100,7 @@ type PublicIPStatus struct {
 	// State tracks the attachment lifecycle of the PublicIP
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Allocated;Attached;Releasing
+	// +kubebuilder:validation:Enum=Pending;Allocated;Attached;Releasing;Failed
 	State PublicIPStateType `json:"state,omitempty"`
 }
 

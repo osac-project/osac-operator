@@ -66,6 +66,7 @@ var _ = Describe("PublicIPStateType", func() {
 		Entry("Allocated state", v1alpha1.PublicIPStateAllocated, "Allocated"),
 		Entry("Attached state", v1alpha1.PublicIPStateAttached, "Attached"),
 		Entry("Releasing state", v1alpha1.PublicIPStateReleasing, "Releasing"),
+		Entry("Failed state", v1alpha1.PublicIPStateFailed, "Failed"),
 	)
 })
 

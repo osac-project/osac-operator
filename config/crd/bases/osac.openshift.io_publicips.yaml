@@ -217,6 +217,7 @@ spec:
                 - Allocated
                 - Attached
                 - Releasing
+                - Failed
                 type: string
             type: object
         required:
