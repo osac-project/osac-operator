@@ -14,7 +14,7 @@ cluster are managed by different personas.
 
 ## Architecture
 
-| Controller | Local cluster | VMaaS cluster (remote) |
+| Controller | Management cluster | VMaaS cluster (remote) |
 |---|---|---|
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
