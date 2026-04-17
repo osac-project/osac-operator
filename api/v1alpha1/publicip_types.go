@@ -32,6 +32,7 @@ type PublicIPSpec struct {
 	// ComputeInstance is the optional name of the ComputeInstance this IP is attached to.
 	// Setting this field triggers attachment of the IP to the referenced instance.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
 	ComputeInstance string `json:"computeInstance,omitempty"`
 }
 
