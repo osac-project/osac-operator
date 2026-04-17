@@ -18,7 +18,7 @@ cluster are managed by different personas.
 |---|---|---|
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
-| AAP | | manage KubeVirt VirtualMachine/VirtualMachineInstance |
+| AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
 
 The `ComputeInstance` and `Tenant` custom resources remain on the management
 cluster. Their controllers reconcile those resources locally and watch the
