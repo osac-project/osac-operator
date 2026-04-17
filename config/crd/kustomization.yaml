@@ -4,6 +4,8 @@
 resources:
 - bases/osac.openshift.io_clusterorders.yaml
 - bases/osac.openshift.io_computeinstances.yaml
+- bases/osac.openshift.io_publicippools.yaml
+- bases/osac.openshift.io_publicips.yaml
 - bases/osac.openshift.io_tenants.yaml
 - bases/osac.openshift.io_securitygroups.yaml
 - bases/osac.openshift.io_virtualnetworks.yaml
