@@ -45,7 +45,7 @@ instead of the local one.
 
 | Flag | Environment variable | Default | Description |
 |---|---|---|---|
-| `--remote-cluster-kubeconfig` | `OSAC_REMOTE_CLUSTER_KUBECONFIG` | _(unset)_ | Path to a kubeconfig file for the remote VMaaS cluster. When unset the operator behaves as before (single-cluster mode). |
+| `--remote-cluster-kubeconfig` | `OSAC_REMOTE_CLUSTER_KUBECONFIG` | _(unset)_ | Path to a kubeconfig file for the remote VMaaS cluster. When unset the operator behaves in single-cluster mode. |
 | `--enable-tenant-controller` | `OSAC_ENABLE_TENANT_CONTROLLER` | `false` | Enable the Tenant controller. |
 | `--enable-compute-instance-controller` | `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` | `false` | Enable the ComputeInstance controller. |
 
