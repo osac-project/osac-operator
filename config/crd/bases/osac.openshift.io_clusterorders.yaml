@@ -48,6 +48,20 @@ spec:
           spec:
             description: ClusterOrderSpec defines the desired state of ClusterOrder
             properties:
+              network:
+                description: Network contains cluster networking configuration.
+                properties:
+                  podCIDR:
+                    description: |-
+                      PodCIDR is the CIDR for the cluster's pod network.
+                      Defaults to 10.128.0.0/14 if not specified.
+                    type: string
+                  serviceCIDR:
+                    description: |-
+                      ServiceCIDR is the CIDR for the cluster's service network.
+                      Defaults to 172.30.0.0/16 if not specified.
+                    type: string
+                type: object
               nodeRequests:
                 description: |-
                   NodeRequests defines the types of nodes and number of each type of node that will be used
@@ -68,6 +82,21 @@ spec:
                   - resourceClass
                   type: object
                 type: array
+              pullSecret:
+                description: |-
+                  PullSecret contains credentials for authenticating to container image repositories.
+                  If not provided, the provider's default pull secret is used.
+                type: string
+              releaseImage:
+                description: |-
+                  ReleaseImage is the OCP release image URL that controls the OpenShift version.
+                  If not provided, the template's default release image is used.
+                type: string
+              sshPublicKey:
+                description: |-
+                  SSHPublicKey is an SSH public key installed on cluster worker nodes.
+                  If not provided, the provider's default SSH key is used.
+                type: string
               templateID:
                 description: TemplateID is the unique identigier of the cluster template
                   to use when creating this cluster
