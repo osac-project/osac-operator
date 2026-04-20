@@ -8,6 +8,7 @@ resources:
 - bases/osac.openshift.io_securitygroups.yaml
 - bases/osac.openshift.io_virtualnetworks.yaml
 - bases/osac.openshift.io_subnets.yaml
+- bases/osac.openshift.io_publicippools.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
