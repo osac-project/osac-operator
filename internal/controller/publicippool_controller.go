@@ -247,6 +247,7 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
 				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.PublicIPPool{})
 		},
+		func() error { return r.Status().Update(ctx, pool) },
 	)
 }
 

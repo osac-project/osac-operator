@@ -197,6 +197,10 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 // RunProvisioningLifecycle encapsulates the full provisioning flow: evaluate action,
 // trigger/poll/backoff as needed. Controllers call this instead of duplicating the
 // switch statement. The callbacks customize behavior on success and failure.
+//
+// statusFlush is called after a provision job is successfully triggered to persist
+// the job status immediately, preventing duplicate jobs from concurrent reconciliations.
+// Errors are logged but non-fatal — the end-of-reconcile status update serves as fallback.
 func RunProvisioningLifecycle(
 	ctx context.Context,
 	provider ProvisioningProvider,
@@ -206,11 +210,28 @@ func RunProvisioningLifecycle(
 	pollInterval time.Duration,
 	callbacks *PollCallbacks,
 	checkAPIServer func() bool,
+	statusFlush func() error,
 ) (ctrl.Result, error) {
 	action, latestJob := EvaluateAction(provState, checkAPIServer)
 
+	log := ctrllog.FromContext(ctx)
 	trigger := func() (ctrl.Result, error) {
-		return TriggerJob(ctx, provider, resource, provState, maxHistory, pollInterval)
+		prevJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		prevJobID := ""
+		if prevJob != nil {
+			prevJobID = prevJob.JobID
+		}
+		res, err := TriggerJob(ctx, provider, resource, provState, maxHistory, pollInterval)
+		if err != nil {
+			return res, err
+		}
+		newJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		if statusFlush != nil && newJob != nil && newJob.JobID != prevJobID {
+			if flushErr := statusFlush(); flushErr != nil {
+				log.Error(flushErr, "failed to flush status after job trigger; end-of-reconcile update will retry")
+			}
+		}
+		return res, nil
 	}
 
 	switch action {

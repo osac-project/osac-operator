@@ -489,7 +489,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
-					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					Timestamp:     metav1.NewTime(time.Now().UTC().Add(-2 * time.Second)),
 					State:         osacv1alpha1.JobStateFailed,
 					Message:       "provision failed",
 					ConfigVersion: testConfigVersion,

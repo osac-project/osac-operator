@@ -247,6 +247,7 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{})
 		},
+		func() error { return r.Status().Update(ctx, sg) },
 	)
 }
 

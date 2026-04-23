@@ -201,6 +201,7 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{})
 		},
+		func() error { return r.Status().Update(ctx, vnet) },
 	)
 }
 

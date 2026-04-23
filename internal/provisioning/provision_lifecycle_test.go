@@ -32,11 +32,15 @@ import (
 
 // mockProvider implements ProvisioningProvider for unit tests in the provisioning package.
 type mockProvider struct {
+	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*ProvisionResult, error)
 	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error)
 }
 
-func (m *mockProvider) TriggerProvision(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+func (m *mockProvider) TriggerProvision(ctx context.Context, resource client.Object) (*ProvisionResult, error) {
+	if m.triggerProvisionFunc != nil {
+		return m.triggerProvisionFunc(ctx, resource)
+	}
 	return &ProvisionResult{JobID: "mock-job", InitialState: v1alpha1.JobStatePending}, nil
 }
 func (m *mockProvider) GetProvisionStatus(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
@@ -143,6 +147,131 @@ var _ = ginkgo.Describe("EvaluateAction", func() {
 			Trigger,
 		),
 	)
+})
+
+var _ = ginkgo.Describe("RunProvisioningLifecycle", func() {
+	noAPIServerJob := func() bool { return false }
+
+	ginkgo.It("calls statusFlush after triggering a provision job", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(flushed).To(BeTrue())
+		Expect(*provState.Jobs).To(HaveLen(1))
+	})
+
+	ginkgo.It("logs but does not fail when statusFlush returns error", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		statusFlush := func() error { return fmt.Errorf("status flush failed") }
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(*provState.Jobs).To(HaveLen(1))
+	})
+
+	ginkgo.It("calls statusFlush on backoff retry", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC().Add(-BackoffBaseDelay - time.Minute))},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(flushed).To(BeTrue())
+	})
+
+	ginkgo.It("does not call statusFlush when action is Skip", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		_, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flushed).To(BeFalse())
+	})
+
+	ginkgo.It("does not call statusFlush when action is Poll", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		_, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(flushed).To(BeFalse())
+	})
+
+	ginkgo.It("does not call statusFlush when rate-limited", func() {
+		provider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return nil, &RateLimitError{RetryAfter: 45 * time.Second}
+			},
+		}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(45 * time.Second))
+		Expect(flushed).To(BeFalse())
+		Expect(*provState.Jobs).To(BeEmpty())
+	})
+
+	ginkgo.It("works with nil statusFlush", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(*provState.Jobs).To(HaveLen(1))
+	})
 })
 
 var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
