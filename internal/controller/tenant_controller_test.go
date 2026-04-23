@@ -209,7 +209,10 @@ var _ = Describe("Tenant Controller", func() {
 			assertSCConditionMessage(resourceName+"-sc", resourceName+"-sc-extra")
 
 			By("verifying a DuplicateStorageClass warning event was emitted")
-			Expect(fakeRecorder.Events).To(Receive(And(
+			// The Eventually loop in reconcileAndAssertStatus may reconcile multiple times before the
+			// informer cache observes the new SC, and each reconcile that sees duplicates emits an
+			// event. Use Eventually here so the assertion tolerates extra queued events.
+			Eventually(fakeRecorder.Events).Should(Receive(And(
 				ContainSubstring("Warning"),
 				ContainSubstring(eventReasonDuplicateStorageClass),
 				ContainSubstring(resourceName+"-sc"),
@@ -276,7 +279,7 @@ var _ = Describe("Tenant Controller", func() {
 			assertSCConditionMessage("shared-default-sc-1", "shared-default-sc-2", resourceName)
 
 			By("verifying a DuplicateStorageClass warning event was emitted for Default SCs")
-			Expect(fakeRecorder.Events).To(Receive(And(
+			Eventually(fakeRecorder.Events).Should(Receive(And(
 				ContainSubstring("Warning"),
 				ContainSubstring(eventReasonDuplicateStorageClass),
 				ContainSubstring("shared-default-sc-1"),

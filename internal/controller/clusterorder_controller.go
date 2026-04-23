@@ -90,11 +90,11 @@ func NewClusterOrderReconciler(
 	}
 
 	if statusPollInterval <= 0 {
-		statusPollInterval = DefaultStatusPollInterval
+		statusPollInterval = provisioning.DefaultStatusPollInterval
 	}
 
 	if maxJobHistory <= 0 {
-		maxJobHistory = DefaultMaxJobHistory
+		maxJobHistory = provisioning.DefaultMaxJobHistory
 	}
 
 	return &ClusterOrderReconciler{
@@ -522,8 +522,6 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	return ctrl.Result{}, nil
 }
 
-// handleProvisioning manages the provisioning job lifecycle for ClusterOrder.
-// Uses shouldTriggerProvision to decide action, with API server read-through guard.
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {
 	return &provisioning.State{
 		Jobs:                 &instance.Status.Jobs,
@@ -540,34 +538,19 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 		return ctrl.Result{}, nil
 	}
 
-	provState := r.provisionState(instance)
-	action, latestProvisionJob := r.shouldTriggerProvision(ctx, instance)
-	trigger := func() (ctrl.Result, error) {
-		return provisioning.TriggerJob(ctx, r.ProvisioningProvider, instance, provState, r.MaxJobHistory, r.StatusPollInterval)
-	}
-
-	switch action {
-	case provisioning.Skip:
-		return ctrl.Result{}, nil
-	case provisioning.Requeue:
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	case provisioning.Trigger:
-		return trigger()
-	case provisioning.Backoff:
-		return provisioning.HandleBackoff(ctx, provState, latestProvisionJob, trigger)
-	default: // provisioning.Poll
-		return provisioning.PollJob(ctx, r.ProvisioningProvider, instance, provState, latestProvisionJob, r.StatusPollInterval, &provisioning.PollCallbacks{
+	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
+		r.provisionState(instance),
+		r.MaxJobHistory, r.StatusPollInterval,
+		&provisioning.PollCallbacks{
 			OnFailed: func(_ string) {
 				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
 			},
-		})
-	}
-}
-
-func (r *ClusterOrderReconciler) shouldTriggerProvision(ctx context.Context, instance *v1alpha1.ClusterOrder) (provisioning.Action, *v1alpha1.JobStatus) {
-	return provisioning.EvaluateAction(r.provisionState(instance), func() bool {
-		return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{})
-	})
+		},
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{})
+		},
+		func() error { return r.Status().Update(ctx, instance) },
+	)
 }
 
 func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.ClusterOrder) error {

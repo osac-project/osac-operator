@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -82,12 +83,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("should add finalizer on first reconcile", func() {
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vnet.Name,
 					Namespace: vnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated VirtualNetwork
@@ -99,12 +100,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("should set phase to Progressing on first reconcile", func() {
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vnet.Name,
 					Namespace: vnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated VirtualNetwork
@@ -124,12 +125,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 				}, nil
 			}
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vnet.Name,
 					Namespace: vnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify job was triggered (confirms ImplementationStrategy was read successfully)
@@ -160,12 +161,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 				_ = k8sClient.Delete(ctx, vnetNoStrategy)
 			}()
 
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vnetNoStrategy.Name,
 					Namespace: vnetNoStrategy.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})

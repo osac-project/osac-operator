@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
@@ -77,7 +78,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				apiReader:            k8sClient,
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
-				MaxJobHistory:        DefaultMaxJobHistory,
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -87,20 +88,18 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
-	Context("shouldTriggerProvision", func() {
-		var reconciler *ClusterOrderReconciler
-
-		BeforeEach(func() {
-			noopWebhookClient := &noopWebhookClientForTest{}
-			reconciler = &ClusterOrderReconciler{
-				Client:               k8sClient,
-				apiReader:            k8sClient,
-				Scheme:               k8sClient.Scheme(),
-				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
-			}
-		})
-
+	Context("EvaluateAction (formerly shouldTriggerProvision)", func() {
 		ctx := context.Background()
+
+		evaluateAction := func(instance *v1alpha1.ClusterOrder) (provisioning.Action, *v1alpha1.JobStatus) {
+			provState := &provisioning.State{
+				Jobs:                 &instance.Status.Jobs,
+				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
+			}
+			return provisioning.EvaluateAction(provState, func() bool {
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{})
+			})
+		}
 
 		It("should trigger when no job exists and config versions differ", func() {
 			instance := &v1alpha1.ClusterOrder{
@@ -108,7 +107,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					DesiredConfigVersion: "abc123",
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).To(BeNil())
 		})
@@ -120,7 +119,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: ""}},
 				},
 			}
-			action, _ := reconciler.shouldTriggerProvision(ctx, instance)
+			action, _ := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 		})
 
@@ -130,7 +129,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					DesiredConfigVersion: "abc123",
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).To(BeNil())
 		})
@@ -141,7 +140,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateRunning}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Poll))
 			Expect(job).NotTo(BeNil())
 			Expect(job.JobID).To(Equal("job-1"))
@@ -153,7 +152,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStatePending}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Poll))
 			Expect(job).NotTo(BeNil())
 		})
@@ -165,7 +164,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "abc123"}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Skip))
 			Expect(job).NotTo(BeNil())
 		})
@@ -177,7 +176,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "old-version"}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).NotTo(BeNil())
 		})
@@ -189,7 +188,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateFailed, ConfigVersion: "old-version"}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).NotTo(BeNil())
 		})
@@ -206,7 +205,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Skip))
 			Expect(job).NotTo(BeNil())
 		})
@@ -223,7 +222,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Backoff))
 			Expect(job).NotTo(BeNil())
 		})
@@ -240,7 +239,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).NotTo(BeNil())
 		})
@@ -257,7 +256,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 			}
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			action, job := evaluateAction(instance)
 			Expect(action).To(Equal(provisioning.Trigger))
 			Expect(job).NotTo(BeNil())
 		})
@@ -285,7 +284,6 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 			Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
 
-			// Simulate stale cache: in-memory instance has no jobs
 			staleInstance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
@@ -296,7 +294,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				},
 			}
 
-			action, job := reconciler.shouldTriggerProvision(ctx, staleInstance)
+			action, job := evaluateAction(staleInstance)
 			Expect(action).To(Equal(provisioning.Requeue))
 			Expect(job).To(BeNil())
 		})

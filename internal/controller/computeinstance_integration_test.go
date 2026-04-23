@@ -166,7 +166,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 	BeforeEach(func() {
 		provider = newControllableProvider()
-		reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, provider, 100*time.Millisecond, DefaultMaxJobHistory, mcmanager.LocalCluster)
+		reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, provider, 100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
 	})
 
 	Context("Provisioning workflow", func() {
@@ -195,10 +195,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
-			// Update status to persist the job ID
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
-
-			// Verify job was triggered
+			// Re-fetch: RunProvisioningLifecycle flushes status after trigger
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
 			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
@@ -261,7 +258,9 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			// Trigger the job
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// Re-fetch: RunProvisioningLifecycle flushes status after trigger
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
 
 			// Simulate job failing
 			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Provisioning failed")

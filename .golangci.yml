@@ -26,24 +26,27 @@ linters:
         - name: comment-spacings
     staticcheck:
       checks:
-      - all
-      - '-QF1008'
+        - all
+        - "-QF1008"
   exclusions:
     generated: lax
     rules:
       - linters:
           - lll
-        path: api/*
+        path: api/
       - linters:
           - dupl
           - lll
-        path: internal/*
+        path: internal/
       - linters:
           - dupl
         path: api/v1alpha1/clusterorder_clusterreference.go
       - linters:
           - dupl
         path: api/v1alpha1/computeinstance_virtualmachinereference.go
+      - linters:
+          - errcheck
+        path: ".*_test.go$"
     paths:
       - third_party$
       - builtin$

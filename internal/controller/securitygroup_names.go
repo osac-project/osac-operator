@@ -21,5 +21,6 @@ import (
 )
 
 var (
-	osacSecurityGroupIDLabel string = fmt.Sprintf("%s/securitygroup-uuid", osacPrefix)
+	osacSecurityGroupIDLabel           string = fmt.Sprintf("%s/securitygroup-uuid", osacPrefix)
+	osacSecurityGroupFeedbackFinalizer string = fmt.Sprintf("%s/securitygroup-feedback", osacPrefix)
 )

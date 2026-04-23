@@ -4,33 +4,38 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: baremetalpools.osac.openshift.io
+  name: publicippools.osac.openshift.io
 spec:
   group: osac.openshift.io
   names:
-    kind: BareMetalPool
-    listKind: BareMetalPoolList
-    plural: baremetalpools
+    kind: PublicIPPool
+    listKind: PublicIPPoolList
+    plural: publicippools
     shortNames:
-    - bmp
-    - bmpool
-    singular: baremetalpool
+    - publicippool
+    singular: publicippool
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.conditions[?(@.type == 'Ready')].reason
-      name: Status
+    - jsonPath: .spec.ipFamily
+      name: IPFamily
       type: string
-    - jsonPath: .spec.profile.name
-      name: Profile
+    - jsonPath: .status.phase
+      name: Phase
       type: string
+    - jsonPath: .status.total
+      name: Total
+      type: integer
+    - jsonPath: .status.available
+      name: Available
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: BareMetalPool is the Schema for the baremetalpools API.
+        description: PublicIPPool is the Schema for the publicippools API
         properties:
           apiVersion:
             description: |-
@@ -50,59 +55,48 @@ spec:
           metadata:
             type: object
           spec:
-            description: BareMetalPoolSpec defines the desired state of BareMetalPool.
+            description: spec defines the desired state of PublicIPPool
             properties:
-              hostSets:
-                description: HostSets defines the number of hosts needed for each
-                  host class.
+              cidrs:
+                description: CIDRs is the list of CIDR blocks for this pool. All CIDRs
+                  must match the declared IPFamily.
                 items:
-                  properties:
-                    hostClass:
-                      description: HostClass specifies the class of the host
-                      minLength: 1
-                      type: string
-                    replicas:
-                      description: Replicas specifies the number of hosts required
-                        for this host class
-                      format: int32
-                      minimum: 0
-                      type: integer
-                  required:
-                  - hostClass
-                  - replicas
-                  type: object
-                  x-kubernetes-validations:
-                  - rule: self.replicas > 0
+                  type: string
+                minItems: 1
                 type: array
-                x-kubernetes-list-map-keys:
-                - hostClass
-                x-kubernetes-list-type: map
-              profile:
+              implementationStrategy:
                 description: |-
-                  Profile specifies configuration for the bare metal pool, such as setup jobs
-                  and setting additional metadata labels
-                properties:
-                  name:
-                    description: Name is the name of the profile
-                    minLength: 1
-                    type: string
-                  templateParameters:
-                    description: |-
-                      TemplateParameters is a JSON-encoded map of the parameter values for the
-                      selected profile.
-                    type: string
-                required:
-                - name
-                type: object
+                  ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).
+                  Defaults to metallb-l2 for v7.0.
+                enum:
+                - metallb-l2
+                type: string
+              ipFamily:
+                description: IPFamily indicates the IP address family for this pool
+                  (IPv4 or IPv6)
+                enum:
+                - IPv4
+                - IPv6
+                type: string
             required:
-            - hostSets
+            - cidrs
+            - ipFamily
             type: object
           status:
-            description: BareMetalPoolStatus defines the observed state of BareMetalPool.
+            description: status defines the observed state of PublicIPPool
             properties:
+              allocated:
+                description: Allocated is the number of IPs currently allocated from
+                  the pool.
+                format: int64
+                type: integer
+              available:
+                description: Available is the number of IPs available for allocation.
+                format: int64
+                type: integer
               conditions:
-                description: Conditions represent the latest available observations
-                  of the BareMetalPool state
+                description: Conditions holds an array of metav1.Condition that describe
+                  the state of the PublicIPPool
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -158,30 +152,13 @@ spec:
                   - type
                   type: object
                 type: array
-              hostSets:
-                description: HostSets shows the current allocation of hosts
-                items:
-                  properties:
-                    hostClass:
-                      description: HostClass specifies the class of the host
-                      minLength: 1
-                      type: string
-                    replicas:
-                      description: Replicas specifies the number of hosts required
-                        for this host class
-                      format: int32
-                      minimum: 0
-                      type: integer
-                  required:
-                  - hostClass
-                  - replicas
-                  type: object
-                type: array
+              desiredConfigVersion:
+                description: DesiredConfigVersion is a hash of the spec, used to detect
+                  spec changes and control retry behavior.
+                type: string
               jobs:
-                description: |-
-                  Jobs tracks the history of provision and deprovision operations
-                  Ordered chronologically, with latest operations at the end
-                  Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
+                description: Jobs holds an array of JobStatus tracking provisioning
+                  and deprovisioning operations
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job
@@ -237,12 +214,24 @@ spec:
                   - type
                   type: object
                 type: array
-              lastUpdated:
-                description: LastUpdated is the timestamp when the status was last
-                  updated
-                format: date-time
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the PublicIPPool
+                enum:
+                - Progressing
+                - Failed
+                - Ready
+                - Deleting
                 type: string
+              total:
+                description: |-
+                  Total is the total number of usable IP addresses across all CIDRs in this pool.
+                  Uses int64 to accommodate large IPv6 CIDR ranges.
+                format: int64
+                type: integer
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

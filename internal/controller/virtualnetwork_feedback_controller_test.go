@@ -25,13 +25,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -67,6 +70,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 		mockServer = &mockVirtualNetworksServer{
 			virtualNetworks: make(map[string]*privatev1.VirtualNetwork),
 			updates:         make([]*privatev1.VirtualNetwork, 0),
+			signals:         make([]string, 0),
 		}
 		listener = bufconn.Listen(1024 * 1024)
 		grpcServer = grpc.NewServer()
@@ -149,6 +153,11 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			// Assert gRPC Update called with state=READY
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+
+			// Assert finalizer was added
+			updated := &v1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnetName, Namespace: vnetNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacVirtualNetworkFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should sync Phase=Progressing to database state=PENDING", func() {
@@ -247,54 +256,6 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED))
 		})
 
-		It("should sync Phase=Deleting to database state=PENDING", func() {
-			ipv4Cidr := testIPv4CIDR
-			vnet := &privatev1.VirtualNetwork{
-				Id: vnetID,
-				Metadata: &privatev1.Metadata{
-					Name: vnetName,
-				},
-				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
-					Ipv4Cidr:     &ipv4Cidr,
-				},
-				Status: &privatev1.VirtualNetworkStatus{
-					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-				},
-			}
-			mockServer.addVirtualNetwork(vnet)
-
-			cr := &v1alpha1.VirtualNetwork{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      vnetName,
-					Namespace: vnetNamespace,
-					Labels: map[string]string{
-						osacVirtualNetworkIDLabel: vnetID,
-					},
-				},
-				Spec: v1alpha1.VirtualNetworkSpec{
-					Region:       "us-west-1",
-					NetworkClass: "udn-net",
-					IPv4CIDR:     "10.0.0.0/16",
-				},
-				Status: v1alpha1.VirtualNetworkStatus{
-					Phase: v1alpha1.VirtualNetworkPhaseDeleting,
-				},
-			}
-			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
-
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      vnetName,
-					Namespace: vnetNamespace,
-				},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-		})
-
 		It("should skip CRs without virtualnetwork-uuid label", func() {
 			cr := &v1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
@@ -325,7 +286,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 
-		It("should skip CRs being deleted", func() {
+		It("should sync Phase=Deleting during deletion and keep finalizer when others present", func() {
 			ipv4Cidr := testIPv4CIDR
 			vnet := &privatev1.VirtualNetwork{
 				Id: vnetID,
@@ -337,20 +298,20 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
-					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 				},
 			}
 			mockServer.addVirtualNetwork(vnet)
 
-			now := metav1.Now()
+			// Create CR with finalizer first (simulating a previously reconciled CR)
 			cr := &v1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              vnetName,
-					Namespace:         vnetNamespace,
-					DeletionTimestamp: &now,
+					Name:      vnetName,
+					Namespace: vnetNamespace,
 					Labels: map[string]string{
 						osacVirtualNetworkIDLabel: vnetID,
 					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer, osacVirtualNetworkFinalizer},
 				},
 				Spec: v1alpha1.VirtualNetworkSpec{
 					Region:       "us-west-1",
@@ -363,6 +324,9 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
 
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      vnetName,
@@ -371,8 +335,251 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called
+			// Assert Update RPC was called with PENDING state (VN has no DELETING state)
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+
+			// Feedback finalizer should still be present (other finalizers remain)
+			updated := &v1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnetName, Namespace: vnetNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacVirtualNetworkFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should sync Phase=Failed during deletion to database state=FAILED", func() {
+			ipv4Cidr := testIPv4CIDR
+			vnet := &privatev1.VirtualNetwork{
+				Id: vnetID,
+				Metadata: &privatev1.Metadata{
+					Name: vnetName,
+				},
+				Spec: &privatev1.VirtualNetworkSpec{
+					NetworkClass: "udn-net",
+					Ipv4Cidr:     &ipv4Cidr,
+				},
+				Status: &privatev1.VirtualNetworkStatus{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+				},
+			}
+			mockServer.addVirtualNetwork(vnet)
+
+			cr := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: vnetID,
+					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer, osacVirtualNetworkFinalizer},
+				},
+				Spec: v1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "udn-net",
+					IPv4CIDR:     "10.0.0.0/16",
+				},
+				Status: v1alpha1.VirtualNetworkStatus{
+					Phase: v1alpha1.VirtualNetworkPhaseFailed,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED))
+		})
+
+		It("should still remove finalizer when signal fails", func() {
+			ipv4Cidr := testIPv4CIDR
+			vnet := &privatev1.VirtualNetwork{
+				Id: vnetID,
+				Metadata: &privatev1.Metadata{
+					Name: vnetName,
+				},
+				Spec: &privatev1.VirtualNetworkSpec{
+					NetworkClass: "udn-net",
+					Ipv4Cidr:     &ipv4Cidr,
+				},
+				Status: &privatev1.VirtualNetworkStatus{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+				},
+			}
+			mockServer.addVirtualNetwork(vnet)
+			mockServer.signalErr = fmt.Errorf("signal unavailable")
+
+			cr := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: vnetID,
+					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer},
+				},
+				Spec: v1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "udn-net",
+					IPv4CIDR:     "10.0.0.0/16",
+				},
+				Status: v1alpha1.VirtualNetworkStatus{
+					Phase: v1alpha1.VirtualNetworkPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &v1alpha1.VirtualNetwork{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: vnetName, Namespace: vnetNamespace}, updated)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should remove feedback finalizer and signal when it is the last finalizer", func() {
+			ipv4Cidr := testIPv4CIDR
+			vnet := &privatev1.VirtualNetwork{
+				Id: vnetID,
+				Metadata: &privatev1.Metadata{
+					Name: vnetName,
+				},
+				Spec: &privatev1.VirtualNetworkSpec{
+					NetworkClass: "udn-net",
+					Ipv4Cidr:     &ipv4Cidr,
+				},
+				Status: &privatev1.VirtualNetworkStatus{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+				},
+			}
+			mockServer.addVirtualNetwork(vnet)
+
+			// Create CR with only feedback finalizer (simulating other finalizers already removed)
+			cr := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: vnetID,
+					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer},
+				},
+				Spec: v1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "udn-net",
+					IPv4CIDR:     "10.0.0.0/16",
+				},
+				Status: v1alpha1.VirtualNetworkStatus{
+					Phase: v1alpha1.VirtualNetworkPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Assert Update RPC was called with PENDING state (VN has no DELETING state)
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+
+			// Assert Signal RPC was called
+			Expect(mockServer.signals).To(HaveLen(1))
+			Expect(mockServer.signals[0]).To(Equal(vnetID))
+
+			// Assert finalizer was removed (CR should be gone since it was the last finalizer)
+			updated := &v1alpha1.VirtualNetwork{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: vnetName, Namespace: vnetNamespace}, updated)
+			Expect(err).To(HaveOccurred()) // CR should be garbage collected
+		})
+
+		It("should remove feedback finalizer when VN record is NotFound during deletion", func() {
+			cr := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: vnetID,
+					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer},
+				},
+				Spec: v1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "udn-net",
+					IPv4CIDR:     "10.0.0.0/16",
+				},
+				Status: v1alpha1.VirtualNetworkStatus{
+					Phase: v1alpha1.VirtualNetworkPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// No gRPC Update or Signal should have been called
 			Expect(mockServer.updates).To(BeEmpty())
+			Expect(mockServer.signals).To(BeEmpty())
+
+			// CR should be gone (finalizer removed, it was the last one)
+			updated := &v1alpha1.VirtualNetwork{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: vnetName, Namespace: vnetNamespace}, updated)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error when VN record is NotFound but CR is not being deleted", func() {
+			cr := &v1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: vnetID,
+					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer},
+				},
+				Spec: v1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "udn-net",
+					IPv4CIDR:     "10.0.0.0/16",
+				},
+				Status: v1alpha1.VirtualNetworkStatus{
+					Phase: v1alpha1.VirtualNetworkPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnetName,
+					Namespace: vnetNamespace,
+				},
+			})
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("should not update if status unchanged", func() {
@@ -399,6 +606,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Labels: map[string]string{
 						osacVirtualNetworkIDLabel: vnetID,
 					},
+					Finalizers: []string{osacVirtualNetworkFeedbackFinalizer},
 				},
 				Spec: v1alpha1.VirtualNetworkSpec{
 					Region:       "us-west-1",
@@ -419,7 +627,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called (state already READY)
+			// Assert no Update RPC was called (state already READY, finalizer pre-seeded)
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 	})
@@ -431,6 +639,8 @@ type mockVirtualNetworksServer struct {
 	mu              sync.Mutex
 	virtualNetworks map[string]*privatev1.VirtualNetwork
 	updates         []*privatev1.VirtualNetwork
+	signals         []string
+	signalErr       error
 }
 
 func (m *mockVirtualNetworksServer) addVirtualNetwork(vnet *privatev1.VirtualNetwork) {
@@ -445,7 +655,7 @@ func (m *mockVirtualNetworksServer) Get(ctx context.Context, req *privatev1.Virt
 
 	vnet, ok := m.virtualNetworks[req.GetId()]
 	if !ok {
-		return nil, fmt.Errorf("virtual network not found: %s", req.GetId())
+		return nil, grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", req.GetId())
 	}
 
 	return &privatev1.VirtualNetworksGetResponse{
@@ -464,4 +674,16 @@ func (m *mockVirtualNetworksServer) Update(ctx context.Context, req *privatev1.V
 	return &privatev1.VirtualNetworksUpdateResponse{
 		Object: vnet,
 	}, nil
+}
+
+func (m *mockVirtualNetworksServer) Signal(ctx context.Context, req *privatev1.VirtualNetworksSignalRequest) (*privatev1.VirtualNetworksSignalResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.signals = append(m.signals, req.GetId())
+
+	if m.signalErr != nil {
+		return nil, m.signalErr
+	}
+	return &privatev1.VirtualNetworksSignalResponse{}, nil
 }

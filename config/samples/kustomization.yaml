@@ -3,4 +3,7 @@ resources:
 - osac_v1alpha1_clusterorder.yaml
 - osac_v1alpha1_computeinstance.yaml
 - osac_v1alpha1_tenant.yaml
+- osac_v1alpha1_virtualnetwork.yaml
+- osac_v1alpha1_subnet.yaml
+- osac_v1alpha1_securitygroup.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

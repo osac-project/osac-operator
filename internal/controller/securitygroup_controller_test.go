@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -122,7 +123,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		It("should add finalizer on first reconcile", func() {
 			// Get the SecurityGroup before reconcile
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).NotTo(BeNil())
 
@@ -147,11 +148,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile processes the resource
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -177,11 +178,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile to trigger provisioning
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify provisioning was triggered (meaning parent was found)
@@ -204,11 +205,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			key := types.NamespacedName{Name: orphanSg.Name, Namespace: orphanSg.Namespace}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile should requeue
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
@@ -230,9 +231,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile twice (first adds finalizer, second provisions)
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify provisioning was triggered (indicating ImplementationStrategy was read)
@@ -251,9 +252,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile twice (first adds finalizer, second sets annotation and provisions)
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -292,9 +293,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile twice
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -332,9 +333,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile twice
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -377,11 +378,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			key := types.NamespacedName{Name: sgNoStrategy.Name, Namespace: sgNoStrategy.Namespace}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile should requeue due to missing ImplementationStrategy
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
@@ -407,7 +408,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup after first reconcile to check job state
@@ -443,16 +444,16 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile triggers provisioning
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
 			// Third reconcile polls status
-			result, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			result, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
@@ -484,11 +485,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile to add finalizer, trigger, and poll
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -520,11 +521,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Reconcile multiple times
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated SecurityGroup
@@ -550,7 +551,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Add finalizer first
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch the SecurityGroup and prepare for deletion
@@ -596,7 +597,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			}
 
 			// Add finalizer first
-			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch the SecurityGroup
@@ -655,7 +656,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
-					Timestamp:     metav1.NewTime(time.Now().UTC()),
+					Timestamp:     metav1.NewTime(time.Now().UTC().Add(-2 * time.Second)),
 					State:         osacv1alpha1.JobStateFailed,
 					Message:       "provision failed",
 					ConfigVersion: testConfigVersion,

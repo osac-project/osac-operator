@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -108,12 +109,12 @@ var _ = Describe("SubnetReconciler", func() {
 		It("should add finalizer on first reconcile", func() {
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      subnet.Name,
 					Namespace: subnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated Subnet
@@ -125,12 +126,12 @@ var _ = Describe("SubnetReconciler", func() {
 		It("should set phase to Progressing on first reconcile", func() {
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      subnet.Name,
 					Namespace: subnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch updated Subnet
@@ -153,12 +154,12 @@ var _ = Describe("SubnetReconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, subnetNoParent)).To(Succeed())
 
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      subnetNoParent.Name,
 					Namespace: subnetNoParent.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
@@ -197,12 +198,12 @@ var _ = Describe("SubnetReconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, subnetNoStrategy)).To(Succeed())
 
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      subnetNoStrategy.Name,
 					Namespace: subnetNoStrategy.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
@@ -227,12 +228,12 @@ var _ = Describe("SubnetReconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, unmanagedSubnet)).To(Succeed())
 
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      unmanagedSubnet.Name,
 					Namespace: unmanagedSubnet.Namespace,
 				},
-			})
+			}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify status was not updated

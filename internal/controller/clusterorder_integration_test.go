@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -45,7 +46,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		reconciler = NewClusterOrderReconciler(
 			k8sClient, k8sClient, k8sClient.Scheme(),
 			clusterOrderTestNamespace, provider,
-			statusPollInterval, DefaultMaxJobHistory,
+			statusPollInterval, provisioning.DefaultMaxJobHistory,
 		)
 	})
 
@@ -172,7 +173,13 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				},
 			}
 
-			action, _ := reconciler.shouldTriggerProvision(ctx, staleInstance)
+			provState := &provisioning.State{
+				Jobs:                 &staleInstance.Status.Jobs,
+				DesiredConfigVersion: staleInstance.Status.DesiredConfigVersion,
+			}
+			action, _ := provisioning.EvaluateAction(provState, func() bool {
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(staleInstance), &osacv1alpha1.ClusterOrder{})
+			})
 			Expect(action).To(Equal(provisioning.Requeue), "should detect non-terminal job via API server and requeue")
 		})
 	})
@@ -249,7 +256,13 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
 			}
 
-			action, job := reconciler.shouldTriggerProvision(ctx, instance)
+			provState := &provisioning.State{
+				Jobs:                 &instance.Status.Jobs,
+				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
+			}
+			action, job := provisioning.EvaluateAction(provState, func() bool {
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ClusterOrder{})
+			})
 			Expect(action).To(Equal(provisioning.Skip))
 			Expect(job).NotTo(BeNil())
 		})

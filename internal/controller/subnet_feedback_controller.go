@@ -15,13 +15,17 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
@@ -52,8 +56,13 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *SubnetFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *SubnetFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		Named("subnet-feedback").
 		For(&v1alpha1.Subnet{}, builder.WithPredicates(NetworkingNamespacePredicate(r.networkingNamespace))).
 		Complete(r)
@@ -93,6 +102,13 @@ func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 	// Step 3: Fetch the subnet from the fulfillment service so we can compare before/after.
 	subnet, err := r.fetchSubnet(ctx, subnetID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info("Subnet record not found during deletion, removing feedback finalizer", "subnetID", subnetID)
+			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		return result, err
 	}
 

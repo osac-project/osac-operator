@@ -58,5 +58,10 @@ func NewProvider(config ProviderConfig) (ProvisioningProvider, error) {
 	}
 }
 
-// DefaultStatusPollInterval is the default interval for polling provider status.
-const DefaultStatusPollInterval = 30 * time.Second
+const (
+	// DefaultStatusPollInterval is the default interval for polling provider status.
+	DefaultStatusPollInterval = 30 * time.Second
+
+	// DefaultMaxJobHistory is the default number of jobs to keep in status.jobs array.
+	DefaultMaxJobHistory = 10
+)

@@ -521,7 +521,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should use default max history when set", func() {
-				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, DefaultMaxJobHistory, mcmanager.LocalCluster)
+				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
 				jobs := []osacv1alpha1.JobStatus{}
 				// Add 15 jobs
 				baseTime := time.Now().UTC()
@@ -535,7 +535,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					jobs = provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				}
 				// Should keep only last 10
-				Expect(jobs).To(HaveLen(DefaultMaxJobHistory))
+				Expect(jobs).To(HaveLen(provisioning.DefaultMaxJobHistory))
 			})
 		})
 
@@ -673,12 +673,16 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 		})
 
-		Describe("shouldTriggerProvision", func() {
-			var reconciler *ComputeInstanceReconciler
-
-			BeforeEach(func() {
-				reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			})
+		Describe("EvaluateAction (formerly shouldTriggerProvision)", func() {
+			evaluateAction := func(instance *osacv1alpha1.ComputeInstance) (provisioning.Action, *osacv1alpha1.JobStatus) {
+				provState := &provisioning.State{
+					Jobs:                 &instance.Status.Jobs,
+					DesiredConfigVersion: instance.Status.DesiredConfigVersion,
+				}
+				return provisioning.EvaluateAction(provState, func() bool {
+					return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ComputeInstance{})
+				})
+			}
 
 			It("should trigger when no job exists and config versions differ", func() {
 				instance := &osacv1alpha1.ComputeInstance{
@@ -686,7 +690,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						DesiredConfigVersion: "abc123",
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Trigger))
 				Expect(job).To(BeNil())
 			})
@@ -698,7 +702,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs:                 []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: ""}},
 					},
 				}
-				action, _ := reconciler.shouldTriggerProvision(ctx, instance)
+				action, _ := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Trigger))
 			})
 
@@ -708,7 +712,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs: []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateRunning}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Poll))
 				Expect(job).NotTo(BeNil())
 				Expect(job.JobID).To(Equal("job-1"))
@@ -720,7 +724,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs: []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStatePending}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Poll))
 				Expect(job).NotTo(BeNil())
 			})
@@ -732,7 +736,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs:                 []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "abc123"}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Skip))
 				Expect(job).NotTo(BeNil())
 			})
@@ -744,7 +748,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs:                 []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "old-version"}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Trigger))
 				Expect(job).NotTo(BeNil())
 			})
@@ -756,7 +760,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs:                 []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateFailed, ConfigVersion: "old-version"}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Trigger))
 				Expect(job).NotTo(BeNil())
 			})
@@ -768,7 +772,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Jobs:                 []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateFailed, ConfigVersion: "abc123"}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Backoff))
 				Expect(job).NotTo(BeNil())
 			})
@@ -787,13 +791,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 						}},
 					},
 				}
-				action, job := reconciler.shouldTriggerProvision(ctx, instance)
+				action, job := evaluateAction(instance)
 				Expect(action).To(Equal(provisioning.Backoff))
 				Expect(job).NotTo(BeNil())
 			})
 
 			It("should requeue when API server has non-terminal job but cache shows none", func() {
-				// Create instance in API server with a running provision job
 				instanceName := "test-api-server-check-no-cache"
 				apiInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
@@ -814,7 +817,6 @@ var _ = Describe("ComputeInstance Controller", func() {
 				}
 				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
 
-				// Simulate stale cache: in-memory instance has no jobs
 				staleInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      instanceName,
@@ -825,13 +827,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				}
 
-				action, job := reconciler.shouldTriggerProvision(ctx, staleInstance)
+				action, job := evaluateAction(staleInstance)
 				Expect(action).To(Equal(provisioning.Requeue))
 				Expect(job).To(BeNil())
 			})
 
 			It("should requeue when API server has non-terminal job but cache shows terminal job with version mismatch", func() {
-				// Create instance in API server with a running provision job (newer than the terminal one)
 				instanceName := "test-api-server-check-stale-terminal"
 				apiInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
@@ -854,7 +855,6 @@ var _ = Describe("ComputeInstance Controller", func() {
 				}
 				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
 
-				// Simulate stale cache: in-memory instance only has the old terminal job
 				staleInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      instanceName,
@@ -868,13 +868,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				}
 
-				action, job := reconciler.shouldTriggerProvision(ctx, staleInstance)
+				action, job := evaluateAction(staleInstance)
 				Expect(action).To(Equal(provisioning.Requeue))
 				Expect(job).To(BeNil())
 			})
 
 			It("should trigger when API server also shows no non-terminal job", func() {
-				// Create instance in API server with only a terminal job
 				instanceName := "test-api-server-check-all-terminal"
 				apiInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
@@ -895,7 +894,6 @@ var _ = Describe("ComputeInstance Controller", func() {
 				}
 				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
 
-				// In-memory instance matches API server — terminal job, ConfigVersion differs from desired
 				staleInstance := &osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      instanceName,
@@ -909,7 +907,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				}
 
-				action, job := reconciler.shouldTriggerProvision(ctx, staleInstance)
+				action, job := evaluateAction(staleInstance)
 				Expect(action).To(Equal(provisioning.Trigger))
 				Expect(job).NotTo(BeNil())
 				Expect(job.JobID).To(Equal("done-job"))

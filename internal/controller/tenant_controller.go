@@ -61,6 +61,9 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
 func NewTenantReconciler(mgr mcmanager.Manager, tenantNamespace string, targetCluster mc.ClusterName) *TenantReconciler {
+	if mgr == nil {
+		panic("mgr must not be nil")
+	}
 	return &TenantReconciler{
 		Client:          mgr.GetLocalManager().GetClient(),
 		Scheme:          mgr.GetLocalManager().GetScheme(),

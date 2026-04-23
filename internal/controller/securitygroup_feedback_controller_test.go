@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
@@ -67,6 +68,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 		mockServer = &mockSecurityGroupsServer{
 			securityGroups: make(map[string]*privatev1.SecurityGroup),
 			updates:        make([]*privatev1.SecurityGroup, 0),
+			signals:        make([]string, 0),
 		}
 		listener = bufconn.Listen(1024 * 1024)
 		grpcServer = grpc.NewServer()
@@ -145,6 +147,11 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			// Assert gRPC Update called with state=READY
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY))
+
+			// Assert finalizer was added
+			updated := &v1alpha1.SecurityGroup{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: sgName, Namespace: sgNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacSecurityGroupFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should sync Phase=Progressing to database state=PENDING", func() {
@@ -235,50 +242,6 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED))
 		})
 
-		It("should sync Phase=Deleting to database state=PENDING", func() {
-			sg := &privatev1.SecurityGroup{
-				Id: sgID,
-				Metadata: &privatev1.Metadata{
-					Name: sgName,
-				},
-				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
-				},
-				Status: &privatev1.SecurityGroupStatus{
-					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-				},
-			}
-			mockServer.addSecurityGroup(sg)
-
-			cr := &v1alpha1.SecurityGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      sgName,
-					Namespace: sgNamespace,
-					Labels: map[string]string{
-						osacSecurityGroupIDLabel: sgID,
-					},
-				},
-				Spec: v1alpha1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
-				},
-				Status: v1alpha1.SecurityGroupStatus{
-					Phase: v1alpha1.SecurityGroupPhaseDeleting,
-				},
-			}
-			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
-
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      sgName,
-					Namespace: sgNamespace,
-				},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
-		})
-
 		It("should skip CRs without securitygroup-uuid label", func() {
 			cr := &v1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{
@@ -307,7 +270,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 
-		It("should skip CRs being deleted", func() {
+		It("should sync Phase=Deleting to database state=DELETING during deletion", func() {
 			sg := &privatev1.SecurityGroup{
 				Id: sgID,
 				Metadata: &privatev1.Metadata{
@@ -317,20 +280,20 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					VirtualNetwork: testVnetRef,
 				},
 				Status: &privatev1.SecurityGroupStatus{
-					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
 				},
 			}
 			mockServer.addSecurityGroup(sg)
 
-			now := metav1.Now()
+			// Create CR with finalizer first (simulating a previously reconciled CR)
 			cr := &v1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              sgName,
-					Namespace:         sgNamespace,
-					DeletionTimestamp: &now,
+					Name:      sgName,
+					Namespace: sgNamespace,
 					Labels: map[string]string{
 						osacSecurityGroupIDLabel: sgID,
 					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer, osacSecurityGroupFinalizer},
 				},
 				Spec: v1alpha1.SecurityGroupSpec{
 					VirtualNetwork: testVnetRef,
@@ -341,6 +304,9 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
 
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      sgName,
@@ -349,8 +315,123 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called
-			Expect(mockServer.updates).To(BeEmpty())
+			// Assert Update RPC was called with DELETING state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETING))
+
+			// Feedback finalizer should still be present (other finalizers remain)
+			updated := &v1alpha1.SecurityGroup{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: sgName, Namespace: sgNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacSecurityGroupFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should sync Phase=Failed during deletion to database state=DELETE_FAILED", func() {
+			sg := &privatev1.SecurityGroup{
+				Id: sgID,
+				Metadata: &privatev1.Metadata{
+					Name: sgName,
+				},
+				Spec: &privatev1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: &privatev1.SecurityGroupStatus{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				},
+			}
+			mockServer.addSecurityGroup(sg)
+
+			// Create CR with finalizers (simulating a previously reconciled CR)
+			cr := &v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sgName,
+					Namespace: sgNamespace,
+					Labels: map[string]string{
+						osacSecurityGroupIDLabel: sgID,
+					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer, osacSecurityGroupFinalizer},
+				},
+				Spec: v1alpha1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: v1alpha1.SecurityGroupStatus{
+					Phase: v1alpha1.SecurityGroupPhaseFailed,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      sgName,
+					Namespace: sgNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Assert Update RPC was called with DELETE_FAILED state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETE_FAILED))
+		})
+
+		It("should remove feedback finalizer and signal when it is the last finalizer", func() {
+			sg := &privatev1.SecurityGroup{
+				Id: sgID,
+				Metadata: &privatev1.Metadata{
+					Name: sgName,
+				},
+				Spec: &privatev1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: &privatev1.SecurityGroupStatus{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				},
+			}
+			mockServer.addSecurityGroup(sg)
+
+			// Create CR with only feedback finalizer (simulating other finalizers already removed)
+			cr := &v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sgName,
+					Namespace: sgNamespace,
+					Labels: map[string]string{
+						osacSecurityGroupIDLabel: sgID,
+					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: v1alpha1.SecurityGroupStatus{
+					Phase: v1alpha1.SecurityGroupPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			// Mark for deletion
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      sgName,
+					Namespace: sgNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Assert Update RPC was called with DELETING state
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETING))
+
+			// Assert Signal RPC was called
+			Expect(mockServer.signals).To(HaveLen(1))
+			Expect(mockServer.signals[0]).To(Equal(sgID))
+
+			// Assert finalizer was removed (CR should be gone since it was the last finalizer)
+			updated := &v1alpha1.SecurityGroup{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: sgName, Namespace: sgNamespace}, updated)
+			Expect(err).To(HaveOccurred()) // CR should be garbage collected
 		})
 
 		It("should not update if status unchanged", func() {
@@ -375,6 +456,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Labels: map[string]string{
 						osacSecurityGroupIDLabel: sgID,
 					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer},
 				},
 				Spec: v1alpha1.SecurityGroupSpec{
 					VirtualNetwork: testVnetRef,
@@ -393,7 +475,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called (state already READY)
+			// Assert no Update RPC was called (state already READY, finalizer pre-seeded)
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 	})
@@ -405,6 +487,7 @@ type mockSecurityGroupsServer struct {
 	mu             sync.Mutex
 	securityGroups map[string]*privatev1.SecurityGroup
 	updates        []*privatev1.SecurityGroup
+	signals        []string
 }
 
 func (m *mockSecurityGroupsServer) addSecurityGroup(sg *privatev1.SecurityGroup) {
@@ -438,4 +521,13 @@ func (m *mockSecurityGroupsServer) Update(ctx context.Context, req *privatev1.Se
 	return &privatev1.SecurityGroupsUpdateResponse{
 		Object: sg,
 	}, nil
+}
+
+func (m *mockSecurityGroupsServer) Signal(ctx context.Context, req *privatev1.SecurityGroupsSignalRequest) (*privatev1.SecurityGroupsSignalResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.signals = append(m.signals, req.GetId())
+
+	return &privatev1.SecurityGroupsSignalResponse{}, nil
 }

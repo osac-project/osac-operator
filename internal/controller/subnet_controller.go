@@ -28,6 +28,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -36,23 +40,51 @@ import (
 const (
 	// osacSubnetFinalizer is the finalizer for Subnet resources
 	osacSubnetFinalizer = "osac.openshift.io/subnet-finalizer"
-
-	// defaultSubnetStatusPollInterval is the default interval for polling job status
-	defaultSubnetStatusPollInterval = 30 * time.Second
-
-	// defaultSubnetMaxJobHistory is the default maximum number of jobs to keep in history
-	defaultSubnetMaxJobHistory = 10
 )
 
 // SubnetReconciler reconciles a Subnet object
 type SubnetReconciler struct {
 	client.Client
-	APIReader            client.Reader
-	Scheme               *runtime.Scheme
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	// mgr and targetCluster are stored for future multi-cluster target client resolution
+	mgr                  mcmanager.Manager
 	NetworkingNamespace  string
 	ProvisioningProvider provisioning.ProvisioningProvider
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
+	targetCluster        mc.ClusterName
+}
+
+// NewSubnetReconciler creates a new reconciler for Subnet resources.
+func NewSubnetReconciler(
+	mgr mcmanager.Manager,
+	networkingNamespace string,
+	provisioningProvider provisioning.ProvisioningProvider,
+	statusPollInterval time.Duration,
+	maxJobHistory int,
+	targetCluster mc.ClusterName,
+) *SubnetReconciler {
+	if mgr == nil {
+		panic("mgr must not be nil")
+	}
+	if statusPollInterval <= 0 {
+		statusPollInterval = provisioning.DefaultStatusPollInterval
+	}
+	if maxJobHistory <= 0 {
+		maxJobHistory = provisioning.DefaultMaxJobHistory
+	}
+	return &SubnetReconciler{
+		Client:               mgr.GetLocalManager().GetClient(),
+		APIReader:            mgr.GetLocalManager().GetAPIReader(),
+		Scheme:               mgr.GetLocalManager().GetScheme(),
+		mgr:                  mgr,
+		NetworkingNamespace:  networkingNamespace,
+		ProvisioningProvider: provisioningProvider,
+		StatusPollInterval:   statusPollInterval,
+		MaxJobHistory:        maxJobHistory,
+		targetCluster:        targetCluster,
+	}
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch;create;update;patch;delete
@@ -62,7 +94,7 @@ type SubnetReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *SubnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SubnetReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	subnet := &v1alpha1.Subnet{}
@@ -100,10 +132,12 @@ func (r *SubnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SubnetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Subnet{}).
-		WithEventFilter(NetworkingNamespacePredicate(r.NetworkingNamespace)).
+func (r *SubnetReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.Subnet{},
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		Complete(r)
 }
 
@@ -225,7 +259,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 		&provisioning.State{Jobs: &subnet.Status.Jobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
-		r.getMaxJobHistory(), r.getStatusPollInterval(),
+		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { subnet.Status.Phase = v1alpha1.SubnetPhaseFailed },
 			OnSuccess: func(_ provisioning.ProvisionStatus) { subnet.Status.Phase = v1alpha1.SubnetPhaseReady },
@@ -233,6 +267,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{})
 		},
+		func() error { return r.Status().Update(ctx, subnet) },
 	)
 }
 
@@ -257,14 +292,14 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, subnet)
 		if err != nil {
 			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
 		// Handle provider action
 		switch result.Action {
 		case provisioning.DeprovisionWaiting:
 			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 
 		case provisioning.DeprovisionSkipped:
 			log.Info("provider skipped deprovisioning")
@@ -279,9 +314,9 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, r.getMaxJobHistory())
+			subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
 
@@ -292,7 +327,7 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
 		provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update job status
@@ -304,7 +339,7 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
 		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Job reached terminal state (Succeeded, Failed, or Canceled)
@@ -321,7 +356,7 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 			"jobID", latestDeprovisionJob.JobID,
 			"state", status.State,
 			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	} else {
 		// Allow process to continue
 		log.Info("deprovision job did not succeed, allowing process to continue",
@@ -330,20 +365,4 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 			"message", updatedJob.Message)
 		return ctrl.Result{}, nil
 	}
-}
-
-// getMaxJobHistory returns the configured max job history or the default.
-func (r *SubnetReconciler) getMaxJobHistory() int {
-	if r.MaxJobHistory > 0 {
-		return r.MaxJobHistory
-	}
-	return defaultSubnetMaxJobHistory
-}
-
-// getStatusPollInterval returns the configured status poll interval or the default.
-func (r *SubnetReconciler) getStatusPollInterval() time.Duration {
-	if r.StatusPollInterval > 0 {
-		return r.StatusPollInterval
-	}
-	return defaultSubnetStatusPollInterval
 }

@@ -21,5 +21,6 @@ import (
 )
 
 var (
-	osacVirtualNetworkIDLabel string = fmt.Sprintf("%s/virtualnetwork-uuid", osacPrefix)
+	osacVirtualNetworkIDLabel           string = fmt.Sprintf("%s/virtualnetwork-uuid", osacPrefix)
+	osacVirtualNetworkFeedbackFinalizer string = fmt.Sprintf("%s/virtualnetwork-feedback", osacPrefix)
 )
