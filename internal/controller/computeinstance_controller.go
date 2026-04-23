@@ -23,8 +23,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -505,11 +505,11 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 }
 
-// resolveSubnetNamespace looks up the Subnet CR referenced by spec.subnetRef
-// and returns the subnet namespace (which equals the Subnet CR name).
+// resolveSubnetTargetNamespace looks up the Subnet CR referenced by spec.subnetRef
+// and returns the subnet target namespace (which equals the Subnet CR name).
 // Returns empty string if subnetRef is not set.
 // Returns error if Subnet CR lookup fails.
-func (r *ComputeInstanceReconciler) resolveSubnetNamespace(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
+func (r *ComputeInstanceReconciler) resolveSubnetTargetNamespace(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if instance.Spec.SubnetRef == "" {
@@ -540,12 +540,12 @@ func (r *ComputeInstanceReconciler) resolveSubnetNamespace(ctx context.Context, 
 	return subnetTargetNamespace, nil
 }
 
-// syncSubnetNamespaceAnnotation ensures the subnet-target-namespace annotation is set
+// syncSubnetTargetNamespaceAnnotation ensures the subnet-target-namespace annotation is set
 // when SubnetRef is configured. SubnetRef is immutable, so the annotation only
 // needs to be resolved and written once; subsequent reconciles reuse the cached
 // annotation value. Returns the resolved namespace, whether the annotation was
 // written, and any error.
-func (r *ComputeInstanceReconciler) syncSubnetNamespaceAnnotation(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, bool, error) {
+func (r *ComputeInstanceReconciler) syncSubnetTargetNamespaceAnnotation(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, bool, error) {
 	if instance.Spec.SubnetRef == "" {
 		return "", false, nil
 	}
@@ -555,7 +555,7 @@ func (r *ComputeInstanceReconciler) syncSubnetNamespaceAnnotation(ctx context.Co
 		return ns, false, nil
 	}
 
-	subnetTargetNamespace, err := r.resolveSubnetNamespace(ctx, instance)
+	subnetTargetNamespace, err := r.resolveSubnetTargetNamespace(ctx, instance)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", false, fmt.Errorf("%w: %w", errSubnetNotFound, err)
@@ -579,7 +579,7 @@ func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, i
 
 	metadataChanged := controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer)
 
-	subnetTargetNamespace, changed, err := r.syncSubnetNamespaceAnnotation(ctx, instance)
+	subnetTargetNamespace, changed, err := r.syncSubnetTargetNamespaceAnnotation(ctx, instance)
 	if err != nil {
 		log.Error(err, "Failed to resolve subnet target namespace")
 		return "", err
