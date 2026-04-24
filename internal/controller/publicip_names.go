@@ -17,8 +17,7 @@ import (
 	"fmt"
 )
 
-// Used by the feedback controller (MGMT-23908).
 var (
-	osacPublicIPIDLabel           string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)     //nolint:unused
-	osacPublicIPFeedbackFinalizer string = fmt.Sprintf("%s/publicip-feedback", osacPrefix) //nolint:unused
+	osacPublicIPIDLabel           string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)
+	osacPublicIPFeedbackFinalizer string = fmt.Sprintf("%s/publicip-feedback", osacPrefix)
 )

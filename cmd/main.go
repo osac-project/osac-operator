@@ -525,11 +525,21 @@ func setupNetworkingControllers(
 	}
 
 	// Setup PublicIP controller
-	// Feedback controller is tracked separately in MGMT-23908.
 	if err := controller.NewPublicIPReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
 		maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
+	}
+
+	// Setup PublicIP feedback controller
+	if grpcConn != nil {
+		if err := controller.NewPublicIPFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("publicip feedback controller: %w", err)
+		}
 	}
 
 	return nil
