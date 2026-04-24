@@ -18,8 +18,8 @@ spec:
     - jsonPath: .status.namespace
       name: Tenant Namespace
       type: string
-    - jsonPath: .status.storageClasses[*].tier
-      name: Storage Tiers
+    - jsonPath: .status.storageClass
+      name: Storage Class
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -117,35 +117,10 @@ spec:
               phase:
                 description: Phase is the phase of the tenant
                 type: string
-              storageClasses:
-                description: |-
-                  StorageClasses lists all resolved StorageClass mappings for the tenant,
-                  one per storage tier.
-                items:
-                  description: |-
-                    ResolvedStorageClass captures a single resolved StorageClass for a specific
-                    storage tier. The Tenant controller populates one entry per tier.
-                  properties:
-                    name:
-                      description: Name is the name of the resolved Kubernetes StorageClass.
-                      minLength: 1
-                      type: string
-                    tier:
-                      description: |-
-                        Tier is the storage tier this StorageClass provides,
-                        taken from the osac.openshift.io/storage-tier label.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
-                      type: string
-                  required:
-                  - name
-                  - tier
-                  type: object
-                type: array
-                x-kubernetes-list-map-keys:
-                - tier
-                x-kubernetes-list-type: map
+              storageClass:
+                description: StorageClass is the StorageClass allocated to the tenant
+                  on the target cluster
+                type: string
             type: object
         type: object
     served: true

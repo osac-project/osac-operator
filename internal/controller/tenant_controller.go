@@ -116,7 +116,7 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 	// Ready. Any early return below leaves the status in a clean Progressing state.
 	instance.Status.Phase = v1alpha1.TenantPhaseProgressing
 	instance.Status.Namespace = ""
-	instance.Status.StorageClasses = nil
+	instance.Status.StorageClass = ""
 
 	// Get target cluster client where namespace, StorageClass, and UDN are reconciled
 	targetClient, err := r.getTargetClient(ctx)
@@ -166,9 +166,7 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 		scResult.message)
 
 	instance.Status.Namespace = namespace.GetName()
-	instance.Status.StorageClasses = []v1alpha1.ResolvedStorageClass{
-		{Name: scResult.name, Tier: "default"},
-	}
+	instance.Status.StorageClass = scResult.name
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 
 	return ctrl.Result{}, nil
@@ -381,13 +379,11 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 }
 
 // storageClassTenantPredicate returns a predicate that passes only StorageClasses
-// carrying both the osac.openshift.io/tenant and osac.openshift.io/storage-tier labels.
+// carrying the osac.openshift.io/tenant label (any value).
 func storageClassTenantPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		labels := obj.GetLabels()
-		_, hasTenant := labels[osacTenantAnnotation]
-		_, hasTier := labels[osacStorageTierLabel]
-		return hasTenant && hasTier
+		_, exists := obj.GetLabels()[osacTenantAnnotation]
+		return exists
 	})
 }
 

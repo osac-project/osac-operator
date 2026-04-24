@@ -95,7 +95,7 @@ var _ = Describe("Tenant Controller", func() {
 			// found) while still correctly setting status conditions.
 			reconcileAndAssertStatus := func(
 				expectedPhase v1alpha1.TenantPhaseType,
-				expectedSCName string,
+				expectedSC string,
 				expectedNSStatus metav1.ConditionStatus,
 				expectedNSReason string,
 				expectedSCStatus metav1.ConditionStatus,
@@ -105,12 +105,7 @@ var _ = Describe("Tenant Controller", func() {
 					_ = doReconcile()
 					g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 					g.Expect(tenant.Status.Phase).To(Equal(expectedPhase))
-					if expectedSCName == "" {
-						g.Expect(tenant.Status.StorageClasses).To(BeNil())
-					} else {
-						g.Expect(tenant.Status.StorageClasses).To(HaveLen(1))
-						g.Expect(tenant.Status.StorageClasses[0].Name).To(Equal(expectedSCName))
-					}
+					g.Expect(tenant.Status.StorageClass).To(Equal(expectedSC))
 
 					nsCond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
 					g.Expect(nsCond).NotTo(BeNil())

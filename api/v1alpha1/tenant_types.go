@@ -56,23 +56,6 @@ const (
 	TenantReasonMultipleDefaultsFound = "MultipleDefaultsFound"
 )
 
-// ResolvedStorageClass captures a single resolved StorageClass for a specific
-// storage tier. The Tenant controller populates one entry per tier.
-type ResolvedStorageClass struct {
-	// Name is the name of the resolved Kubernetes StorageClass.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Tier is the storage tier this StorageClass provides,
-	// taken from the osac.openshift.io/storage-tier label.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`
-	Tier string `json:"tier"`
-}
-
 // TenantStatus defines the observed state of Tenant.
 type TenantStatus struct {
 	// Phase is the phase of the tenant
@@ -81,12 +64,8 @@ type TenantStatus struct {
 	// Namespace is the namespace allocated to the tenant on the target cluster
 	Namespace string `json:"namespace,omitempty"`
 
-	// StorageClasses lists all resolved StorageClass mappings for the tenant,
-	// one per storage tier.
-	// +kubebuilder:validation:Optional
-	// +listType=map
-	// +listMapKey=tier
-	StorageClasses []ResolvedStorageClass `json:"storageClasses,omitempty"`
+	// StorageClass is the StorageClass allocated to the tenant on the target cluster
+	StorageClass string `json:"storageClass,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the Tenant
 	// +kubebuilder:validation:Optional
@@ -96,7 +75,7 @@ type TenantStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
-// +kubebuilder:printcolumn:name="Storage Tiers",type=string,JSONPath=`.status.storageClasses[*].tier`
+// +kubebuilder:printcolumn:name="Storage Class",type=string,JSONPath=`.status.storageClass`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
 // Tenant is the Schema for the tenants API.
