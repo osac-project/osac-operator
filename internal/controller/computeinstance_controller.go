@@ -642,11 +642,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	instance.Status.TenantReference = &v1alpha1.TenantReferenceType{
-		Name:      tenant.Name,
-		Namespace: tenant.Status.Namespace,
-	}
-
 	targetClient, err := r.getTargetClient(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
