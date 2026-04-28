@@ -426,7 +426,7 @@ func setupComputeInstanceControllers(
 }
 
 // setupTenantController registers the Tenant controller.
-// For AAP provider, it creates tenant-specific templates (osac-create-tenant / osac-delete-tenant).
+// For AAP provider, it creates tenant-specific templates (osac-create-org / osac-delete-org).
 // For EDA, tenant provisioning is not supported — the controller waits for a manually-created StorageClass.
 func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 	targetCluster := targetClusterFromManager(mgr)
@@ -444,8 +444,8 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 		aapURL := os.Getenv(envAAPURL)
 		aapToken := os.Getenv(envAAPToken)
 		if aapURL != "" && aapToken != "" {
-			tenantProvisionTemplate := helpers.GetEnvWithDefault(envTenantAAPProvisionTemplate, "osac-create-tenant")
-			tenantDeprovisionTemplate := helpers.GetEnvWithDefault(envTenantAAPDeprovisionTemplate, "osac-delete-tenant")
+			tenantProvisionTemplate := helpers.GetEnvWithDefault(envTenantAAPProvisionTemplate, "osac-create-org")
+			tenantDeprovisionTemplate := helpers.GetEnvWithDefault(envTenantAAPDeprovisionTemplate, "osac-delete-org")
 			aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
 
 			var err error
