@@ -187,10 +187,11 @@ type storageClassResult struct {
 }
 
 // storageTierFromLabel reads the osac.openshift.io/storage-tier label from a
-// StorageClass. Returns "default" if the label is absent or empty.
+// StorageClass, normalized to lowercase. Returns "default" if the label is
+// absent or empty.
 func storageTierFromLabel(sc *storagev1.StorageClass) string {
 	if tier := sc.GetLabels()[osacStorageTierLabel]; tier != "" {
-		return tier
+		return strings.ToLower(tier)
 	}
 	return "default"
 }
