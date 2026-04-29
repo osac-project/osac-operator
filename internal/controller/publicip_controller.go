@@ -190,9 +190,18 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 	if publicIP.Annotations == nil {
 		publicIP.Annotations = make(map[string]string)
 	}
+	needsUpdate := false
 	if publicIP.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		publicIP.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
+		needsUpdate = true
+	}
+	if publicIP.Annotations[osacPublicIPPoolNameAnnotation] != pool.Name {
+		publicIP.Annotations[osacPublicIPPoolNameAnnotation] = pool.Name
+		log.Info("setting publicippool-name annotation", "poolName", pool.Name)
+		needsUpdate = true
+	}
+	if needsUpdate {
 		if err := r.Update(ctx, publicIP); err != nil {
 			return ctrl.Result{}, err
 		}

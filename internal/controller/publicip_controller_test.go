@@ -177,6 +177,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			Expect(updated.Annotations[osacPublicIPPoolNameAnnotation]).To(Equal("pool-k8s-name"))
 		})
 
 		It("should requeue when parent PublicIPPool is not found", func() {
@@ -248,6 +249,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultPublicIPPoolImplementationStrategy))
+			Expect(updated.Annotations[osacPublicIPPoolNameAnnotation]).To(Equal("pool-no-strategy"))
 		})
 
 		It("should set ConfigurationApplied condition to True", func() {

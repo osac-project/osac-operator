@@ -34,6 +34,10 @@ const (
 	// (e.g., "cudn" -> cudn_virtual_network or cudn_subnet role).
 	osacImplementationStrategyAnnotation = osacPrefix + "/implementation-strategy"
 
+	// osacPublicIPPoolNameAnnotation is the K8s resource name of the parent PublicIPPool.
+	// set on PublicIP CRs
+	osacPublicIPPoolNameAnnotation = osacPrefix + "/publicippool-name"
+
 	// defaultPublicIPPoolImplementationStrategy is the fallback strategy when none is specified.
 	// Used by PublicIPPool (from its own spec) and PublicIP (inherited from parent pool).
 	defaultPublicIPPoolImplementationStrategy = "metallb-l2"
