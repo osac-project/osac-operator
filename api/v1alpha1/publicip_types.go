@@ -63,6 +63,9 @@ const (
 	// PublicIPStateAllocated means the IP has been allocated from the pool
 	PublicIPStateAllocated PublicIPStateType = "Allocated"
 
+	// PublicIPStateAttaching means the IP is being attached to a ComputeInstance
+	PublicIPStateAttaching PublicIPStateType = "Attaching"
+
 	// PublicIPStateAttached means the IP is attached to a ComputeInstance
 	PublicIPStateAttached PublicIPStateType = "Attached"
 
@@ -100,7 +103,7 @@ type PublicIPStatus struct {
 	// State tracks the attachment lifecycle of the PublicIP
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Allocated;Attached;Releasing;Failed
+	// +kubebuilder:validation:Enum=Pending;Allocated;Attaching;Attached;Releasing;Failed
 	State PublicIPStateType `json:"state,omitempty"`
 }
 
