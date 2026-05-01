@@ -503,6 +503,181 @@ var _ = Describe("PublicIPReconciler", func() {
 		})
 	})
 
+	Context("ComputeInstance target namespace annotation", func() {
+		const (
+			testCINamespace = "osac-computeinstance"
+			testCIUUID      = "ci-uuid-456"
+			testTenantNS    = "tenant-ns-abc"
+		)
+
+		It("should set publicip-target-namespace annotation when computeInstance is set", func() {
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ci",
+					Namespace: testCINamespace,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel: testCIUUID,
+					},
+				},
+			}
+
+			ipWithCI := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-with-ci",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testCIUUID,
+				},
+			}
+
+			ciClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(ipWithCI, parentPool, ci).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			// Apply status separately — WithStatusSubresource strips status from WithObjects.
+			ci.Status.TenantReference = &osacv1alpha1.TenantReferenceType{
+				Name:      "test-tenant",
+				Namespace: testTenantNS,
+			}
+			Expect(ciClient.Status().Update(testCtx, ci)).To(Succeed())
+
+			reconciler.Client = ciClient
+			reconciler.APIReader = ciClient
+			reconciler.ComputeInstanceNamespace = testCINamespace
+
+			key := types.NamespacedName{Name: ipWithCI.Name, Namespace: ipWithCI.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: resolves pool and CI annotations
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(ciClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacPublicIPTargetNamespaceAnnotation]).To(Equal(testTenantNS))
+		})
+
+		It("should clear publicip-target-namespace annotation when computeInstance is cleared", func() {
+			ipWithAnnotation := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-clear-ci",
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacPublicIPTargetNamespaceAnnotation: testTenantNS,
+					},
+					Finalizers: []string{osacPublicIPFinalizer},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
+				},
+			}
+
+			clearClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(ipWithAnnotation, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			reconciler.Client = clearClient
+			reconciler.APIReader = clearClient
+
+			key := types.NamespacedName{Name: ipWithAnnotation.Name, Namespace: ipWithAnnotation.Namespace}
+
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(clearClient.Get(testCtx, key, updated)).To(Succeed())
+			_, exists := updated.Annotations[osacPublicIPTargetNamespaceAnnotation]
+			Expect(exists).To(BeFalse())
+		})
+
+		It("should requeue when ComputeInstance not found", func() {
+			ipMissingCI := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-missing-ci",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: "nonexistent-ci-uuid",
+				},
+			}
+
+			missingClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(ipMissingCI, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			reconciler.Client = missingClient
+			reconciler.APIReader = missingClient
+			reconciler.ComputeInstanceNamespace = testCINamespace
+
+			key := types.NamespacedName{Name: ipMissingCI.Name, Namespace: ipMissingCI.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: CI not found, requeue
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when ComputeInstance has no TenantReference", func() {
+			ciNoTenant := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ci-no-tenant",
+					Namespace: testCINamespace,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel: testCIUUID,
+					},
+				},
+			}
+
+			ipNoTenant := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-no-tenant",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testCIUUID,
+				},
+			}
+
+			noTenantClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(ipNoTenant, parentPool, ciNoTenant).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			reconciler.Client = noTenantClient
+			reconciler.APIReader = noTenantClient
+			reconciler.ComputeInstanceNamespace = testCINamespace
+
+			key := types.NamespacedName{Name: ipNoTenant.Name, Namespace: ipNoTenant.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: CI found but no TenantReference, requeue
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+	})
+
 	// The provisioning lifecycle uses a config version (hash of spec + strategy) to
 	// detect spec changes. When provisioning fails, the controller backs off with
 	// exponential delay. But if the spec changes (new config version), it retries

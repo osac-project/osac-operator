@@ -51,20 +51,22 @@ const (
 // Phase transitions: "" -> Progressing -> Ready/Failed; on delete: Deleting.
 type PublicIPReconciler struct {
 	client.Client
-	APIReader            client.Reader
-	Scheme               *runtime.Scheme
-	mgr                  mcmanager.Manager
-	NetworkingNamespace  string
-	ProvisioningProvider provisioning.ProvisioningProvider
-	StatusPollInterval   time.Duration
-	MaxJobHistory        int
-	targetCluster        mc.ClusterName
+	APIReader                client.Reader
+	Scheme                   *runtime.Scheme
+	mgr                      mcmanager.Manager
+	NetworkingNamespace      string
+	ComputeInstanceNamespace string
+	ProvisioningProvider     provisioning.ProvisioningProvider
+	StatusPollInterval       time.Duration
+	MaxJobHistory            int
+	targetCluster            mc.ClusterName
 }
 
 // NewPublicIPReconciler creates a new reconciler for PublicIP resources.
 func NewPublicIPReconciler(
 	mgr mcmanager.Manager,
 	networkingNamespace string,
+	computeInstanceNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -80,15 +82,16 @@ func NewPublicIPReconciler(
 		maxJobHistory = provisioning.DefaultMaxJobHistory
 	}
 	return &PublicIPReconciler{
-		Client:               mgr.GetLocalManager().GetClient(),
-		APIReader:            mgr.GetLocalManager().GetAPIReader(),
-		Scheme:               mgr.GetLocalManager().GetScheme(),
-		mgr:                  mgr,
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: provisioningProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-		targetCluster:        targetCluster,
+		Client:                   mgr.GetLocalManager().GetClient(),
+		APIReader:                mgr.GetLocalManager().GetAPIReader(),
+		Scheme:                   mgr.GetLocalManager().GetScheme(),
+		mgr:                      mgr,
+		NetworkingNamespace:      networkingNamespace,
+		ComputeInstanceNamespace: computeInstanceNamespace,
+		ProvisioningProvider:     provisioningProvider,
+		StatusPollInterval:       statusPollInterval,
+		MaxJobHistory:            maxJobHistory,
+		targetCluster:            targetCluster,
 	}
 }
 
@@ -96,6 +99,7 @@ func NewPublicIPReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch
 
 // Reconcile handles create/update/delete for a PublicIP CR.
 // On create/update it ensures a finalizer, resolves the parent pool, and runs provisioning.
@@ -185,12 +189,21 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		implementationStrategy = defaultPublicIPPoolImplementationStrategy
 	}
 
-	// Annotate the CR so AAP playbooks can select the appropriate role without
-	// having to look up the parent pool themselves.
 	if publicIP.Annotations == nil {
 		publicIP.Annotations = make(map[string]string)
 	}
-	needsUpdate := false
+
+	// Resolve the target namespace for the ComputeInstance attachment, if any.
+	needsUpdate, requeueForCI, err := r.syncComputeInstanceTargetNamespaceAnnotation(ctx, publicIP)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if requeueForCI {
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	// Annotate the CR so AAP playbooks can select the appropriate role without
+	// having to look up the parent pool themselves.
 	if publicIP.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		publicIP.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
@@ -238,6 +251,55 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 	}
 
 	return r.handleProvisioning(ctx, publicIP)
+}
+
+// syncComputeInstanceTargetNamespaceAnnotation resolves the tenant namespace for the
+// ComputeInstance referenced by spec.computeInstance and writes it as an annotation.
+// When spec.computeInstance is cleared, the annotation is removed.
+func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
+	ctx context.Context, publicIP *v1alpha1.PublicIP,
+) (changed bool, requeue bool, err error) {
+	log := ctrllog.FromContext(ctx)
+
+	if publicIP.Spec.ComputeInstance == "" {
+		if _, ok := publicIP.Annotations[osacPublicIPTargetNamespaceAnnotation]; ok {
+			delete(publicIP.Annotations, osacPublicIPTargetNamespaceAnnotation)
+			log.Info("cleared publicip-target-namespace annotation")
+			return true, false, nil
+		}
+		return false, false, nil
+	}
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList,
+		client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: publicIP.Spec.ComputeInstance},
+	); err != nil {
+		return false, false, err
+	}
+	if len(ciList.Items) == 0 {
+		log.Info("ComputeInstance not found, requeueing", "computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		return false, true, nil
+	}
+
+	ci := &ciList.Items[0]
+	if ci.Status.TenantReference == nil {
+		log.Info("ComputeInstance has no TenantReference yet, requeueing",
+			"computeInstance", ci.Name, "computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		return false, true, nil
+	}
+
+	targetNamespace := ci.Status.TenantReference.Namespace
+	if publicIP.Annotations == nil {
+		publicIP.Annotations = make(map[string]string)
+	}
+	if publicIP.Annotations[osacPublicIPTargetNamespaceAnnotation] != targetNamespace {
+		publicIP.Annotations[osacPublicIPTargetNamespaceAnnotation] = targetNamespace
+		log.Info("setting publicip-target-namespace annotation", "targetNamespace", targetNamespace)
+		return true, false, nil
+	}
+
+	return false, false, nil
 }
 
 // handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer

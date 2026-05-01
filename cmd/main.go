@@ -442,6 +442,7 @@ func setupNetworkingControllers(
 
 	// Get namespace from environment (single namespace for all networking resources)
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
+	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 
 	// Get provider configuration
 	aapURL := os.Getenv(envAAPURL)
@@ -525,8 +526,9 @@ func setupNetworkingControllers(
 	}
 
 	// Setup PublicIP controller
-	if err := controller.NewPublicIPReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
-		maxJobHistory, targetCluster,
+	if err := controller.NewPublicIPReconciler(
+		mgr, networkingNamespace, computeInstanceNamespace,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
 	}

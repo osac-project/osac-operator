@@ -18,6 +18,7 @@ import (
 )
 
 var (
-	osacPublicIPIDLabel           string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)
-	osacPublicIPFeedbackFinalizer string = fmt.Sprintf("%s/publicip-feedback", osacPrefix)
+	osacPublicIPIDLabel                   string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)
+	osacPublicIPFeedbackFinalizer         string = fmt.Sprintf("%s/publicip-feedback", osacPrefix)
+	osacPublicIPTargetNamespaceAnnotation string = fmt.Sprintf("%s/publicip-target-namespace", osacPrefix)
 )
