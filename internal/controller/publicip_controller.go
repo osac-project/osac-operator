@@ -81,6 +81,9 @@ func NewPublicIPReconciler(
 	if maxJobHistory <= 0 {
 		maxJobHistory = provisioning.DefaultMaxJobHistory
 	}
+	if computeInstanceNamespace == "" {
+		computeInstanceNamespace = defaultComputeInstanceNamespace
+	}
 	return &PublicIPReconciler{
 		Client:                   mgr.GetLocalManager().GetClient(),
 		APIReader:                mgr.GetLocalManager().GetAPIReader(),
