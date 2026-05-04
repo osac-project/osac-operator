@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
@@ -144,57 +146,61 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 		v1alpha1.TenantReasonFound,
 		fmt.Sprintf("Namespace %q found on target cluster", instance.GetName()))
 
-	// Prerequisite 2: valid StorageClass (tenant-specific or shared Default)
-	scResult, err := r.getTenantStorageClass(ctx, targetClient, instance.GetName())
+	// Prerequisite 2: resolve all storage tiers
+	result, err := r.getTenantStorageClasses(ctx, targetClient, instance.GetName())
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if scResult.name == "" {
+	for _, msg := range result.duplicateMessages {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
+	}
+
+	if len(result.resolved) == 0 {
+		reason := v1alpha1.TenantReasonNotFound
+		if len(result.duplicateMessages) > 0 {
+			reason = v1alpha1.TenantReasonMultipleFound
+		}
+		condMsg := result.conditionMessage()
 		instance.SetStatusCondition(v1alpha1.TenantConditionStorageClassReady,
 			metav1.ConditionFalse,
-			scResult.reason,
-			scResult.message)
-		if scResult.reason == v1alpha1.TenantReasonMultipleFound || scResult.reason == v1alpha1.TenantReasonMultipleDefaultsFound {
-			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", scResult.message)
-		}
+			reason,
+			condMsg)
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonStorageClassNotReady, "StorageClassResolution", "%s", condMsg)
 		return ctrl.Result{}, nil
 	}
 
 	instance.SetStatusCondition(v1alpha1.TenantConditionStorageClassReady,
 		metav1.ConditionTrue,
-		scResult.reason,
-		scResult.message)
+		v1alpha1.TenantReasonFound,
+		result.conditionMessage())
 
 	instance.Status.Namespace = namespace.GetName()
-	instance.Status.StorageClass = scResult.name
-	instance.Status.StorageClasses = []v1alpha1.ResolvedStorageClass{
-		{Name: scResult.name, Tier: scResult.tier},
-	}
+	instance.Status.StorageClass = result.resolved[0].Name
+	instance.Status.StorageClasses = result.resolved
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 
 	return ctrl.Result{}, nil
 }
 
-// storageClassResult holds the outcome of a StorageClass lookup, including
-// the resolved name (empty if none found) and the reason/message for the
-// condition that should be set on the Tenant.
-type storageClassResult struct {
-	name    string
-	tier    string
-	reason  string
-	message string
+// tierResolutionResult holds the outcome of resolving all storage tiers for a tenant.
+type tierResolutionResult struct {
+	resolved          []v1alpha1.ResolvedStorageClass
+	resolvedMessages  []string
+	errorMessages     []string
+	duplicateMessages []string
 }
 
-// storageTierFromLabel reads the osac.openshift.io/storage-tier label from a
-// StorageClass, normalized to lowercase. Returns "default" if the label is
-// absent or empty.
-func storageTierFromLabel(sc *storagev1.StorageClass) string {
-	if tier := sc.GetLabels()[osacStorageTierLabel]; tier != "" {
-		return strings.ToLower(tier)
-	}
-	return "default"
+func (r *tierResolutionResult) conditionMessage() string {
+	parts := make([]string, 0, len(r.resolvedMessages)+len(r.errorMessages))
+	parts = append(parts, r.resolvedMessages...)
+	parts = append(parts, r.errorMessages...)
+	return strings.Join(parts, "; ")
 }
+
+// tierLabelPattern matches values that conform to the ResolvedStorageClass.Tier
+// CRD validation: lowercase alphanumeric with dashes, dots, underscores, 1-63 chars.
+var tierLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
 
 // joinStorageClassNames returns StorageClass metadata names as a comma-separated string for
 // messages and the same values as a slice for structured logging.
@@ -206,79 +212,112 @@ func joinStorageClassNames(items []storagev1.StorageClass) (joined string, names
 	return strings.Join(names, ", "), names
 }
 
-// getTenantStorageClass looks up the StorageClass for a tenant using a two-step
-// fallback: tenant-specific SC first, then shared Default SC. Returns a
-// storageClassResult with the resolved name and condition metadata. A non-nil
-// error is only returned for API call failures.
-func (r *TenantReconciler) getTenantStorageClass(ctx context.Context, targetClient client.Client, tenantName string) (storageClassResult, error) {
+// groupByTier groups StorageClasses by their osac.openshift.io/storage-tier label value.
+// StorageClasses missing the label or with values that don't match the CRD tier
+// pattern (after lowercase normalization) are ignored.
+func groupByTier(scList []storagev1.StorageClass) map[string][]storagev1.StorageClass {
+	groups := make(map[string][]storagev1.StorageClass)
+	for _, sc := range scList {
+		raw, exists := sc.GetLabels()[osacStorageTierLabel]
+		if !exists || raw == "" {
+			continue
+		}
+		tier := strings.ToLower(raw)
+		if !tierLabelPattern.MatchString(tier) {
+			continue
+		}
+		groups[tier] = append(groups[tier], sc)
+	}
+	return groups
+}
+
+// getTenantStorageClasses resolves all storage tiers for a tenant. For each
+// distinct storage-tier value found across tenant-specific and shared Default
+// StorageClasses, it applies a two-step fallback per tier: tenant-specific first,
+// then shared Default. StorageClasses missing the storage-tier label are ignored.
+func (r *TenantReconciler) getTenantStorageClasses(ctx context.Context, targetClient client.Client, tenantName string) (tierResolutionResult, error) {
 	log := ctrllog.FromContext(ctx)
 
-	// Step 1 — Tenant-specific StorageClasses (label osac.openshift.io/tenant=<tenantName>).
-	// Exactly one → use it. More than one → error (do not consider Default SC). Zero → Step 2.
 	tenantSCList := &storagev1.StorageClassList{}
 	if err := targetClient.List(ctx, tenantSCList, client.MatchingLabels{osacTenantAnnotation: tenantName}); err != nil {
-		return storageClassResult{}, err
+		return tierResolutionResult{}, err
 	}
 
-	switch len(tenantSCList.Items) {
-	case 1:
-		sc := &tenantSCList.Items[0]
-		return storageClassResult{
-			name:    sc.GetName(),
-			tier:    storageTierFromLabel(sc),
-			reason:  v1alpha1.TenantReasonFound,
-			message: fmt.Sprintf("StorageClass %q found for tenant %q", sc.GetName(), tenantName),
-		}, nil
-	case 0:
-		// No tenant SCs — evaluate shared Default SCs (Step 2) below.
-	default:
-		joined, names := joinStorageClassNames(tenantSCList.Items)
-		msg := fmt.Sprintf("Multiple StorageClasses found for tenant %q: [%s]. Exactly one is required; remove the extras to resolve.",
-			tenantName, joined)
-		log.Info(msg, "tenant", tenantName, "storageClasses", names)
-		return storageClassResult{
-			reason:  v1alpha1.TenantReasonMultipleFound,
-			message: msg,
-		}, nil
-	}
-
-	// Step 2 — Shared Default StorageClasses (label osac.openshift.io/tenant=Default).
-	// Only reached when Step 1 found zero tenant-specific SCs.
 	defaultSCList := &storagev1.StorageClassList{}
 	if err := targetClient.List(ctx, defaultSCList, client.MatchingLabels{osacTenantAnnotation: defaultStorageClassSentinel}); err != nil {
-		return storageClassResult{}, err
+		return tierResolutionResult{}, err
 	}
 
-	switch len(defaultSCList.Items) {
-	case 1:
-		sc := &defaultSCList.Items[0]
-		msg := fmt.Sprintf("No tenant-specific StorageClass found for tenant %q. "+
-			"Using shared Default StorageClass %q. Storage is not isolated for this tenant.",
-			tenantName, sc.GetName())
-		log.Info(msg)
-		return storageClassResult{
-			name:    sc.GetName(),
-			tier:    storageTierFromLabel(sc),
-			reason:  v1alpha1.TenantReasonSharedDefault,
-			message: msg,
-		}, nil
-	case 0:
-		msg := fmt.Sprintf("No StorageClass found for tenant %q (no tenant SC, no Default SC)", tenantName)
-		log.Info(msg)
-		return storageClassResult{
-			reason:  v1alpha1.TenantReasonNotFound,
-			message: msg,
-		}, nil
-	default:
-		joined, names := joinStorageClassNames(defaultSCList.Items)
-		msg := fmt.Sprintf("Multiple shared Default StorageClasses found: [%s]. Exactly one is required; remove the extras to resolve. Tenant %q has no dedicated StorageClass and is affected.",
-			joined, tenantName)
-		log.Info(msg, "tenant", tenantName, "storageClasses", names)
-		return storageClassResult{
-			reason:  v1alpha1.TenantReasonMultipleDefaultsFound,
-			message: msg,
-		}, nil
+	tenantByTier := groupByTier(tenantSCList.Items)
+	defaultByTier := groupByTier(defaultSCList.Items)
+
+	allTiers := make(map[string]struct{})
+	for t := range tenantByTier {
+		allTiers[t] = struct{}{}
 	}
+	for t := range defaultByTier {
+		allTiers[t] = struct{}{}
+	}
+
+	sortedTiers := make([]string, 0, len(allTiers))
+	for t := range allTiers {
+		sortedTiers = append(sortedTiers, t)
+	}
+	sort.Strings(sortedTiers)
+
+	var result tierResolutionResult
+
+	for _, tier := range sortedTiers {
+		tenantSCs := tenantByTier[tier]
+		defaultSCs := defaultByTier[tier]
+
+		switch len(tenantSCs) {
+		case 1:
+			scName := tenantSCs[0].GetName()
+			result.resolved = append(result.resolved, v1alpha1.ResolvedStorageClass{
+				Name: scName,
+				Tier: tier,
+			})
+			msg := fmt.Sprintf("tier %q: StorageClass %q (tenant-specific)", tier, scName)
+			result.resolvedMessages = append(result.resolvedMessages, msg)
+			continue
+		case 0:
+			// Fall through to Default resolution below.
+		default:
+			joined, names := joinStorageClassNames(tenantSCs)
+			msg := fmt.Sprintf("tier %q: multiple tenant StorageClasses [%s]", tier, joined)
+			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
+			result.errorMessages = append(result.errorMessages, msg)
+			result.duplicateMessages = append(result.duplicateMessages, msg)
+			continue
+		}
+
+		switch len(defaultSCs) {
+		case 1:
+			scName := defaultSCs[0].GetName()
+			result.resolved = append(result.resolved, v1alpha1.ResolvedStorageClass{
+				Name: scName,
+				Tier: tier,
+			})
+			msg := fmt.Sprintf("tier %q: StorageClass %q (shared Default)", tier, scName)
+			result.resolvedMessages = append(result.resolvedMessages, msg)
+		case 0:
+			// Tier not available — not an error at the Tenant level.
+		default:
+			joined, names := joinStorageClassNames(defaultSCs)
+			msg := fmt.Sprintf("tier %q: multiple shared Default StorageClasses [%s]", tier, joined)
+			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
+			result.errorMessages = append(result.errorMessages, msg)
+			result.duplicateMessages = append(result.duplicateMessages, msg)
+		}
+	}
+
+	if len(result.resolved) == 0 && len(result.errorMessages) == 0 {
+		result.errorMessages = append(result.errorMessages,
+			fmt.Sprintf("no StorageClasses with %s label found for tenant %q", osacStorageTierLabel, tenantName))
+	}
+
+	return result, nil
 }
 
 // mapStorageClassToTenant maps a StorageClass event to Tenant reconcile requests.

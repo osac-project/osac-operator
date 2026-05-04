@@ -49,11 +49,9 @@ const (
 
 // Reason constants for Tenant conditions
 const (
-	TenantReasonFound                 = "Found"
-	TenantReasonNotFound              = "NotFound"
-	TenantReasonSharedDefault         = "SharedDefault"
-	TenantReasonMultipleFound         = "MultipleFound"
-	TenantReasonMultipleDefaultsFound = "MultipleDefaultsFound"
+	TenantReasonFound         = "Found"
+	TenantReasonNotFound      = "NotFound"
+	TenantReasonMultipleFound = "MultipleFound"
 )
 
 // ResolvedStorageClass captures a single resolved StorageClass for a specific
