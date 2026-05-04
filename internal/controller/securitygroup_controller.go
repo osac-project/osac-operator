@@ -103,6 +103,12 @@ func (r *SecurityGroupReconciler) Reconcile(ctx context.Context, req mcreconcile
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	val, exists := sg.Annotations[osacManagementStateAnnotation]
+	if sg.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
+		log.Info("ignoring SecurityGroup due to management-state annotation", "management-state", val)
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("start reconcile")
 
 	oldstatus := sg.Status.DeepCopy()

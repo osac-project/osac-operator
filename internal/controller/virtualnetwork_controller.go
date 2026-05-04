@@ -102,6 +102,12 @@ func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req mcreconcil
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	val, exists := vnet.Annotations[osacManagementStateAnnotation]
+	if vnet.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
+		log.Info("ignoring VirtualNetwork due to management-state annotation", "management-state", val)
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("start reconcile")
 
 	oldstatus := vnet.Status.DeepCopy()

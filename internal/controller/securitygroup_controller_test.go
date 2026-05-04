@@ -664,6 +664,70 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			// (the actual Update call fails with fake client, but the logic is correct)
 			Expect(toDelete.Finalizers).NotTo(ContainElement(osacSecurityGroupFinalizer))
 		})
+
+		It("should still handle delete for unmanaged SecurityGroup with finalizer", func() {
+			managedThenUnmanaged := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-then-unmanaged",
+					Namespace: "test-namespace",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+					Finalizers: []string{osacSecurityGroupFinalizer},
+				},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork: "test-vnet-uuid",
+				},
+			}
+			Expect(fakeClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
+
+			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: managedThenUnmanaged.Namespace}
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			fetched := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, fetched)).To(Succeed())
+			now := metav1.Now()
+			fetched.DeletionTimestamp = &now
+
+			Expect(fetched.ObjectMeta.DeletionTimestamp.IsZero()).To(BeFalse())
+
+			_, _ = reconciler.handleDelete(ctx, fetched)
+
+			Expect(fetched.Finalizers).NotTo(ContainElement(osacSecurityGroupFinalizer))
+		})
+
+		It("should ignore SecurityGroup with management-state unmanaged annotation", func() {
+			unmanagedSG := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "unmanaged-sg",
+					Namespace: "test-namespace",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+				},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork: "test-vnet-uuid",
+				},
+			}
+			Expect(fakeClient.Create(ctx, unmanagedSG)).To(Succeed())
+
+			key := types.NamespacedName{Name: unmanagedSG.Name, Namespace: unmanagedSG.Namespace}
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+
+			Expect(updated.Finalizers).To(BeEmpty())
+			Expect(updated.Status.Phase).To(BeEmpty())
+		})
 	})
 
 	Context("backoff on failure", func() {
