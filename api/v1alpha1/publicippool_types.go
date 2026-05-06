@@ -37,7 +37,7 @@ type PublicIPPoolSpec struct {
 	// Defaults to metallb-l2 for v7.0.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=metallb-l2
+	// +kubebuilder:validation:Enum=metallb-l2;netris
 	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 }
 

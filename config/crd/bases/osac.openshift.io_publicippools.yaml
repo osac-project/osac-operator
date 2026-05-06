@@ -70,6 +70,7 @@ spec:
                   Defaults to metallb-l2 for v7.0.
                 enum:
                 - metallb-l2
+                - netris
                 type: string
               ipFamily:
                 description: IPFamily indicates the IP address family for this pool

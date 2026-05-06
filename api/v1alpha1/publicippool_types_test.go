@@ -21,6 +21,16 @@ var _ = Describe("PublicIPPoolSpec", func() {
 		Expect(spec.ImplementationStrategy).To(Equal("metallb-l2"))
 	})
 
+	It("should accept netris as a valid implementation strategy", func() {
+		spec := v1alpha1.PublicIPPoolSpec{
+			CIDRs:                  []string{"192.168.1.0/24"},
+			IPFamily:               "IPv4",
+			ImplementationStrategy: "netris",
+		}
+
+		Expect(spec.ImplementationStrategy).To(Equal("netris"))
+	})
+
 	It("should accept a minimal spec without optional fields", func() {
 		spec := v1alpha1.PublicIPPoolSpec{
 			CIDRs:    []string{"10.0.0.0/16"},
