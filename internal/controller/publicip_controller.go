@@ -575,10 +575,11 @@ func (r *PublicIPReconciler) handleDelete(ctx context.Context, publicIP *v1alpha
 	return ctrl.Result{}, nil
 }
 
-// routeProvisioning dispatches to the correct handler based on state. Failed state
-// is routed back to the handler that owns the failed job to prevent the create
-// playbook from running after a failed attach (which could conflict with a
-// partially-moved MetalLB Service).
+// routeProvisioning dispatches to the correct handler based on state.
+// Failed state routes based on spec intent: spec.computeInstance set means retry
+// attach, empty + failed detach job means retry detach, otherwise provision.
+// This prevents the create playbook from running after a failed attach/detach
+// which could conflict with a partially-moved MetalLB Service.
 func (r *PublicIPReconciler) routeProvisioning(ctx context.Context, publicIP *v1alpha1.PublicIP, priorCIUUID string) (ctrl.Result, error) {
 	switch publicIP.Status.State {
 	case v1alpha1.PublicIPStateAttaching:
@@ -586,22 +587,19 @@ func (r *PublicIPReconciler) routeProvisioning(ctx context.Context, publicIP *v1
 	case v1alpha1.PublicIPStateReleasing:
 		return r.handleDetaching(ctx, publicIP, priorCIUUID)
 	case v1alpha1.PublicIPStateFailed:
-		// Route based on the latest failed job type AND current spec intent.
-		// Checking both prevents re-triggering the wrong operation after the
-		// user changes spec.computeInstance following a failure (e.g., failed
-		// attach then user clears CI: we should not re-trigger handleAttaching
-		// with an empty target).
-		latestAttach := provisioning.FindLatestJobByType(publicIP.Status.Jobs, v1alpha1.JobTypeAttach)
-		if latestAttach != nil && latestAttach.State == v1alpha1.JobStateFailed && publicIP.Spec.ComputeInstance != "" {
+		// Route based on spec intent. spec.computeInstance unambiguously signals
+		// attach intent, so no job-type lookup is needed for that case.
+		// For empty spec.computeInstance, we check the latest detach job to
+		// disambiguate "failed detach" (needs handleDetaching to retry moving
+		// the Service back) from "failed provision" (needs handleProvisioning
+		// with backoff).
+		if publicIP.Spec.ComputeInstance != "" {
 			return r.handleAttaching(ctx, publicIP)
 		}
 		latestDetach := provisioning.FindLatestJobByType(publicIP.Status.Jobs, v1alpha1.JobTypeDetach)
-		if latestDetach != nil && latestDetach.State == v1alpha1.JobStateFailed && publicIP.Spec.ComputeInstance == "" {
+		if latestDetach != nil && latestDetach.State == v1alpha1.JobStateFailed {
 			return r.handleDetaching(ctx, publicIP, priorCIUUID)
 		}
-		// Provision failure or spec intent changed after attach/detach failure:
-		// handleProvisioning provides backoff/retry for provision failures,
-		// and config version mismatch triggers re-provisioning for spec changes.
 		return r.handleProvisioning(ctx, publicIP, priorCIUUID)
 	default:
 		return r.handleProvisioning(ctx, publicIP, priorCIUUID)
@@ -648,6 +646,12 @@ func (r *PublicIPReconciler) handleAttaching(ctx context.Context, publicIP *v1al
 			ConfigVersion: publicIP.Status.DesiredConfigVersion,
 		}
 		publicIP.Status.Jobs = provisioning.AppendJob(publicIP.Status.Jobs, newJob, r.MaxJobHistory)
+
+		// Reset state/phase so the next reconcile routes back to handleAttaching.
+		// Without this, a retry from Failed state would leave phase=Failed and
+		// routeProvisioning would misroute to handleProvisioning on the next reconcile.
+		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		publicIP.Status.State = v1alpha1.PublicIPStateAttaching
 
 		// Flush status immediately so the job ID survives a controller restart
 		// and we don't trigger a duplicate job on the next reconcile.
@@ -782,6 +786,10 @@ func (r *PublicIPReconciler) handleDetaching(ctx context.Context, publicIP *v1al
 				ConfigVersion: publicIP.Status.DesiredConfigVersion,
 			}
 			publicIP.Status.Jobs = provisioning.AppendJob(publicIP.Status.Jobs, newJob, r.MaxJobHistory)
+
+			// Reset state/phase so the next reconcile routes back to handleDetaching.
+			publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+			publicIP.Status.State = v1alpha1.PublicIPStateReleasing
 
 			// Flush status immediately so the job ID survives a controller restart.
 			if err := r.Status().Update(ctx, publicIP); err != nil {

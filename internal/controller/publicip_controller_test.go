@@ -910,6 +910,73 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(attachCalled).To(BeFalse(), "handleAttaching should not be called when spec intent changed")
 		})
 
+		It("should reset state to Attaching when retrying from Failed and route correctly on next reconcile", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start in Failed state with spec.computeInstance still set (user wants retry).
+			publicIP.Spec.ComputeInstance = testComputeInstance
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseFailed
+			publicIP.Status.State = osacv1alpha1.PublicIPStateFailed
+			publicIP.Status.DesiredConfigVersion = testConfigVersionUpdated
+			publicIP.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "failed-attach",
+					Type:          osacv1alpha1.JobTypeAttach,
+					State:         osacv1alpha1.JobStateFailed,
+					ConfigVersion: testConfigVersion,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+				},
+			}
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			attachmentProvider := &mockProvisioningProvider{name: "mock-attachment"}
+			reconciler.PublicIPAttachmentProvider = attachmentProvider
+
+			attachmentProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID: "retry-attach", InitialState: osacv1alpha1.JobStatePending, Message: "Retry triggered",
+				}, nil
+			}
+
+			attachmentProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "Running",
+				}, nil
+			}
+
+			// Pass 1: routes Failed -> handleAttaching, triggers retry, resets state.
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseProgressing),
+				"phase should reset to Progressing after retry trigger")
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttaching),
+				"state should reset to Attaching after retry trigger")
+
+			// Pass 2: state is now Attaching, should route to handleAttaching (poll),
+			// not fall through to handleProvisioning.
+			provisionCalled := false
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{JobID: "bad-prov", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalled).To(BeFalse(),
+				"second reconcile should route to handleAttaching, not handleProvisioning")
+		})
+
 		It("should not re-provision after successful attach changes config version", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
