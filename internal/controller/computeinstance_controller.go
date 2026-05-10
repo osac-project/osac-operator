@@ -677,7 +677,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	}
 
 	if provisioning.IsConfigApplied(&instance.Status.Jobs, instance.Status.DesiredConfigVersion) {
-		// Phase is now driven by KubeVirt PrintableStatus, set above. Only update the condition.
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 		// Update lastRestartedAt when a restart was requested and provisioning has reconciled it.
@@ -688,22 +687,22 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 			}
 		}
+	} else {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, "Applying configuration", v1alpha1.ReasonAsExpected)
 
-		return ctrl.Result{}, nil
-	}
-
-	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, "Applying configuration", v1alpha1.ReasonAsExpected)
-
-	// Set RestartInProgress condition when a restart is pending provisioning.
-	if instance.Spec.RestartRequestedAt != nil {
-		if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
-			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionTrue,
-				fmt.Sprintf("Restart initiated at %s", instance.Spec.RestartRequestedAt.UTC().Format(time.RFC3339)),
-				"RestartInProgress")
+		// Set RestartInProgress condition when a restart is pending provisioning.
+		if instance.Spec.RestartRequestedAt != nil {
+			if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
+				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionTrue,
+					fmt.Sprintf("Restart initiated at %s", instance.Spec.RestartRequestedAt.UTC().Format(time.RFC3339)),
+					"RestartInProgress")
+			}
 		}
 	}
 
-	// Handle provisioning via provider abstraction
+	// Always delegate to provisioning lifecycle — EvaluateAction decides
+	// whether to skip, poll, or trigger. This avoids the A-B-A problem where
+	// IsConfigApplied alone could match a stale historical job.
 	return r.handleProvisioning(ctx, instance)
 }
 
