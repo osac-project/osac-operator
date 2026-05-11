@@ -723,25 +723,28 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 	})
 
 	ginkgo.It("returns true when an attach job succeeded with matching config version", func() {
+		now := time.Now()
 		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2"},
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
+			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
 		}
 		Expect(IsConfigApplied(&jobs, "v2")).To(BeTrue())
 	})
 
 	ginkgo.It("returns true when a detach job succeeded with matching config version", func() {
+		now := time.Now()
 		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-			{JobID: "2", Type: v1alpha1.JobTypeDetach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v3"},
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
+			{JobID: "2", Type: v1alpha1.JobTypeDetach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v3", Timestamp: metav1.NewTime(now)},
 		}
 		Expect(IsConfigApplied(&jobs, "v3")).To(BeTrue())
 	})
 
 	ginkgo.It("returns false when attach job succeeded but with wrong config version", func() {
+		now := time.Now()
 		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2"},
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
+			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
 		}
 		Expect(IsConfigApplied(&jobs, "v3")).To(BeFalse())
 	})
@@ -764,6 +767,18 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 		// Legacy fallback only applies to the latest provision job, not attach/detach.
 		jobs := []v1alpha1.JobStatus{
 			{JobID: "1", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: ""},
+		}
+		Expect(IsConfigApplied(&jobs, "v1")).To(BeFalse())
+	})
+
+	ginkgo.It("returns false when spec reverts to a previously applied config version (A-B-A)", func() {
+		// Regression: spec goes v1 -> v2 -> v1. The old v1 provision job still
+		// exists in history, but only the latest provision job (v2) should be
+		// checked. Without this fix the stale v1 job would match.
+		now := time.Now()
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
+			{JobID: "2", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
 		}
 		Expect(IsConfigApplied(&jobs, "v1")).To(BeFalse())
 	})
