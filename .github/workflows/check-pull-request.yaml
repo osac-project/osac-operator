@@ -12,7 +12,7 @@
 # the License.
 #
 
-name: check-generated-code
+name: check-pull-request
 
 on:
   pull_request:
@@ -31,3 +31,42 @@ jobs:
     - run: |
         buf generate
         git diff --exit-code
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+    - name: Check controller-gen output is up to date
+      run: |
+        make manifests generate
+        git diff --exit-code config/crd/ config/rbac/role.yaml api/v1alpha1/zz_generated.deepcopy.go
+
+  validate-manifests:
+    name: Validate manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Install tools
+      run: make kustomize kubeconform kube-linter
+
+    - name: Render and validate manifests
+      run: |
+        RENDERED="${RUNNER_TEMP}/rendered.yaml"
+        bin/kustomize build config/default > "$RENDERED"
+
+        bin/kubeconform \
+          -strict \
+          -summary \
+          -kubernetes-version 1.31.0 \
+          -schema-location default \
+          -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+          -ignore-missing-schemas \
+          "$RENDERED"
+
+        bin/kube-linter lint "$RENDERED" --config .kube-linter.yaml
+
+        rm -f "$RENDERED"

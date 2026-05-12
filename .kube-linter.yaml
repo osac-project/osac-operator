@@ -1,0 +1,44 @@
+checks:
+  addAllBuiltIn: true
+  exclude:
+    # The manager image uses `controller:latest` as a placeholder in config/manager/manager.yaml.
+    # The real image tag is injected by kustomize edit set image at build/deploy time.
+    - latest-tag
+
+    # The manager binds its health endpoints on :8081 via --health-probe-bind-address=:8081.
+    # Kubernetes does not require containerPort declarations for probes to function.
+    # Declaring the port is cosmetic; omitting it is the upstream operator-sdk scaffold default.
+    - liveness-port
+    - readiness-port
+
+    # The operator manager needs a writable filesystem (Go runtime tmp, controller-runtime caches).
+    # readOnlyRootFilesystem is not set in the upstream operator-sdk scaffold.
+    - no-read-only-root-fs
+
+    # Admin ClusterRoles intentionally use wildcard verbs — they are aggregated admin roles
+    # intended for human operators, not the controller itself.
+    - wildcard-in-rules
+
+    # Operator-sdk scaffold does not set dnsConfig. Standard cluster DNS is sufficient.
+    - dnsconfig-options
+
+    # Controller-manager runs as a single replica by design (leader-election for HA).
+    # Multiple replicas compete via lease, so minimum-three-replicas is inapplicable.
+    - minimum-three-replicas
+
+    # Operator pods do not declare node affinity; scheduling is left to the cluster default.
+    - no-node-affinity
+
+    # operator-sdk scaffold does not set updateStrategy on the Deployment explicitly.
+    # Kubernetes defaults to RollingUpdate, so this check produces a false positive.
+    - no-rolling-update-strategy
+
+    # NetworkPolicy is managed externally (osac-installer kustomize overlays).
+    - non-isolated-pod
+
+    # Ownership annotations and labels are not part of the operator-sdk scaffold convention.
+    - required-annotation-email
+    - required-label-owner
+
+    # Deployment has no explicit restartPolicy; Kubernetes defaults to Always for Deployments.
+    - restart-policy

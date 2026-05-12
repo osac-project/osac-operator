@@ -31,10 +31,7 @@ func TestGetEnvWithDefault_BackwardCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.envValue != "" {
-				os.Setenv(tt.envVar, tt.envValue)
-				defer os.Unsetenv(tt.envVar)
-			} else {
-				os.Unsetenv(tt.envVar)
+				t.Setenv(tt.envVar, tt.envValue)
 			}
 
 			switch expected := tt.expected.(type) {
@@ -70,8 +67,7 @@ func TestGetEnvWithDefault_BackwardCompatibility(t *testing.T) {
 
 // TestGetEnvWithDefault_SingleValidatorPass tests that valid values pass single validator
 func TestGetEnvWithDefault_SingleValidatorPass(t *testing.T) {
-	os.Setenv("TEST_PORT", "8080")
-	defer os.Unsetenv("TEST_PORT")
+	t.Setenv("TEST_PORT", "8080")
 
 	validator := func(v int) bool { return v > 0 && v < 65536 }
 	result := GetEnvWithDefault("TEST_PORT", 9000, validator)
@@ -83,8 +79,7 @@ func TestGetEnvWithDefault_SingleValidatorPass(t *testing.T) {
 
 // TestGetEnvWithDefault_SingleValidatorFail tests that invalid values use default
 func TestGetEnvWithDefault_SingleValidatorFail(t *testing.T) {
-	os.Setenv("TEST_PORT", "99999")
-	defer os.Unsetenv("TEST_PORT")
+	t.Setenv("TEST_PORT", "99999")
 
 	validator := func(v int) bool { return v > 0 && v < 65536 }
 	result := GetEnvWithDefault("TEST_PORT", 8080, validator)
@@ -96,8 +91,7 @@ func TestGetEnvWithDefault_SingleValidatorFail(t *testing.T) {
 
 // TestGetEnvWithDefault_MultipleValidatorsPass tests that all validators must pass
 func TestGetEnvWithDefault_MultipleValidatorsPass(t *testing.T) {
-	os.Setenv("TEST_PORT", "8080")
-	defer os.Unsetenv("TEST_PORT")
+	t.Setenv("TEST_PORT", "8080")
 
 	isPositive := func(v int) bool { return v > 0 }
 	isValidPort := func(v int) bool { return v < 65536 }
@@ -111,8 +105,7 @@ func TestGetEnvWithDefault_MultipleValidatorsPass(t *testing.T) {
 
 // TestGetEnvWithDefault_MultipleValidatorsFirstFails tests AND logic (short-circuit on first failure)
 func TestGetEnvWithDefault_MultipleValidatorsFirstFails(t *testing.T) {
-	os.Setenv("TEST_VALUE", "-5")
-	defer os.Unsetenv("TEST_VALUE")
+	t.Setenv("TEST_VALUE", "-5")
 
 	isPositive := func(v int) bool { return v > 0 }
 	isLessThan100 := func(v int) bool { return v < 100 }
@@ -126,8 +119,7 @@ func TestGetEnvWithDefault_MultipleValidatorsFirstFails(t *testing.T) {
 
 // TestGetEnvWithDefault_MultipleValidatorsSecondFails tests AND logic (second validator fails)
 func TestGetEnvWithDefault_MultipleValidatorsSecondFails(t *testing.T) {
-	os.Setenv("TEST_VALUE", "150")
-	defer os.Unsetenv("TEST_VALUE")
+	t.Setenv("TEST_VALUE", "150")
 
 	isPositive := func(v int) bool { return v > 0 }
 	isLessThan100 := func(v int) bool { return v < 100 }
@@ -141,8 +133,6 @@ func TestGetEnvWithDefault_MultipleValidatorsSecondFails(t *testing.T) {
 
 // TestGetEnvWithDefault_EmptyEnvDoesNotCallValidator ensures validators aren't called for empty env vars
 func TestGetEnvWithDefault_EmptyEnvDoesNotCallValidator(t *testing.T) {
-	os.Unsetenv("TEST_MISSING")
-
 	validatorCalled := false
 	validator := func(v int) bool {
 		validatorCalled = true
@@ -161,8 +151,7 @@ func TestGetEnvWithDefault_EmptyEnvDoesNotCallValidator(t *testing.T) {
 
 // TestGetEnvWithDefault_ParseFailureDoesNotCallValidator ensures validators aren't called for parse failures
 func TestGetEnvWithDefault_ParseFailureDoesNotCallValidator(t *testing.T) {
-	os.Setenv("TEST_INVALID", "notanumber")
-	defer os.Unsetenv("TEST_INVALID")
+	t.Setenv("TEST_INVALID", "notanumber")
 
 	validatorCalled := false
 	validator := func(v int) bool {
@@ -182,8 +171,7 @@ func TestGetEnvWithDefault_ParseFailureDoesNotCallValidator(t *testing.T) {
 
 // TestGetEnvWithDefault_StringValidation tests validation with string type
 func TestGetEnvWithDefault_StringValidation(t *testing.T) {
-	os.Setenv("TEST_MODE", "production")
-	defer os.Unsetenv("TEST_MODE")
+	t.Setenv("TEST_MODE", "production")
 
 	validModes := func(v string) bool {
 		return v == "development" || v == "staging" || v == "production"
@@ -194,8 +182,7 @@ func TestGetEnvWithDefault_StringValidation(t *testing.T) {
 		t.Errorf("expected production, got %v", result)
 	}
 
-	// Test invalid value
-	os.Setenv("TEST_MODE", "invalid")
+	os.Setenv("TEST_MODE", "invalid") //nolint:errcheck // overriding within t.Setenv-managed scope
 	result = GetEnvWithDefault("TEST_MODE", "development", validModes)
 	if result != "development" {
 		t.Errorf("expected default development, got %v", result)
@@ -204,8 +191,7 @@ func TestGetEnvWithDefault_StringValidation(t *testing.T) {
 
 // TestGetEnvWithDefault_BoolValidation tests validation with bool type
 func TestGetEnvWithDefault_BoolValidation(t *testing.T) {
-	os.Setenv("TEST_ENABLED", "true")
-	defer os.Unsetenv("TEST_ENABLED")
+	t.Setenv("TEST_ENABLED", "true")
 
 	mustBeTrue := func(v bool) bool { return v == true }
 
@@ -214,8 +200,7 @@ func TestGetEnvWithDefault_BoolValidation(t *testing.T) {
 		t.Errorf("expected true, got %v", result)
 	}
 
-	// Test invalid value (false fails validation)
-	os.Setenv("TEST_ENABLED", "false")
+	os.Setenv("TEST_ENABLED", "false") //nolint:errcheck // overriding within t.Setenv-managed scope
 	result = GetEnvWithDefault("TEST_ENABLED", false, mustBeTrue)
 	if result != false {
 		t.Errorf("expected default false, got %v", result)
@@ -224,8 +209,7 @@ func TestGetEnvWithDefault_BoolValidation(t *testing.T) {
 
 // TestGetEnvWithDefault_Float64Validation tests validation with float64 type
 func TestGetEnvWithDefault_Float64Validation(t *testing.T) {
-	os.Setenv("TEST_RATIO", "0.5")
-	defer os.Unsetenv("TEST_RATIO")
+	t.Setenv("TEST_RATIO", "0.5")
 
 	inRange := func(v float64) bool { return v >= 0.0 && v <= 1.0 }
 
@@ -234,8 +218,7 @@ func TestGetEnvWithDefault_Float64Validation(t *testing.T) {
 		t.Errorf("expected 0.5, got %v", result)
 	}
 
-	// Test out of range
-	os.Setenv("TEST_RATIO", "1.5")
+	os.Setenv("TEST_RATIO", "1.5") //nolint:errcheck // overriding within t.Setenv-managed scope
 	result = GetEnvWithDefault("TEST_RATIO", 0.8, inRange)
 	if result != 0.8 {
 		t.Errorf("expected default 0.8, got %v", result)
@@ -244,8 +227,7 @@ func TestGetEnvWithDefault_Float64Validation(t *testing.T) {
 
 // TestGetEnvWithDefault_DurationValidation tests validation with time.Duration type
 func TestGetEnvWithDefault_DurationValidation(t *testing.T) {
-	os.Setenv("TEST_TIMEOUT", "30s")
-	defer os.Unsetenv("TEST_TIMEOUT")
+	t.Setenv("TEST_TIMEOUT", "30s")
 
 	isPositive := func(v time.Duration) bool { return v > 0 }
 	lessThanMinute := func(v time.Duration) bool { return v < time.Minute }
@@ -255,8 +237,7 @@ func TestGetEnvWithDefault_DurationValidation(t *testing.T) {
 		t.Errorf("expected 30s, got %v", result)
 	}
 
-	// Test out of range
-	os.Setenv("TEST_TIMEOUT", "2m")
+	os.Setenv("TEST_TIMEOUT", "2m") //nolint:errcheck // overriding within t.Setenv-managed scope
 	result = GetEnvWithDefault("TEST_TIMEOUT", 10*time.Second, isPositive, lessThanMinute)
 	if result != 10*time.Second {
 		t.Errorf("expected default 10s, got %v", result)
