@@ -165,6 +165,23 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: helm-crds
+helm-crds: manifests ## Copy generated CRDs into the operator-crds Helm chart.
+	@echo "Syncing CRDs to charts/operator-crds/templates/..."
+	@for f in config/crd/bases/*.yaml; do \
+		name=$$(basename "$$f"); \
+		python3 -c " \
+import sys, re; \
+content = open(sys.argv[1]).read(); \
+if 'helm.sh/resource-policy' not in content: \
+    content = content.replace('  annotations:\n', '  annotations:\n    \"helm.sh/resource-policy\": keep\n'); \
+content = '{{- if .Values.install }}\n' + content + '{{- end }}\n'; \
+open(sys.argv[2], 'w').write(content)" \
+			"$$f" "charts/operator-crds/templates/$$name"; \
+		echo "  $$name"; \
+	done
+	@echo "Done."
+
 ##@ Build
 
 .PHONY: build

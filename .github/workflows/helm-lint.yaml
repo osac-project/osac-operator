@@ -1,0 +1,33 @@
+name: Helm Lint
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'config/crd/bases/**'
+      - '.github/workflows/helm-lint.yaml'
+
+jobs:
+  helm-lint:
+    name: Lint Helm charts
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: v3.17.0
+
+    - name: Lint operator-crds chart
+      run: helm lint charts/operator-crds/
+
+    - name: Lint operator chart
+      run: helm lint charts/operator/
+
+    - name: Template operator-crds chart
+      run: helm template test charts/operator-crds/ > /dev/null
+
+    - name: Template operator chart
+      run: helm template test charts/operator/ > /dev/null

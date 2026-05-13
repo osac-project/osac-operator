@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "osac-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        {{- include "osac-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: manager
+        command:
+        - /manager
+        args:
+          - --leader-elect
+          - --health-probe-bind-address=:8081
+          - --grpc-insecure
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        envFrom:
+          - secretRef:
+              name: {{ .Values.configSecret.name }}
+              optional: {{ .Values.configSecret.optional }}
+        env:
+          - name: OSAC_PROVISIONING_PROVIDER
+            value: {{ .Values.provisioning.provider | quote }}
+          {{- if .Values.aap.url }}
+          - name: OSAC_AAP_URL
+            value: {{ .Values.aap.url | quote }}
+          {{- end }}
+          {{- if .Values.aap.token }}
+          - name: OSAC_AAP_TOKEN
+            value: {{ .Values.aap.token | quote }}
+          {{- end }}
+          {{- if .Values.aap.insecureSkipVerify }}
+          - name: OSAC_AAP_INSECURE_SKIP_VERIFY
+            value: {{ .Values.aap.insecureSkipVerify | quote }}
+          {{- end }}
+          {{- if .Values.aap.statusPollInterval }}
+          - name: OSAC_AAP_STATUS_POLL_INTERVAL
+            value: {{ .Values.aap.statusPollInterval | quote }}
+          {{- end }}
+          {{- if .Values.aap.templatePrefix }}
+          - name: OSAC_AAP_TEMPLATE_PREFIX
+            value: {{ .Values.aap.templatePrefix | quote }}
+          {{- end }}
+          {{- if .Values.fulfillment.serverAddress }}
+          - name: OSAC_FULFILLMENT_SERVER_ADDRESS
+            value: {{ .Values.fulfillment.serverAddress | quote }}
+          {{- end }}
+          {{- if .Values.fulfillment.tokenFile }}
+          - name: OSAC_FULFILLMENT_TOKEN_FILE
+            value: {{ .Values.fulfillment.tokenFile | quote }}
+          {{- end }}
+          - name: OSAC_CLUSTER_ORDER_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_COMPUTE_INSTANCE_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_TENANT_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_NETWORKING_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_ENABLE_CLUSTER_ORDER_CONTROLLER
+            value: {{ .Values.controllers.clusterOrder | quote }}
+          - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
+            value: {{ .Values.controllers.computeInstance | quote }}
+          - name: OSAC_ENABLE_TENANT_CONTROLLER
+            value: {{ .Values.controllers.tenant | quote }}
+          - name: OSAC_ENABLE_NETWORKING_CONTROLLER
+            value: {{ .Values.controllers.networking | quote }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+      serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 10
