@@ -1,7 +1,6 @@
 package helpers
 
 import (
-	"os"
 	"testing"
 	"time"
 )
@@ -169,75 +168,87 @@ func TestGetEnvWithDefault_ParseFailureDoesNotCallValidator(t *testing.T) {
 
 // TestGetEnvWithDefault_StringValidation tests validation with string type
 func TestGetEnvWithDefault_StringValidation(t *testing.T) {
-	t.Setenv("TEST_MODE", "production")
-
 	validModes := func(v string) bool {
 		return v == "development" || v == "staging" || v == "production"
 	}
 
-	result := GetEnvWithDefault("TEST_MODE", "development", validModes)
-	if result != "production" {
-		t.Errorf("expected production, got %v", result)
-	}
+	t.Run("valid value", func(t *testing.T) {
+		t.Setenv("TEST_MODE", "production")
+		result := GetEnvWithDefault("TEST_MODE", "development", validModes)
+		if result != "production" {
+			t.Errorf("expected production, got %v", result)
+		}
+	})
 
-	os.Setenv("TEST_MODE", "invalid") //nolint:errcheck // overriding within t.Setenv-managed scope
-	result = GetEnvWithDefault("TEST_MODE", "development", validModes)
-	if result != "development" {
-		t.Errorf("expected default development, got %v", result)
-	}
+	t.Run("invalid value", func(t *testing.T) {
+		t.Setenv("TEST_MODE", "invalid")
+		result := GetEnvWithDefault("TEST_MODE", "development", validModes)
+		if result != "development" {
+			t.Errorf("expected default development, got %v", result)
+		}
+	})
 }
 
 // TestGetEnvWithDefault_BoolValidation tests validation with bool type
 func TestGetEnvWithDefault_BoolValidation(t *testing.T) {
-	t.Setenv("TEST_ENABLED", "true")
+	mustBeTrue := func(v bool) bool { return v }
 
-	mustBeTrue := func(v bool) bool { return v == true }
+	t.Run("valid value", func(t *testing.T) {
+		t.Setenv("TEST_ENABLED", "true")
+		result := GetEnvWithDefault("TEST_ENABLED", false, mustBeTrue)
+		if result != true {
+			t.Errorf("expected true, got %v", result)
+		}
+	})
 
-	result := GetEnvWithDefault("TEST_ENABLED", false, mustBeTrue)
-	if result != true {
-		t.Errorf("expected true, got %v", result)
-	}
-
-	os.Setenv("TEST_ENABLED", "false") //nolint:errcheck // overriding within t.Setenv-managed scope
-	result = GetEnvWithDefault("TEST_ENABLED", false, mustBeTrue)
-	if result != false {
-		t.Errorf("expected default false, got %v", result)
-	}
+	t.Run("invalid value", func(t *testing.T) {
+		t.Setenv("TEST_ENABLED", "false")
+		result := GetEnvWithDefault("TEST_ENABLED", false, mustBeTrue)
+		if result != false {
+			t.Errorf("expected default false, got %v", result)
+		}
+	})
 }
 
 // TestGetEnvWithDefault_Float64Validation tests validation with float64 type
 func TestGetEnvWithDefault_Float64Validation(t *testing.T) {
-	t.Setenv("TEST_RATIO", "0.5")
-
 	inRange := func(v float64) bool { return v >= 0.0 && v <= 1.0 }
 
-	result := GetEnvWithDefault("TEST_RATIO", 0.8, inRange)
-	if result != 0.5 {
-		t.Errorf("expected 0.5, got %v", result)
-	}
+	t.Run("valid value", func(t *testing.T) {
+		t.Setenv("TEST_RATIO", "0.5")
+		result := GetEnvWithDefault("TEST_RATIO", 0.8, inRange)
+		if result != 0.5 {
+			t.Errorf("expected 0.5, got %v", result)
+		}
+	})
 
-	os.Setenv("TEST_RATIO", "1.5") //nolint:errcheck // overriding within t.Setenv-managed scope
-	result = GetEnvWithDefault("TEST_RATIO", 0.8, inRange)
-	if result != 0.8 {
-		t.Errorf("expected default 0.8, got %v", result)
-	}
+	t.Run("invalid value", func(t *testing.T) {
+		t.Setenv("TEST_RATIO", "1.5")
+		result := GetEnvWithDefault("TEST_RATIO", 0.8, inRange)
+		if result != 0.8 {
+			t.Errorf("expected default 0.8, got %v", result)
+		}
+	})
 }
 
 // TestGetEnvWithDefault_DurationValidation tests validation with time.Duration type
 func TestGetEnvWithDefault_DurationValidation(t *testing.T) {
-	t.Setenv("TEST_TIMEOUT", "30s")
-
 	isPositive := func(v time.Duration) bool { return v > 0 }
 	lessThanMinute := func(v time.Duration) bool { return v < time.Minute }
 
-	result := GetEnvWithDefault("TEST_TIMEOUT", 10*time.Second, isPositive, lessThanMinute)
-	if result != 30*time.Second {
-		t.Errorf("expected 30s, got %v", result)
-	}
+	t.Run("valid value", func(t *testing.T) {
+		t.Setenv("TEST_TIMEOUT", "30s")
+		result := GetEnvWithDefault("TEST_TIMEOUT", 10*time.Second, isPositive, lessThanMinute)
+		if result != 30*time.Second {
+			t.Errorf("expected 30s, got %v", result)
+		}
+	})
 
-	os.Setenv("TEST_TIMEOUT", "2m") //nolint:errcheck // overriding within t.Setenv-managed scope
-	result = GetEnvWithDefault("TEST_TIMEOUT", 10*time.Second, isPositive, lessThanMinute)
-	if result != 10*time.Second {
-		t.Errorf("expected default 10s, got %v", result)
-	}
+	t.Run("invalid value", func(t *testing.T) {
+		t.Setenv("TEST_TIMEOUT", "2m")
+		result := GetEnvWithDefault("TEST_TIMEOUT", 10*time.Second, isPositive, lessThanMinute)
+		if result != 10*time.Second {
+			t.Errorf("expected default 10s, got %v", result)
+		}
+	})
 }
