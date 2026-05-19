@@ -818,8 +818,9 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 
 	// Provisioned reflects whether compute AND storage resources are allocated.
 	// While PrintableStatus="Provisioning", KubeVirt is still creating DataVolumes
-	// (storage not yet ready). For all other states the VM CR exists and both compute
-	// and storage are allocated or in an operational state.
+	// (storage not yet ready). Error states (DataVolumeError, ErrorPvcNotFound, etc.)
+	// indicate provisioning failure. For all other states the VM CR exists and both
+	// compute and storage are allocated or in an operational state.
 	oldProvisionedReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
 	if kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusProvisioning {
 		msg := fmt.Sprintf("Creating DataVolumes for boot disk (%dGiB)", instance.Spec.BootDisk.SizeGiB)
@@ -829,6 +830,11 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonProvisioningStorage)
 		if oldProvisionedReason != v1alpha1.ReasonProvisioningStorage {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonProvisioningStorage, eventActionReconcile, "%s", msg)
+		}
+	} else if msg := provisioningErrorMessage(kv); msg != "" {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonProvisioningFailed)
+		if oldProvisionedReason != v1alpha1.ReasonProvisioningFailed {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonProvisioningFailed, eventActionReconcile, "%s", msg)
 		}
 	} else {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionTrue, "All infrastructure resources provisioned successfully", v1alpha1.ReasonInfrastructureReady)
@@ -899,6 +905,44 @@ func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMach
 func kvVMHasConditionWithStatus(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType, status corev1.ConditionStatus) bool {
 	c := kvVMGetCondition(vm, cond)
 	return c != nil && c.Status == status
+}
+
+// provisioningErrorMessage returns a non-empty error message when the VM's
+// PrintableStatus indicates a provisioning failure (DataVolumeError,
+// ErrorPvcNotFound, ErrorUnschedulable, etc.). It extracts detail from the VM's
+// conditions when available. Returns "" for non-error states.
+func provisioningErrorMessage(kv *kubevirtv1.VirtualMachine) string {
+	var prefix string
+	switch kv.Status.PrintableStatus {
+	case kubevirtv1.VirtualMachineStatusDataVolumeError:
+		prefix = "Boot disk provisioning failed"
+	case kubevirtv1.VirtualMachineStatusPvcNotFound:
+		prefix = "Boot disk provisioning failed: PVC not found"
+	case kubevirtv1.VirtualMachineStatusUnschedulable:
+		prefix = "VM scheduling failed: unschedulable"
+	case kubevirtv1.VirtualMachineStatusCrashLoopBackOff:
+		prefix = "VM is in CrashLoopBackOff"
+	case kubevirtv1.VirtualMachineStatusErrImagePull,
+		kubevirtv1.VirtualMachineStatusImagePullBackOff:
+		prefix = "VM image pull failed"
+	case kubevirtv1.VirtualMachineStatusTerminating:
+		prefix = "VM is terminating unexpectedly"
+	default:
+		return ""
+	}
+
+	// Collect messages from False conditions for additional detail.
+	var detail string
+	for _, c := range kv.Status.Conditions {
+		if c.Status == corev1.ConditionFalse && c.Message != "" {
+			detail = c.Message
+			break
+		}
+	}
+	if detail != "" {
+		return fmt.Sprintf("%s: %s", prefix, detail)
+	}
+	return prefix
 }
 
 // determinePhaseFromPrintableStatus maps a KubeVirt VirtualMachine's PrintableStatus

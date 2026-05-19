@@ -45,4 +45,5 @@ const (
 	ReasonProvisioningStorage = "ProvisioningStorage"
 	ReasonWaitingForVM        = "WaitingForVM"
 	ReasonInfrastructureReady = "InfrastructureReady"
+	ReasonProvisioningFailed  = "ProvisioningFailed"
 )

@@ -28,6 +28,7 @@ const (
 	eventReasonTenantNotReady      = "TenantNotReady"
 	eventReasonProvisioningStorage = "ProvisioningStorage"
 	eventReasonInfrastructureReady = "InfrastructureReady"
+	eventReasonProvisioningFailed  = "ProvisioningFailed"
 	eventReasonReady               = "Ready"
 
 	eventActionReconcile = "Reconcile"
