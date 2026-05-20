@@ -55,6 +55,13 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Sync image tags
+        if: steps.pr.outputs.found == 'true' && steps.update.outputs.changed == 'true'
+        run: |
+          git submodule update --init
+          bash scripts/sync-image-tags.sh --fix
+          git add base/kustomization.yaml overlays/
+
       - name: Create bump PR
         if: steps.pr.outputs.found == 'true' && steps.update.outputs.changed == 'true'
         env:
