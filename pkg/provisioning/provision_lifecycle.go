@@ -59,6 +59,8 @@ func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
 		return r.Status.Jobs
 	case *v1alpha1.PublicIP:
 		return r.Status.Jobs
+	case *v1alpha1.PublicIPAttachment:
+		return r.Status.Jobs
 	default:
 		return nil
 	}

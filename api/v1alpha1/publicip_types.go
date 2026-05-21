@@ -105,6 +105,10 @@ type PublicIPStatus struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=Pending;Allocated;Attaching;Attached;Releasing;Failed
 	State PublicIPStateType `json:"state,omitempty"`
+
+	// Attached indicates whether a PublicIPAttachment has successfully attached this IP to a target.
+	// +kubebuilder:validation:Optional
+	Attached bool `json:"attached,omitempty"`
 }
 
 // +kubebuilder:object:root=true

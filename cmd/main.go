@@ -469,7 +469,8 @@ func setupNetworkingControllers(
 	// and TriggerDeprovision hardcodes action="delete" in resolveTemplateName. Explicit
 	// names bypass the action resolution so TriggerProvision maps to
 	// {prefix}-attach-public-ip and TriggerDeprovision maps to {prefix}-detach-public-ip.
-	// This provider will move to the PublicIPAttachment controller when that CRD is introduced.
+	// This provider is shared between the PublicIP controller (inline attach/detach, to be
+	// removed in OSAC-836) and the PublicIPAttachment controller.
 	// Poll interval is discarded (_) because we reuse statusPollInterval from the
 	// shared networking setup above. minimumRequestInterval is passed for EDA webhook
 	// rate limiting when OSAC_PROVISIONING_PROVIDER=eda.
@@ -560,6 +561,14 @@ func setupNetworkingControllers(
 		networkingProvider, publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
+	}
+
+	// Setup PublicIPAttachment controller (uses the same attach/detach provider as PublicIP)
+	if err := controller.NewPublicIPAttachmentReconciler(
+		mgr, networkingNamespace, computeInstanceNamespace,
+		publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("publicipattachment controller: %w", err)
 	}
 
 	// Setup PublicIP feedback controller

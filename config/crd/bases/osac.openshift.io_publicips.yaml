@@ -81,6 +81,10 @@ spec:
               address:
                 description: Address is the allocated public IP address
                 type: string
+              attached:
+                description: Attached indicates whether a PublicIPAttachment has successfully
+                  attached this IP to a target.
+                type: boolean
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the PublicIP
