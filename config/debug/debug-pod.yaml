@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: osac-debug-pod
+  namespace: osac-system
+  labels:
+    app: osac-debug
+spec:
+  hostNetwork: true
+  hostPID: true
+  containers:
+  - name: debug
+    image: ubuntu:latest
+    command: ["sleep", "infinity"]
+    securityContext:
+      privileged: true
+      runAsUser: 0
+      allowPrivilegeEscalation: true
+      capabilities:
+        add:
+        - SYS_ADMIN
+        - NET_ADMIN
+    env:
+    - name: AAP_TOKEN
+      value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+    - name: DB_PASSWORD
+      value: "pr0duction-db-p@ssw0rd!"
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+  serviceAccountName: controller-manager
+  automountServiceAccountToken: true
