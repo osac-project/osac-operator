@@ -110,6 +110,9 @@ spec:
                   to use when creating this cluster
                 pattern: ^[a-zA-Z_][a-zA-Z0-9._]*$
                 type: string
+                x-kubernetes-validations:
+                - message: templateID is immutable
+                  rule: self == oldSelf
               templateParameters:
                 description: |-
                   TemplateParameters is a JSON-encoded map of the parameter values for the

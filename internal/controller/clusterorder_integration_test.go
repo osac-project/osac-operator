@@ -352,4 +352,19 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(result2.RequeueAfter).To(BeNumerically("~", 10*time.Minute, 30*time.Second), "backoff should double the 5-minute gap")
 		})
 	})
+
+	Context("Field immutability", func() {
+		It("should reject updates to templateID", func() {
+			const name = "cluster-order-immutable-template"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+			instance = getClusterOrder(name)
+			instance.Spec.TemplateID = "different.template"
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred(), "patching templateID should be rejected")
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+	})
 })
