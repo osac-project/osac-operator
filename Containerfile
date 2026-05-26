@@ -22,8 +22,7 @@ COPY . ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
+# Use Red Hat hardened core-runtime as minimal base image to package the binaries
 FROM registry.access.redhat.com/hi/core-runtime:latest
 WORKDIR /
 COPY --from=builder /workspace/manager .
