@@ -7,10 +7,14 @@ import (
 )
 
 const (
+	subjectKindServiceAccount    string = "ServiceAccount"
 	defaultServiceAccountName    string = "osac"
 	defaultHostedClusterName     string = "cluster"
 	defaultRoleBindingName       string = "osac"
 	defaultClusterOrderNamespace string = "osac-orders"
+	hubAccessServiceAccountName  string = "hub-access"
+	hubAccessRoleBindingName     string = "hub-access"
+	hubAccessClusterRoleName     string = "hub-access-hosted-clusters"
 )
 
 var (

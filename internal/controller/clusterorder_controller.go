@@ -61,6 +61,7 @@ func (r *ClusterOrderReconciler) components() []component {
 		{"Namespace", r.newNamespace},
 		{"ServiceAccount", r.newServiceAccount},
 		{"RoleBinding", r.newAdminRoleBinding},
+		{"HubAccessRoleBinding", r.newHubAccessRoleBinding},
 	}
 }
 
