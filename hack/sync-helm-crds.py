@@ -10,12 +10,39 @@ BASES_DIR = Path("config/crd/bases")
 TEMPLATES_DIR = Path("charts/operator-crds/templates")
 
 
-def wrap_for_helm(content: str) -> str:
-    if "helm.sh/resource-policy" not in content:
-        content = content.replace(
-            "  annotations:\n",
-            '  annotations:\n    "helm.sh/resource-policy": keep\n',
+def inject_resource_policy_annotation(content: str) -> str:
+    if "helm.sh/resource-policy" in content:
+        return content
+
+    annotations_anchor = "  annotations:\n"
+    if annotations_anchor in content:
+        updated = content.replace(
+            annotations_anchor,
+            annotations_anchor + '    "helm.sh/resource-policy": keep\n',
+            1,
         )
+        if updated != content:
+            return updated
+
+    metadata_anchor = "metadata:\n"
+    if metadata_anchor in content:
+        updated = content.replace(
+            metadata_anchor,
+            metadata_anchor
+            + "  annotations:\n"
+            + '    "helm.sh/resource-policy": keep\n',
+            1,
+        )
+        if updated != content:
+            return updated
+
+    raise SystemExit(
+        "Could not inject helm.sh/resource-policy: keep (metadata section not found)"
+    )
+
+
+def wrap_for_helm(content: str) -> str:
+    content = inject_resource_policy_annotation(content)
     return "{{- if .Values.install }}\n" + content + "{{- end }}\n"
 
 

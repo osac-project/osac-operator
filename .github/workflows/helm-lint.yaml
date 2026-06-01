@@ -10,6 +10,9 @@ on:
       - 'Makefile'
       - '.github/workflows/helm-lint.yaml'
 
+permissions:
+  contents: read
+
 jobs:
   helm-crds-sync:
     name: Check Helm CRD sync
@@ -17,6 +20,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -32,6 +37,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Helm
       uses: azure/setup-helm@v5
