@@ -362,13 +362,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
-<<<<<<< HEAD
 GOTOOLCHAIN=$(GOTOOLCHAIN) GOBIN=$(LOCALBIN) go install $${package} ;\
-||||||| parent of 1a1c9b1 (NO-ISSUE: adds CI validation, lint tightening, and pre-push hooks)
-GOTOOLCHAIN=go1.25.0 GOBIN=$(LOCALBIN) go install $${package} ;\
-=======
-GOTOOLCHAIN=auto GOBIN=$(LOCALBIN) go install $${package} ;\
->>>>>>> 1a1c9b1 (NO-ISSUE: adds CI validation, lint tightening, and pre-push hooks)
 mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)
