@@ -58,6 +58,11 @@ CONTAINERFILE ?= Containerfile
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
 
+# Go version for local make targets. Keep in sync with go.mod.
+GO_VERSION ?= 1.26.2
+GOTOOLCHAIN ?= go$(GO_VERSION)
+GOTOOLCHAIN_AUTO ?= $(GOTOOLCHAIN)+auto
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -120,7 +125,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	GOTOOLCHAIN=go1.25.0+auto KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: test-integration
 test-integration: test test-kustomize test-smoke ## Run all tests including integration (kustomize + smoke).
@@ -337,7 +342,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
-GOTOOLCHAIN=go1.25.0 GOBIN=$(LOCALBIN) go install $${package} ;\
+GOTOOLCHAIN=$(GOTOOLCHAIN) GOBIN=$(LOCALBIN) go install $${package} ;\
 mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)
