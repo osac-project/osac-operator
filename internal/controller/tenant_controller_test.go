@@ -135,11 +135,9 @@ var _ = Describe("Tenant Controller", func() {
 					g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 					g.Expect(tenant.Status.Phase).To(Equal(expectedPhase))
 					if expectedSCs == nil {
-						g.Expect(tenant.Status.StorageClass).To(BeEmpty())
 						g.Expect(tenant.Status.StorageClasses).To(BeNil())
 					} else {
 						g.Expect(tenant.Status.StorageClasses).To(ConsistOf(expectedSCs))
-						g.Expect(tenant.Status.StorageClass).To(Equal(expectedSCs[0].Name))
 					}
 
 					nsCond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)

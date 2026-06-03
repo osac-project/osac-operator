@@ -81,11 +81,6 @@ type TenantStatus struct {
 	// Namespace is the namespace allocated to the tenant on the target cluster
 	Namespace string `json:"namespace,omitempty"`
 
-	// StorageClass is the StorageClass allocated to the tenant on the target cluster.
-	// Deprecated: use StorageClasses instead. Retained for backward compatibility
-	// until all consumers migrate. Will be removed by MGMT-24139.
-	StorageClass string `json:"storageClass,omitempty"`
-
 	// StorageClasses lists all resolved StorageClass mappings for the tenant,
 	// one per storage tier.
 	// +kubebuilder:validation:Optional
@@ -104,7 +99,7 @@ type TenantStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
-// +kubebuilder:printcolumn:name="Storage Class",type=string,JSONPath=`.status.storageClass`
+// +kubebuilder:printcolumn:name="Storage Classes",type=string,JSONPath=`.status.storageClasses[*].name`
 // +kubebuilder:printcolumn:name="Storage Tiers",type=string,JSONPath=`.status.storageClasses[*].tier`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 

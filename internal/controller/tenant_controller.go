@@ -156,7 +156,6 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 	// Ready. Any early return below leaves the status in a clean Progressing state.
 	instance.Status.Phase = v1alpha1.TenantPhaseProgressing
 	instance.Status.Namespace = ""
-	instance.Status.StorageClass = ""
 	instance.Status.StorageClasses = nil
 
 	// Get target cluster client where namespace, StorageClass, and UDN are reconciled
@@ -218,7 +217,6 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 		result.conditionMessage())
 
 	instance.Status.Namespace = namespace.GetName()
-	instance.Status.StorageClass = result.resolved[0].Name
 	instance.Status.StorageClasses = result.resolved
 
 	// SC found, but if a provision job is still non-terminal, poll it before
