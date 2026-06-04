@@ -138,6 +138,10 @@ Pass `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME=<secret-name>` to the
 config-as-code job (or set it in the relevant config vars). The Secret must
 be readable by the `osac-sa` service account in the AAP namespace.
 
+Create a `compute-instance-operations-ig` Secret for VM/MOC credentials
+(OpenStack application credentials when required). See
+`osac-aap/config/base/secret-compute-instance-operations-ig-example.yaml`.
+
 ## References
 
 - [MGMT-23102](https://redhat.atlassian.net/browse/MGMT-23102) — Add the
