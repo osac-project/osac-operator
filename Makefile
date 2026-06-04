@@ -59,7 +59,7 @@ CONTAINERFILE ?= Containerfile
 ENVTEST_K8S_VERSION = 1.31.0
 
 # Go version for local make targets. Keep in sync with go.mod.
-GO_VERSION ?= 1.26.2
+GO_VERSION ?= 1.26.3
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GOTOOLCHAIN_AUTO ?= $(GOTOOLCHAIN)+auto
 
