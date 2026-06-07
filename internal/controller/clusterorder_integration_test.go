@@ -223,7 +223,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			instance = getClusterOrder(name)
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(statusPollInterval), "should requeue to block deletion")
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay), "should wait for backoff before retry")
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		})
 	})
 

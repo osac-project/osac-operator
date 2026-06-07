@@ -566,29 +566,19 @@ func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.C
 // handleDeprovisioning manages the deprovisioning job lifecycle for ClusterOrder.
 // Waits for provision job termination if needed, then triggers deprovision job.
 func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Check for ManagementStateManual annotation
 	val, exists := instance.Annotations[osacManagementStateAnnotation]
 	if exists && val == ManagementStateManual {
-		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
+		ctrllog.FromContext(ctx).Info("skipping deprovisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}
-
-	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	if !provisioning.HasJobID(latestDeprovisionJob) {
-		return provisioning.TriggerDeprovisionJob(ctx, r.ProvisioningProvider, instance,
-			&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
+		return ctrl.Result{}, nil
 	}
-
-	result, done, err := provisioning.PollDeprovisionJob(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.Jobs, latestDeprovisionJob, r.StatusPollInterval)
-	if err != nil {
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
+		&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
 		return result, err
-	}
-	if !done {
-		return result, nil
 	}
 	return ctrl.Result{}, nil
 }

@@ -331,19 +331,34 @@ func updateProvisionJobFromDeprovisionResult(jobs *[]v1alpha1.JobStatus, result 
 	UpdateJob(*jobs, updatedJob)
 }
 
+// RunDeprovisioningLifecycle encapsulates the full deprovisioning flow: trigger if no job
+// exists, poll/retry if one does. Controllers call this instead of duplicating the
+// trigger-or-poll logic. Returns (result, done, error) where done=true means the
+// controller can proceed with finalizer removal.
+func RunDeprovisioningLifecycle(ctx context.Context, provider ProvisioningProvider, resource client.Object,
+	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	latestDeprovisionJob := FindLatestJobByType(*jobs, v1alpha1.JobTypeDeprovision)
+
+	if !HasJobID(latestDeprovisionJob) {
+		result, err := TriggerDeprovisionJob(ctx, provider, resource, jobs, maxHistory, pollInterval)
+		return result, false, err
+	}
+
+	return PollDeprovisionJob(ctx, provider, resource, jobs, latestDeprovisionJob, maxHistory, pollInterval)
+}
+
 // PollDeprovisionJob polls the status of an existing deprovision job.
 // Returns (result, done, error) where done=true means the job reached terminal state
 // and the controller can proceed with finalizer removal.
+// When a deprovision job fails with BlockDeletionOnFailure, the function retries
+// after exponential backoff rather than blocking forever.
 func PollDeprovisionJob(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, latestDeprovisionJob *v1alpha1.JobStatus, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if latestDeprovisionJob.State.IsTerminal() {
-		// Already terminal — check if deletion should be blocked
 		if !latestDeprovisionJob.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
-			log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-				"jobID", latestDeprovisionJob.JobID, "state", latestDeprovisionJob.State)
-			return ctrl.Result{RequeueAfter: pollInterval}, false, nil
+			return handleDeprovisionBackoff(ctx, provider, resource, jobs, latestDeprovisionJob, maxHistory, pollInterval)
 		}
 		return ctrl.Result{}, true, nil
 	}
@@ -358,7 +373,6 @@ func PollDeprovisionJob(ctx context.Context, provider ProvisioningProvider, reso
 		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
 	}
 
-	// Update job status if changed
 	if status.State != latestDeprovisionJob.State || status.Message != latestDeprovisionJob.Message {
 		log.Info("deprovision job status changed", "jobID", latestDeprovisionJob.JobID,
 			"oldState", latestDeprovisionJob.State, "newState", status.State)
@@ -368,17 +382,29 @@ func PollDeprovisionJob(ctx context.Context, provider ProvisioningProvider, reso
 		UpdateJob(*jobs, updatedJob)
 	}
 
-	// Continue polling if still running
 	if !status.State.IsTerminal() {
 		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
 	}
 
-	// Job reached terminal state
 	if !status.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
+		return handleDeprovisionBackoff(ctx, provider, resource, jobs, latestDeprovisionJob, maxHistory, pollInterval)
 	}
 
 	return ctrl.Result{}, true, nil
+}
+
+func handleDeprovisionBackoff(ctx context.Context, provider ProvisioningProvider, resource client.Object,
+	jobs *[]v1alpha1.JobStatus, latestJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	log := ctrllog.FromContext(ctx)
+	backoff := ComputeDeprovisionBackoff(*jobs)
+	elapsed := time.Since(latestJob.Timestamp.Time)
+	if elapsed >= backoff {
+		log.Info("deprovision backoff elapsed, retrying", "jobID", latestJob.JobID, "backoff", backoff)
+		result, err := TriggerDeprovisionJob(ctx, provider, resource, jobs, maxHistory, pollInterval)
+		return result, false, err
+	}
+	remaining := backoff - elapsed
+	log.Info("deprovision job failed, retrying after backoff",
+		"jobID", latestJob.JobID, "backoff", backoff, "remaining", remaining)
+	return ctrl.Result{RequeueAfter: remaining}, false, nil
 }

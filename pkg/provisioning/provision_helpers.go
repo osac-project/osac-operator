@@ -79,15 +79,14 @@ func HasJobID(job *v1alpha1.JobStatus) bool {
 	return job != nil && job.JobID != ""
 }
 
-// ComputeBackoffFromJobs determines the next backoff duration based on the gap
-// between the last two failed provision jobs with the same ConfigVersion.
+// computeBackoffFromFailedJobs determines the next backoff duration based on the gap
+// between the last two failed jobs matching the filter.
 // First failure uses BackoffBaseDelay. Subsequent failures double the previous gap.
-func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) time.Duration {
-	// Find last two failed provision jobs with matching ConfigVersion (reverse order)
+func computeBackoffFromFailedJobs(jobs []v1alpha1.JobStatus, match func(*v1alpha1.JobStatus) bool) time.Duration {
 	var last, prev *v1alpha1.JobStatus
 	for i := len(jobs) - 1; i >= 0; i-- {
 		j := &jobs[i]
-		if j.Type != v1alpha1.JobTypeProvision || j.State != v1alpha1.JobStateFailed || j.ConfigVersion != configVersion {
+		if j.State != v1alpha1.JobStateFailed || !match(j) {
 			continue
 		}
 		if last == nil {
@@ -114,4 +113,19 @@ func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) tim
 		return BackoffMaxDelay
 	}
 	return nextDelay
+}
+
+// ComputeBackoffFromJobs determines the next backoff duration based on the gap
+// between the last two failed provision jobs with the same ConfigVersion.
+func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) time.Duration {
+	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
+		return j.Type == v1alpha1.JobTypeProvision && j.ConfigVersion == configVersion
+	})
+}
+
+// ComputeDeprovisionBackoff determines the next backoff duration for deprovision retries.
+func ComputeDeprovisionBackoff(jobs []v1alpha1.JobStatus) time.Duration {
+	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
+		return j.Type == v1alpha1.JobTypeDeprovision
+	})
 }

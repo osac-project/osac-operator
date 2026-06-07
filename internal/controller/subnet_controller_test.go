@@ -588,7 +588,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 		})
 
-		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
+		It("should wait for backoff when deprovision fails with BlockDeletionOnFailure", func() {
 			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:                  "deprovision-failed-505",
@@ -610,7 +610,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 			result, err := reconciler.handleDeprovisioning(ctx, subnet)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay))
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		})
 	})
 })

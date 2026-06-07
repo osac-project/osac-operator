@@ -596,23 +596,48 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 		}
 		latestJob := &jobs[0]
 		provider := &mockProvider{}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
 	})
 
-	ginkgo.It("blocks deletion when already-terminal job failed with BlockDeletionOnFailure", func() {
+	ginkgo.It("waits for backoff when already-terminal job failed with BlockDeletionOnFailure", func() {
 		jobs := []v1alpha1.JobStatus{
 			{JobID: "d1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed,
 				BlockDeletionOnFailure: true, Timestamp: metav1.NewTime(time.Now())},
 		}
 		latestJob := &jobs[0]
 		provider := &mockProvider{}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+	})
+
+	ginkgo.It("retries deprovision after backoff when failed with BlockDeletionOnFailure", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "d1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed,
+				BlockDeletionOnFailure: true, Timestamp: metav1.NewTime(time.Now().Add(-BackoffBaseDelay - time.Second))},
+		}
+		latestJob := &jobs[0]
+		retryCalled := false
+		provider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				retryCalled = true
+				return &DeprovisionResult{
+					Action: DeprovisionTriggered,
+					JobID:  "d2",
+				}, nil
+			},
+		}
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(retryCalled).To(BeTrue())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		retryJob := FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
+		Expect(retryJob.JobID).To(Equal("d2"))
 	})
 
 	ginkgo.It("continues polling when job is still running", func() {
@@ -625,7 +650,7 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 				return ProvisionStatus{State: v1alpha1.JobStateRunning, Message: "in progress"}, nil
 			},
 		}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
@@ -644,13 +669,13 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 				return ProvisionStatus{State: v1alpha1.JobStateSucceeded, Message: "done"}, nil
 			},
 		}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
 	})
 
-	ginkgo.It("blocks deletion when poll shows failure with BlockDeletionOnFailure", func() {
+	ginkgo.It("waits for backoff when poll shows failure with BlockDeletionOnFailure", func() {
 		jobs := []v1alpha1.JobStatus{
 			{JobID: "d1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateRunning,
 				BlockDeletionOnFailure: true, Timestamp: metav1.NewTime(time.Now())},
@@ -661,10 +686,11 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 				return ProvisionStatus{State: v1alpha1.JobStateFailed, Message: "deprovision failed"}, nil
 			},
 		}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
-		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(result.RequeueAfter).To(BeNumerically("<=", BackoffBaseDelay))
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 	})
 
 	ginkgo.It("persists error message on poll failure and requeues", func() {
@@ -677,7 +703,7 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 				return ProvisionStatus{}, fmt.Errorf("timeout")
 			},
 		}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
@@ -695,7 +721,7 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 				return ProvisionStatus{State: v1alpha1.JobStateFailed, Message: "failed"}, nil
 			},
 		}
-		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, pollInterval)
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
