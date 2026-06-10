@@ -22,7 +22,7 @@ spec:
       containers:
       - name: manager
         command:
-        - /manager
+        - /usr/local/bin/manager
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
