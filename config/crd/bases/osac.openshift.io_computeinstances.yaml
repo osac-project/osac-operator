@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.memoryGiB
       name: Memory
       type: integer
+    - jsonPath: .spec.guestOSFamily
+      name: OS
+      type: string
     - jsonPath: .spec.runStrategy
       name: RunStrategy
       type: string
@@ -103,6 +106,16 @@ spec:
                 type: integer
                 x-kubernetes-validations:
                 - message: cores is immutable
+                  rule: self == oldSelf
+              guestOSFamily:
+                description: |-
+                  GuestOSFamily specifies the guest operating system family for the VM.
+                  To support future OS families, this field is a freeform string.
+                  Currently, any value other than "windows" will be treated as "linux".
+                  This field is immutable after creation.
+                type: string
+                x-kubernetes-validations:
+                - message: guestOSFamily is immutable
                   rule: self == oldSelf
               image:
                 description: Image defines the VM image configuration

@@ -399,6 +399,95 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 		})
 	})
 
+	Describe("GuestOSFamily validation", func() {
+		It("should allow creation without guestOSFamily field (optional)", func() {
+			instance := createValidInstance("test-no-guestos")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should allow creation with guestOSFamily set to linux", func() {
+			instance := createValidInstance("test-linux")
+			instance.Spec.GuestOSFamily = "linux"
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should allow creation with guestOSFamily set to windows", func() {
+			instance := createValidInstance("test-windows")
+			instance.Spec.GuestOSFamily = "windows"
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should allow creation with unknown guestOSFamily value (freeform string)", func() {
+			instance := createValidInstance("test-freebsd")
+			instance.Spec.GuestOSFamily = "freebsd"
+			// No validation constraint, freeform string per D-03
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should reject changing guestOSFamily after creation", func() {
+			instance := createValidInstance("test-immutable")
+			instance.Spec.GuestOSFamily = "linux"
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Fetch latest version
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			// Attempt to change guestOSFamily
+			instance.Spec.GuestOSFamily = "windows"
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("guestOSFamily is immutable"))
+		})
+
+		It("should allow updates when guestOSFamily unchanged", func() {
+			instance := createValidInstance("test-mutable-other")
+			instance.Spec.GuestOSFamily = "windows"
+			instance.Spec.RunStrategy = osacv1alpha1.RunStrategyAlways
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Fetch latest version
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			// Change mutable field (runStrategy), leave guestOSFamily unchanged
+			instance.Spec.RunStrategy = osacv1alpha1.RunStrategyHalted
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		})
+
+		It("should allow updates when guestOSFamily was not set and remains unset", func() {
+			instance := createValidInstance("test-unset-unchanged")
+			instance.Spec.RunStrategy = osacv1alpha1.RunStrategyAlways
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Fetch latest version
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			// Change mutable field, leave guestOSFamily unset
+			instance.Spec.RunStrategy = osacv1alpha1.RunStrategyHalted
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		})
+
+		It("should serialize guestOSFamily to JSON when set", func() {
+			instance := createValidInstance("test-serialize")
+			instance.Spec.GuestOSFamily = "windows"
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Fetch and verify
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			Expect(instance.Spec.GuestOSFamily).To(Equal("windows"))
+		})
+
+		It("should omit guestOSFamily from JSON when empty (omitempty)", func() {
+			instance := createValidInstance("test-omitempty")
+			// Don't set GuestOSFamily
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Fetch and verify field is empty
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			Expect(instance.Spec.GuestOSFamily).To(Equal(""))
+		})
+	})
+
 	Describe("MaxItems validation", func() {
 		It("should reject creating ComputeInstance with more than 8 networkAttachments", func() {
 			instance := createValidInstance("test-max-attachments")

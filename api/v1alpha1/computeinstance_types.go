@@ -100,6 +100,14 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image is immutable"
 	Image ImageSpec `json:"image"`
 
+	// GuestOSFamily specifies the guest operating system family for the VM.
+	// To support future OS families, this field is a freeform string.
+	// Currently, any value other than "windows" will be treated as "linux".
+	// This field is immutable after creation.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="guestOSFamily is immutable"
+	GuestOSFamily string `json:"guestOSFamily,omitempty"`
+
 	// Cores is the number of CPU cores
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
@@ -305,6 +313,7 @@ type ComputeInstanceStatus struct {
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Cores",type=integer,JSONPath=`.spec.cores`
 // +kubebuilder:printcolumn:name="Memory",type=integer,JSONPath=`.spec.memoryGiB`
+// +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.guestOSFamily`
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
