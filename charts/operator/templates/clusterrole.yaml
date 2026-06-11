@@ -19,6 +19,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+- apiGroups:
   - events.k8s.io
   resources:
   - events
@@ -61,6 +67,7 @@ rules:
   resources:
   - clusterorders
   - computeinstances
+  - publicipattachments
   - publicippools
   - publicips
   - securitygroups
@@ -80,6 +87,7 @@ rules:
   resources:
   - clusterorders/finalizers
   - computeinstances/finalizers
+  - publicipattachments/finalizers
   - publicippools/finalizers
   - publicips/finalizers
   - securitygroups/finalizers
@@ -93,6 +101,7 @@ rules:
   resources:
   - clusterorders/status
   - computeinstances/status
+  - publicipattachments/status
   - publicippools/status
   - publicips/status
   - securitygroups/status
