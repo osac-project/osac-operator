@@ -99,8 +99,20 @@ test/e2e/                  # End-to-end tests
 ## Code Quality
 
 - Pre-commit hooks in `.pre-commit-config.yaml`: whitespace, yamllint, golangci-lint
+- Pre-push hooks: kustomize-build, check-generated (manifest and code freshness)
 - Linter config in `.golangci.yml`
 - Run manually: `pre-commit run --all-files`
+
+### Hook Installation
+
+Two hook types must be installed separately:
+
+```bash
+pre-commit install                        # commit-stage hooks (lint, whitespace, etc.)
+pre-commit install --hook-type pre-push   # push-stage hooks (kustomize-build, check-generated)
+```
+
+Or use `make install-hooks` to install both at once.
 
 ## Automation Hooks
 

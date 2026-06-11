@@ -33,26 +33,19 @@ linters:
   exclusions:
     generated: lax
     rules:
-      - linters:
-          - dupl
-          - lll
-        path: pkg/
+      # Long lines in controller/pkg code come from structured logging, K8s API calls,
+      # and gRPC type names — breaking them hurts readability more than the length
       - linters:
           - lll
-        path: api/
+        path: (internal/|pkg/)
+      # Feedback controllers share a reconcile skeleton by design (dual-controller pattern)
       - linters:
           - dupl
-          - lll
-        path: internal/
+        path: internal/controller/
+      # Test duplication is intentional — each test should be self-contained and readable
       - linters:
           - dupl
-        path: api/v1alpha1/clusterorder_clusterreference.go
-      - linters:
-          - dupl
-        path: api/v1alpha1/computeinstance_virtualmachinereference.go
-      - linters:
-          - errcheck
-        path: ".*_test.go$"
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

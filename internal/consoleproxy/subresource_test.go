@@ -244,7 +244,7 @@ var _ = Describe("forwardUpstreamResponse", func() {
 			}
 
 			rec := httptest.NewRecorder()
-			forwardUpstreamResponse(rec, resp)
+			Expect(forwardUpstreamResponse(rec, resp)).To(Succeed())
 
 			Expect(rec.Code).To(Equal(wantCode))
 			if wantContentType != "" {

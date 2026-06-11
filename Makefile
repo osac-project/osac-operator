@@ -211,6 +211,11 @@ tag-api: ## Tag a new release of the api/ Go module (e.g. make tag-api API_VERSI
 		exit 1 ; \
 	fi
 
+.PHONY: install-hooks
+install-hooks: ## Install pre-commit hooks (commit-stage and pre-push).
+	pre-commit install
+	pre-commit install --hook-type pre-push
+
 ##@ Build
 
 .PHONY: build
@@ -306,12 +311,16 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+KUBECONFORM ?= $(LOCALBIN)/kubeconform
+KUBE_LINTER ?= $(LOCALBIN)/kube-linter
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.20.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.12.1
+KUBECONFORM_VERSION ?= v0.7.0
+KUBE_LINTER_VERSION ?= v0.7.1
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -332,6 +341,16 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: kubeconform
+kubeconform: $(KUBECONFORM) ## Download kubeconform locally if necessary.
+$(KUBECONFORM): $(LOCALBIN)
+	$(call go-install-tool,$(KUBECONFORM),github.com/yannh/kubeconform/cmd/kubeconform,$(KUBECONFORM_VERSION))
+
+.PHONY: kube-linter
+kube-linter: $(KUBE_LINTER) ## Download kube-linter locally if necessary.
+$(KUBE_LINTER): $(LOCALBIN)
+	$(call go-install-tool,$(KUBE_LINTER),golang.stackrox.io/kube-linter/cmd/kube-linter,$(KUBE_LINTER_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

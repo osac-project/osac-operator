@@ -28,3 +28,17 @@ repos:
     language: system
     files: \.go$
     entry: bin/golangci-lint run --fix
+
+  - id: kustomize-build
+    name: validate kustomize build
+    entry: bash -c 'bin/kustomize build config/default > /dev/null'
+    language: system
+    pass_filenames: false
+    stages: [pre-push]
+
+  - id: check-generated
+    name: check generated code is up to date
+    entry: bash -c 'make manifests generate && git diff --exit-code config/crd/ config/rbac/role.yaml api/v1alpha1/zz_generated.deepcopy.go'
+    language: system
+    pass_filenames: false
+    stages: [pre-push]
