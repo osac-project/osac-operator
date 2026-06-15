@@ -25,16 +25,19 @@ type SubnetSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
 	VirtualNetwork string `json:"virtualNetwork"`
 
 	// IPv4CIDR is the IPv4 CIDR block for this subnet
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 
 	// IPv6CIDR is the IPv6 CIDR block for this subnet
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 }
 

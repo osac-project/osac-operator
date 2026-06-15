@@ -57,12 +57,21 @@ spec:
               ipv4Cidr:
                 description: IPv4CIDR is the IPv4 CIDR block for this subnet
                 type: string
+                x-kubernetes-validations:
+                - message: ipv4Cidr is immutable
+                  rule: self == oldSelf
               ipv6Cidr:
                 description: IPv6CIDR is the IPv6 CIDR block for this subnet
                 type: string
+                x-kubernetes-validations:
+                - message: ipv6Cidr is immutable
+                  rule: self == oldSelf
               virtualNetwork:
                 description: VirtualNetwork is the ID of the parent VirtualNetwork
                 type: string
+                x-kubernetes-validations:
+                - message: virtualNetwork is immutable
+                  rule: self == oldSelf
             required:
             - virtualNetwork
             type: object

@@ -66,6 +66,9 @@ spec:
                   type: string
                 minItems: 1
                 type: array
+                x-kubernetes-validations:
+                - message: cidrs is immutable
+                  rule: self == oldSelf
               implementationStrategy:
                 description: |-
                   ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).
@@ -74,6 +77,9 @@ spec:
                 - metallb-l2
                 - netris
                 type: string
+                x-kubernetes-validations:
+                - message: implementationStrategy is immutable
+                  rule: self == oldSelf
               ipFamily:
                 description: IPFamily indicates the IP address family for this pool
                   (IPv4 or IPv6)
@@ -81,6 +87,9 @@ spec:
                 - IPv4
                 - IPv6
                 type: string
+                x-kubernetes-validations:
+                - message: ipFamily is immutable
+                  rule: self == oldSelf
             required:
             - cidrs
             - ipFamily

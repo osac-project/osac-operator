@@ -59,21 +59,36 @@ spec:
                   This value is derived from the NetworkClass at creation time and stored here for direct
                   access by controllers and provisioning systems.
                 type: string
+                x-kubernetes-validations:
+                - message: implementationStrategy is immutable
+                  rule: self == oldSelf
               ipv4Cidr:
                 description: IPv4CIDR is the IPv4 CIDR block for this virtual network
                 type: string
+                x-kubernetes-validations:
+                - message: ipv4Cidr is immutable
+                  rule: self == oldSelf
               ipv6Cidr:
                 description: IPv6CIDR is the IPv6 CIDR block for this virtual network
                 type: string
+                x-kubernetes-validations:
+                - message: ipv6Cidr is immutable
+                  rule: self == oldSelf
               networkClass:
                 description: |-
                   NetworkClass is the name of the NetworkClass that defines implementation strategy.
                   When omitted, the platform default NetworkClass is used.
                 type: string
+                x-kubernetes-validations:
+                - message: networkClass is immutable
+                  rule: self == oldSelf
               region:
                 description: Region is the cloud region where this VirtualNetwork
                   will be provisioned
                 type: string
+                x-kubernetes-validations:
+                - message: region is immutable
+                  rule: self == oldSelf
             required:
             - region
             type: object

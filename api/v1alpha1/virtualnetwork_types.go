@@ -25,22 +25,26 @@ type VirtualNetworkSpec struct {
 	// Region is the cloud region where this VirtualNetwork will be provisioned
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="region is immutable"
 	Region string `json:"region"`
 
 	// IPv4CIDR is the IPv4 CIDR block for this virtual network
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 
 	// IPv6CIDR is the IPv6 CIDR block for this virtual network
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 
 	// NetworkClass is the name of the NetworkClass that defines implementation strategy.
 	// When omitted, the platform default NetworkClass is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkClass is immutable"
 	NetworkClass string `json:"networkClass,omitempty"`
 
 	// ImplementationStrategy determines the underlying network backend and Ansible role to use.
@@ -48,6 +52,7 @@ type VirtualNetworkSpec struct {
 	// access by controllers and provisioning systems.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="implementationStrategy is immutable"
 	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 }
 

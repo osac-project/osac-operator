@@ -102,6 +102,9 @@ spec:
                   ImplementationStrategy determines the backend used to enforce security rules.
                   Set by the fulfillment-service; defaults to network_policy when empty.
                 type: string
+                x-kubernetes-validations:
+                - message: implementationStrategy is immutable
+                  rule: self == oldSelf
               ingressRules:
                 description: IngressRules defines the ingress security rules
                 items:
@@ -149,6 +152,9 @@ spec:
               virtualNetwork:
                 description: VirtualNetwork is the ID of the parent VirtualNetwork
                 type: string
+                x-kubernetes-validations:
+                - message: virtualNetwork is immutable
+                  rule: self == oldSelf
             required:
             - virtualNetwork
             type: object

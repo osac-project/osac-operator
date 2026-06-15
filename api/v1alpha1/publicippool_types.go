@@ -25,12 +25,14 @@ type PublicIPPoolSpec struct {
 	// CIDRs is the list of CIDR blocks for this pool. All CIDRs must match the declared IPFamily.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cidrs is immutable"
 	CIDRs []string `json:"cidrs"`
 
 	// IPFamily indicates the IP address family for this pool (IPv4 or IPv6)
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=IPv4;IPv6
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipFamily is immutable"
 	IPFamily string `json:"ipFamily"`
 
 	// ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).
@@ -38,6 +40,7 @@ type PublicIPPoolSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=metallb-l2;netris
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="implementationStrategy is immutable"
 	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 }
 
