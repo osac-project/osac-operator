@@ -60,6 +60,10 @@ const (
 // instead of exponential backoff.
 var errSubnetNotFound = errors.New("subnet CR not found")
 
+// errSubnetRequired is returned when networkAttachments[0].subnetRef is empty.
+// Permanent configuration error — handleUpdate does not requeue.
+var errSubnetRequired = errors.New("primary subnet reference is required")
+
 // ComputeInstanceReconciler reconciles a ComputeInstance object
 type ComputeInstanceReconciler struct {
 	client.Client
@@ -594,15 +598,13 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 // resolveSubnetTargetNamespace looks up the Subnet CR referenced by the primary subnet
 // (networkAttachments[0].subnetRef) and returns the subnet target
 // namespace (which equals the Subnet CR name).
-// Returns empty string if no primary subnet is set.
-// Returns error if Subnet CR lookup fails.
+// Returns error if the primary subnet reference is empty or Subnet CR lookup fails.
 func (r *ComputeInstanceReconciler) resolveSubnetTargetNamespace(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
 	log := ctrllog.FromContext(ctx)
 
 	primarySubnetRef := instance.Spec.PrimarySubnetRef()
 	if primarySubnetRef == "" {
-		// No subnet reference, no namespace to resolve
-		return "", nil
+		return "", errSubnetRequired
 	}
 
 	// Look up Subnet CR in the same namespace as ComputeInstance
@@ -629,15 +631,11 @@ func (r *ComputeInstanceReconciler) resolveSubnetTargetNamespace(ctx context.Con
 }
 
 // syncSubnetTargetNamespaceAnnotation ensures the subnet-target-namespace annotation is set
-// when a primary subnet (networkAttachments[0].subnetRef) is configured.
+// from the primary subnet (networkAttachments[0].subnetRef).
 // The primary subnet reference is immutable, so the annotation only needs to be resolved
 // and written once; subsequent reconciles reuse the cached annotation value.
 // Returns the resolved namespace, whether the annotation was written, and any error.
 func (r *ComputeInstanceReconciler) syncSubnetTargetNamespaceAnnotation(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, bool, error) {
-	if instance.Spec.PrimarySubnetRef() == "" {
-		return "", false, nil
-	}
-
 	// Primary subnet is immutable — if the annotation is already set, reuse it.
 	if ns, ok := instance.Annotations[osacSubnetTargetNamespaceAnnotation]; ok {
 		return ns, false, nil
@@ -739,13 +737,9 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	// When a networkAttachment is set, the VM is created in the subnet target namespace
-	// (by the AAP playbook), not in the tenant target namespace.  Reuse the
-	// value resolved by syncMetadataPreflight to avoid a redundant API call.
-	targetNamespace := tenant.Status.Namespace
-	if subnetTargetNamespace != "" {
-		targetNamespace = subnetTargetNamespace
-	}
+	// The VM is created in the subnet target namespace (by the AAP playbook).
+	// Reuse the value resolved by syncMetadataPreflight to avoid a redundant API call.
+	targetNamespace := subnetTargetNamespace
 
 	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, targetNamespace)
 	if err != nil {

@@ -26,6 +26,8 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -152,6 +154,28 @@ func (noopProvisioningProvider) GetDeprovisionStatus(_ context.Context, _ client
 
 func (noopProvisioningProvider) Name() string { return "noop" }
 
+const testSubnetRef = "ci-test-subnet"
+
+// ensureTestSubnet creates the standard test Subnet CR in the given namespace if it does not exist.
+func ensureTestSubnet(ctx context.Context, namespace string) {
+	subnet := &osacv1alpha1.Subnet{}
+	nn := client.ObjectKey{Name: testSubnetRef, Namespace: namespace}
+	err := k8sClient.Get(ctx, nn, subnet)
+	if err != nil && errors.IsNotFound(err) {
+		subnet = &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testSubnetRef,
+				Namespace: namespace,
+			},
+			Spec: osacv1alpha1.SubnetSpec{
+				VirtualNetwork: "test-vnet",
+				IPv4CIDR:       "10.0.0.0/24",
+			},
+		}
+		Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+	}
+}
+
 // newTestComputeInstanceSpec creates a valid ComputeInstanceSpec for testing
 func newTestComputeInstanceSpec(templateID string) osacv1alpha1.ComputeInstanceSpec {
 	return osacv1alpha1.ComputeInstanceSpec{
@@ -166,5 +190,8 @@ func newTestComputeInstanceSpec(templateID string) osacv1alpha1.ComputeInstanceS
 			SizeGiB: 30,
 		},
 		RunStrategy: osacv1alpha1.RunStrategyAlways,
+		NetworkAttachments: []osacv1alpha1.NetworkAttachment{
+			{SubnetRef: testSubnetRef},
+		},
 	}
 }

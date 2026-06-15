@@ -59,6 +59,7 @@ func createReadyTenant(ctx context.Context, namespace, name string) {
 	tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
 	tenant.Status.Namespace = namespace
 	Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+	ensureTestSubnet(ctx, namespace)
 }
 
 // deleteTenantInNamespace removes a Tenant by name in the given namespace (clears finalizers first).
@@ -87,6 +88,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 		computeInstance := &osacv1alpha1.ComputeInstance{}
 
 		BeforeEach(func() {
+			ensureTestSubnet(ctx, namespaceName)
+
 			By("creating a tenant for the ComputeInstance to reference")
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1993,17 +1996,19 @@ var _ = Describe("ComputeInstance Controller", func() {
 			reconciler = NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
-		It("should return empty string when subnetRef is not set", func() {
+		It("should return error when subnetRef is not set", func() {
 			instance := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-ci-no-subnet",
 					Namespace: namespaceName,
 				},
-				Spec: newTestComputeInstanceSpec("test_template"),
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					TemplateID: "test_template",
+				},
 			}
 
 			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(err).To(MatchError(errSubnetRequired))
 			Expect(subnetNS).To(BeEmpty())
 		})
 
@@ -2310,7 +2315,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(ciAfter.Annotations).To(Equal(annotationsBefore), "Annotations should be unchanged across reconciles")
 		})
 
-		It("should not set subnet-target-namespace annotation when subnetRef is empty", func() {
+		It("should fail reconciliation when subnetRef is empty", func() {
 			const resourceName = "test-ci-no-subnet-vm-ns"
 			const tenantName = "tenant-no-subnet-vm"
 			defer deleteCI(resourceName)
@@ -2326,7 +2331,19 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacTenantAnnotation: tenantName,
 					},
 				},
-				Spec: newTestComputeInstanceSpec("test_template"),
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					TemplateID: "test_template",
+					Image: osacv1alpha1.ImageSpec{
+						SourceType: osacv1alpha1.ImageSourceTypeRegistry,
+						SourceRef:  "quay.io/fedora/fedora-coreos:stable",
+					},
+					Cores:     4,
+					MemoryGiB: 8,
+					BootDisk: osacv1alpha1.DiskSpec{
+						SizeGiB: 30,
+					},
+					RunStrategy: osacv1alpha1.RunStrategyAlways,
+				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
@@ -2336,16 +2353,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
 
-			// When no subnetRef, should use tenant namespace (default behavior)
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			ci := &osacv1alpha1.ComputeInstance{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
-				g.Expect(ci.Annotations).NotTo(HaveKey(osacSubnetTargetNamespaceAnnotation))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+			Expect(err).To(MatchError(errSubnetRequired))
 		})
 	})
 
