@@ -2,9 +2,12 @@ package controller
 
 import (
 	"fmt"
+	"time"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
+
+const deleteRequeueInterval = 5 * time.Second
 
 const (
 	subjectKindServiceAccount    string = "ServiceAccount"

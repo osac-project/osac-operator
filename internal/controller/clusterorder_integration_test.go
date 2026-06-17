@@ -22,9 +22,14 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
@@ -366,6 +371,178 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			err := k8sClient.Update(ctx, instance)
 			Expect(err).To(HaveOccurred(), "patching templateID should be rejected")
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+	})
+
+	Context("Deletion cleanup (OSAC-1403)", func() {
+		var deleteReconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			deleteReconciler = NewClusterOrderReconciler(
+				k8sClient, k8sClient, k8sClient.Scheme(),
+				clusterOrderTestNamespace, noopProvisioningProvider{},
+				statusPollInterval, provisioning.DefaultMaxJobHistory,
+			)
+		})
+
+		createNamespaceForOrder := func(instance *osacv1alpha1.ClusterOrder) *corev1.Namespace {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: clusterOrderTestNamespace + "-" + instance.GetName(),
+					Labels: map[string]string{
+						"app.kubernetes.io/name":  osacAppName,
+						osacClusterOrderNameLabel: instance.GetName(),
+					},
+				},
+			}
+			ExpectWithOffset(1, k8sClient.Create(ctx, ns)).To(Succeed())
+			return ns
+		}
+
+		createHostedClusterForOrder := func(instance *osacv1alpha1.ClusterOrder, nsName string) *hypershiftv1beta1.HostedCluster {
+			hc := &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instance.GetName(),
+					Namespace: nsName,
+					Labels: map[string]string{
+						osacClusterOrderNameLabel: instance.GetName(),
+					},
+				},
+				Spec: hypershiftv1beta1.HostedClusterSpec{
+					Platform:   hypershiftv1beta1.PlatformSpec{Type: hypershiftv1beta1.AgentPlatform},
+					Release:    hypershiftv1beta1.Release{Image: "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"},
+					Networking: hypershiftv1beta1.ClusterNetworking{},
+					Services:   []hypershiftv1beta1.ServicePublishingStrategyMapping{},
+					Etcd:       hypershiftv1beta1.EtcdSpec{ManagementType: hypershiftv1beta1.Managed},
+					InfraID:    instance.GetName(),
+				},
+			}
+			ExpectWithOffset(1, k8sClient.Create(ctx, hc)).To(Succeed())
+			return hc
+		}
+
+		createNodePoolForOrder := func(instance *osacv1alpha1.ClusterOrder, nsName string) *hypershiftv1beta1.NodePool {
+			np := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "nodepool-" + instance.GetName(),
+					Namespace: nsName,
+					Labels: map[string]string{
+						osacClusterOrderNameLabel: instance.GetName(),
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					ClusterName: instance.GetName(),
+					Release:     hypershiftv1beta1.Release{Image: "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"},
+					Platform:    hypershiftv1beta1.NodePoolPlatform{Type: hypershiftv1beta1.AgentPlatform},
+				},
+			}
+			ExpectWithOffset(1, k8sClient.Create(ctx, np)).To(Succeed())
+			return np
+		}
+
+		It("should delete namespace when no hosted cluster exists", func() {
+			const name = "delete-ns-no-hc"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			controllerutil.AddFinalizer(instance, osacFinalizer)
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+			ns := createNamespaceForOrder(instance)
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, ns)
+			})
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			result, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval), "should requeue to wait for namespace termination")
+		})
+
+		It("should actively delete hosted cluster and requeue", func() {
+			const name = "delete-active-hc"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			controllerutil.AddFinalizer(instance, osacFinalizer)
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+			ns := createNamespaceForOrder(instance)
+			hc := createHostedClusterForOrder(instance, ns.GetName())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, hc)
+				_ = k8sClient.Delete(ctx, ns)
+			})
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			result, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval), "should requeue while waiting for HC deletion")
+
+			// In envtest, objects without finalizers are deleted immediately by the
+			// API server, so we verify the HC is gone (no finalizers to hold it).
+			deletedHC := &hypershiftv1beta1.HostedCluster{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, deletedHC)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "hosted cluster should have been deleted")
+		})
+
+		It("should delete node pools during cleanup", func() {
+			const name = "delete-nodepools-first"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			controllerutil.AddFinalizer(instance, osacFinalizer)
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+			ns := createNamespaceForOrder(instance)
+			np := createNodePoolForOrder(instance, ns.GetName())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, np)
+				_ = k8sClient.Delete(ctx, ns)
+			})
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			_, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			// In envtest, objects without finalizers are deleted immediately.
+			deletedNP := &hypershiftv1beta1.NodePool{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: np.GetName(), Namespace: ns.GetName()}, deletedNP)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "node pool should have been deleted")
+		})
+
+		It("should remove finalizer only after namespace is gone", func() {
+			const name = "delete-finalizer-last"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			controllerutil.AddFinalizer(instance, osacFinalizer)
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			// No namespace exists — finalizer should be removed
+			instance = getClusterOrder(name)
+			result, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			// Verify finalizer was removed and object is deleted
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{
+					Name: name, Namespace: clusterOrderTestNamespace,
+				}, &osacv1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue(), "ClusterOrder should be deleted after finalizer removal")
 		})
 	})
 })

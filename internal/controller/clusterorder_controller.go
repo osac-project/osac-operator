@@ -114,7 +114,7 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -494,33 +494,65 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	}
 
 	if ns != nil {
+		if err := r.deleteNodePools(ctx, instance, ns.GetName()); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		hc, err := r.findHostedCluster(ctx, instance, ns.GetName())
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 
-		// We expect AAP to delete the hosted cluster, so we wait for that
-		// to happen before deleting the containing namespace.
-		if hc == nil {
+		if hc != nil {
+			if hc.DeletionTimestamp.IsZero() {
+				log.Info("deleting hosted cluster", "name", hc.GetName(), "namespace", hc.GetNamespace())
+				if err := client.IgnoreNotFound(r.Client.Delete(ctx, hc)); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			log.Info("waiting for hosted cluster deletion", "name", hc.GetName())
+			return ctrl.Result{RequeueAfter: deleteRequeueInterval}, nil
+		}
+
+		if ns.DeletionTimestamp.IsZero() {
 			log.Info("deleting cluster namespace", "namespace", ns.GetName())
-			if err := r.Client.Delete(ctx, ns); err != nil {
-				log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
+			if err := client.IgnoreNotFound(r.Client.Delete(ctx, ns)); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-	} else {
-		// If we get this far, we are no longer monitoring any kubernetes resources.
-		// Allow kubernetes to delete the clusterorder.
-		if controllerutil.ContainsFinalizer(instance, osacFinalizer) {
-			if controllerutil.RemoveFinalizer(instance, osacFinalizer) {
-				if err := r.Update(ctx, instance); err != nil {
-					return ctrl.Result{}, err
-				}
+		return ctrl.Result{RequeueAfter: deleteRequeueInterval}, nil
+	}
+
+	// Namespace is gone — allow kubernetes to delete the clusterorder.
+	if controllerutil.ContainsFinalizer(instance, osacFinalizer) {
+		if controllerutil.RemoveFinalizer(instance, osacFinalizer) {
+			if err := r.Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
 			}
 		}
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *ClusterOrderReconciler) deleteNodePools(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) error {
+	log := ctrllog.FromContext(ctx)
+
+	var nodePoolList hypershiftv1beta1.NodePoolList
+	if err := r.List(ctx, &nodePoolList, client.InNamespace(nsName), labelSelectorFromInstance(instance)); err != nil {
+		return err
+	}
+
+	for i := range nodePoolList.Items {
+		np := &nodePoolList.Items[i]
+		if np.DeletionTimestamp.IsZero() {
+			log.Info("deleting node pool", "name", np.GetName(), "namespace", np.GetNamespace())
+			if err := client.IgnoreNotFound(r.Client.Delete(ctx, np)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {

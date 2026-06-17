@@ -36,6 +36,7 @@ rules:
   - hostedclusters
   - nodepools
   verbs:
+  - delete
   - get
   - list
   - watch
