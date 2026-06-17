@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"time"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
@@ -15,6 +16,8 @@ const (
 	hubAccessServiceAccountName  string = "hub-access"
 	hubAccessRoleBindingName     string = "hub-access"
 	hubAccessClusterRoleBaseName string = "hub-access-hosted-clusters"
+
+	deleteRequeueInterval = 10 * time.Second
 )
 
 var (

@@ -22,6 +22,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"github.com/openshift/hypershift/api/util/ipnet"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -391,6 +394,167 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(reconciler.handleDesiredConfigVersion(instance1)).To(Succeed())
 			Expect(reconciler.handleDesiredConfigVersion(instance2)).To(Succeed())
 			Expect(instance1.Status.DesiredConfigVersion).NotTo(Equal(instance2.Status.DesiredConfigVersion))
+		})
+	})
+
+	Context("handleDelete namespace cleanup", func() {
+		const clusterOrderNamespace = "default"
+
+		newClusterOrderForDeletion := func(name string) *v1alpha1.ClusterOrder {
+			return &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       name,
+					Namespace:  clusterOrderNamespace,
+					Finalizers: []string{osacFinalizer},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+		}
+
+		newReconciler := func() *ClusterOrderReconciler {
+			return &ClusterOrderReconciler{
+				Client:                k8sClient,
+				apiReader:             k8sClient,
+				Scheme:                k8sClient.Scheme(),
+				ClusterOrderNamespace: clusterOrderNamespace,
+				ProvisioningProvider:  noopProvisioningProvider{},
+				MaxJobHistory:         provisioning.DefaultMaxJobHistory,
+			}
+		}
+
+		It("should remove finalizer when namespace does not exist", func() {
+			instance := newClusterOrderForDeletion("delete-no-ns")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := newReconciler()
+			key := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+
+		It("should delete namespace when no HostedCluster exists and requeue", func() {
+			instance := newClusterOrderForDeletion("delete-ns-no-hc")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "default-delete-ns-no-hc",
+					Labels: commonLabelsFromOrder(instance),
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := newReconciler()
+			key := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
+
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval))
+		})
+
+		It("should actively delete HostedCluster and requeue", func() {
+			instance := newClusterOrderForDeletion("delete-active-hc")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "default-delete-active-hc",
+					Labels: commonLabelsFromOrder(instance),
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+			hc := &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-hc",
+					Namespace: ns.Name,
+					Labels:    commonLabelsFromOrder(instance),
+				},
+				Spec: hypershiftv1beta1.HostedClusterSpec{
+					Platform: hypershiftv1beta1.PlatformSpec{Type: hypershiftv1beta1.NonePlatform},
+					Release:  hypershiftv1beta1.Release{Image: "quay.io/test:latest"},
+					Etcd:     hypershiftv1beta1.EtcdSpec{ManagementType: hypershiftv1beta1.Managed},
+					Networking: hypershiftv1beta1.ClusterNetworking{
+						ClusterNetwork: []hypershiftv1beta1.ClusterNetworkEntry{{CIDR: *ipnet.MustParseCIDR("10.128.0.0/14")}},
+						ServiceNetwork: []hypershiftv1beta1.ServiceNetworkEntry{{CIDR: *ipnet.MustParseCIDR("172.30.0.0/16")}},
+					},
+					Services:   []hypershiftv1beta1.ServicePublishingStrategyMapping{},
+					InfraID:    "test-infra",
+					PullSecret: corev1.LocalObjectReference{Name: "pull-secret"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, hc)).To(Succeed())
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := newReconciler()
+			key := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
+
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval))
+
+			// Verify that the HC was marked for deletion
+			hcKey := types.NamespacedName{Name: hc.Name, Namespace: hc.Namespace}
+			updatedHC := &hypershiftv1beta1.HostedCluster{}
+			err = k8sClient.Get(ctx, hcKey, updatedHC)
+			if err == nil {
+				Expect(updatedHC.DeletionTimestamp.IsZero()).To(BeFalse(), "HostedCluster should be marked for deletion")
+			}
+			// If NotFound, it was already fully deleted — also acceptable
+		})
+
+		It("should delete NodePools during deletion", func() {
+			instance := newClusterOrderForDeletion("delete-np-cleanup")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "default-delete-np-cleanup",
+					Labels: commonLabelsFromOrder(instance),
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+			np := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-np",
+					Namespace: ns.Name,
+					Labels:    commonLabelsFromOrder(instance),
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					ClusterName: "test-cluster",
+					Release:     hypershiftv1beta1.Release{Image: "quay.io/test:latest"},
+					Platform:    hypershiftv1beta1.NodePoolPlatform{Type: hypershiftv1beta1.NonePlatform},
+				},
+			}
+			Expect(k8sClient.Create(ctx, np)).To(Succeed())
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := newReconciler()
+			key := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			// NodePool should be deleted or marked for deletion
+			npKey := types.NamespacedName{Name: np.Name, Namespace: np.Namespace}
+			updatedNP := &hypershiftv1beta1.NodePool{}
+			err = k8sClient.Get(ctx, npKey, updatedNP)
+			if err == nil {
+				Expect(updatedNP.DeletionTimestamp.IsZero()).To(BeFalse(), "NodePool should be marked for deletion")
+			}
 		})
 	})
 
