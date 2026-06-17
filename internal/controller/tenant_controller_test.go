@@ -39,17 +39,14 @@ func mcReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
 
 var _ = Describe("Tenant Controller", func() {
 	Context("When namespace exists", func() {
-		const resourceName = "test-tenant-ns-ready"
-
 		ctx := context.Background()
-		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
 
-		BeforeEach(func() {
+		createTenantWithNamespace := func(name string) types.NamespacedName {
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: resourceName,
+					Name: name,
 					Labels: map[string]string{
-						"osac.openshift.io/tenant-ref": resourceName,
+						"osac.openshift.io/tenant-ref": name,
 						"osac.openshift.io/project":    "default",
 					},
 				},
@@ -57,39 +54,31 @@ var _ = Describe("Tenant Controller", func() {
 			if err := k8sClient.Create(ctx, ns); err != nil {
 				Expect(apierrors.IsAlreadyExists(err)).To(BeTrue())
 			}
-
 			tenant := &v1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
+					Name:      name,
 					Namespace: "default",
 				},
 			}
-			if err := k8sClient.Create(ctx, tenant); err != nil {
-				Expect(apierrors.IsAlreadyExists(err)).To(BeTrue())
-			}
-		})
-
-		AfterEach(func() {
-			tenant := &v1alpha1.Tenant{}
-			if err := k8sClient.Get(ctx, typeNamespacedName, tenant); err == nil {
-				Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
-			}
-		})
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			return types.NamespacedName{Name: name, Namespace: "default"}
+		}
 
 		It("should set Phase=Ready and NamespaceReady=True", func() {
+			nn := createTenantWithNamespace("test-tenant-ns-phase")
 			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
 			Eventually(func() error {
-				return r.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
 			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 
-			_, err := r.Reconcile(ctx, mcReconcileRequest(typeNamespacedName))
+			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 
 			tenant := &v1alpha1.Tenant{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
-			Expect(tenant.Status.Namespace).To(Equal(resourceName))
+			Expect(tenant.Status.Namespace).To(Equal(nn.Name))
 
 			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
 			Expect(cond).NotTo(BeNil())
@@ -97,17 +86,18 @@ var _ = Describe("Tenant Controller", func() {
 		})
 
 		It("should not modify storage fields", func() {
+			nn := createTenantWithNamespace("test-tenant-ns-storage")
 			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
 			Eventually(func() error {
-				return r.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
 			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 
-			_, err := r.Reconcile(ctx, mcReconcileRequest(typeNamespacedName))
+			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 
 			tenant := &v1alpha1.Tenant{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Status.StorageClasses).To(BeNil())
 			Expect(tenant.Status.Jobs).To(BeNil())
 		})
