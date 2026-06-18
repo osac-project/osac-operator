@@ -8,7 +8,8 @@ require (
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
-	github.com/osac-project/osac-operator/api v0.0.0
+	github.com/osac-project/bare-metal-fulfillment-operator v0.0.0-20260616184921-2cde1e5a2e25
+	github.com/osac-project/osac-operator/api v0.0.2-0.20260511193951-8bf9632098a0
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
 	github.com/stoewer/go-strcase v1.3.1
 	golang.org/x/oauth2 v0.36.0

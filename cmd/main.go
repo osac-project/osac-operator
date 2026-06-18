@@ -58,6 +58,7 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	"sigs.k8s.io/multicluster-runtime/providers/single"
 
+	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/helpers"
 	"github.com/osac-project/osac-operator/internal/controller"
@@ -73,9 +74,10 @@ var (
 
 const (
 	// Namespace environment variables
-	envComputeInstanceNamespace = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
-	envNetworkingNamespace      = "OSAC_NETWORKING_NAMESPACE"
-	envClusterOrderNamespace    = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
+	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
+	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 
 	// AAP configuration
 	envAAPURL                 = "OSAC_AAP_URL"
@@ -104,20 +106,22 @@ const (
 	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
 	// Controller enable flags (defaults when flag is not set)
-	envEnableTenantController          = "OSAC_ENABLE_TENANT_CONTROLLER"
-	envEnableComputeInstanceController = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
-	envEnableClusterController         = "OSAC_ENABLE_CLUSTER_CONTROLLER"
-	envEnableNetworkingController      = "OSAC_ENABLE_NETWORKING_CONTROLLER"
+	envEnableTenantController            = "OSAC_ENABLE_TENANT_CONTROLLER"
+	envEnableComputeInstanceController   = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
+	envEnableClusterController           = "OSAC_ENABLE_CLUSTER_CONTROLLER"
+	envEnableNetworkingController        = "OSAC_ENABLE_NETWORKING_CONTROLLER"
+	envEnableBareMetalInstanceController = "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER"
 
 	remoteClusterName = "remote"
 )
 
 // controllerFlags holds the enable flags for all controllers.
 type controllerFlags struct {
-	Tenant          bool
-	ComputeInstance bool
-	Cluster         bool
-	Networking      bool
+	Tenant            bool
+	ComputeInstance   bool
+	Cluster           bool
+	Networking        bool
+	BareMetalInstance bool
 }
 
 // registerControllerFlags registers controller enable flags with the flag package
@@ -136,16 +140,20 @@ func registerControllerFlags() *controllerFlags {
 	flag.BoolVar(&flags.Networking, "enable-networking-controller",
 		helpers.GetEnvWithDefault(envEnableNetworkingController, false),
 		"Enable the networking controllers (VirtualNetwork, Subnet, SecurityGroup).")
+	flag.BoolVar(&flags.BareMetalInstance, "enable-baremetal-instance-controller",
+		helpers.GetEnvWithDefault(envEnableBareMetalInstanceController, false),
+		"Enable the bare metal instance controller.")
 	return flags
 }
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
 func (f *controllerFlags) enableAllIfNoneSet() {
-	if !f.Tenant && !f.ComputeInstance && !f.Cluster && !f.Networking {
+	if !f.Tenant && !f.ComputeInstance && !f.Cluster && !f.Networking && !f.BareMetalInstance {
 		f.Tenant = true
 		f.ComputeInstance = true
 		f.Cluster = true
 		f.Networking = true
+		f.BareMetalInstance = true
 		setupLog.Info("no controller flags set, enabling all controllers")
 	}
 }
@@ -154,7 +162,7 @@ func (f *controllerFlags) enableAllIfNoneSet() {
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
 	localScheme *runtime.Scheme,
-	enableCluster, enableComputeInstance, enableTenant, enableNetworking bool,
+	enableCluster, enableComputeInstance, enableTenant, enableNetworking, enableBareMetalInstance bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
@@ -166,6 +174,9 @@ func addSchemesForLocalControllers(
 	}
 	if enableTenant {
 		utilruntime.Must(ovnv1.AddToScheme(localScheme))
+	}
+	if enableBareMetalInstance {
+		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
 	}
 	// +kubebuilder:scaffold:scheme
 }
@@ -545,6 +556,30 @@ func setupNetworkingControllers(
 	return nil
 }
 
+// setupBareMetalInstanceControllers registers the BareMetalInstance feedback controller
+// when a gRPC connection to the fulfillment service is available.
+func setupBareMetalInstanceControllers(
+	mgr mcmanager.Manager,
+	grpcConn *grpc.ClientConn,
+) error {
+	localMgr := mgr.GetLocalManager()
+	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
+	if bareMetalInstanceNamespace == "" {
+		bareMetalInstanceNamespace = controller.DefaultBareMetalInstanceNamespace
+	}
+
+	if grpcConn != nil {
+		if err := (controller.NewBareMetalInstanceFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			bareMetalInstanceNamespace,
+		)).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("baremetalinstance feedback controller: %w", err)
+		}
+	}
+	return nil
+}
+
 func main() {
 	var err error
 
@@ -614,6 +649,10 @@ func main() {
 		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with cluster controller")
 		os.Exit(1)
 	}
+	if remoteClusterKubeconfig != "" && ctrlFlags.BareMetalInstance {
+		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with bare metal instance controller")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -670,6 +709,7 @@ func main() {
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Networking,
+			ctrlFlags.BareMetalInstance,
 		)
 	} else {
 		remoteScheme = runtime.NewScheme()
@@ -751,6 +791,12 @@ func main() {
 	if ctrlFlags.Networking {
 		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup networking controllers")
+			os.Exit(1)
+		}
+	}
+	if ctrlFlags.BareMetalInstance {
+		if err := setupBareMetalInstanceControllers(mgr, grpcConn); err != nil {
+			setupLog.Error(err, "unable to setup baremetalinstance controllers")
 			os.Exit(1)
 		}
 	}

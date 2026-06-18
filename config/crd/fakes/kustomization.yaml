@@ -6,3 +6,4 @@ resources:
 - k8s.ovn.org_userdefinednetworks.yaml
 - kubevirt.io_virtualmachineinstances.yaml
 - kubevirt.io_virtualmachines.yaml
+- osac.openshift.io_baremetalinstances.yaml

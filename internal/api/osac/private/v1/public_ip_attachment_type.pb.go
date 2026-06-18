@@ -38,7 +38,7 @@ const (
 
 // Lifecycle states for PublicIPAttachment resources.
 //
-// State transitions: UNSPECIFIED -> PENDING -> READY. On deletion: READY -> DELETING.
+// State transitions: UNSPECIFIED -> PENDING -> READY. On deletion: any state -> DELETING.
 // FAILED can occur from PENDING and retries automatically via the provisioning lifecycle.
 type PublicIPAttachmentState int32
 

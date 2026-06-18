@@ -72,6 +72,30 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalinstances
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalinstances/finalizers
+  - clusterorders/finalizers
+  - computeinstances/finalizers
+  - publicipattachments/finalizers
+  - publicippools/finalizers
+  - publicips/finalizers
+  - securitygroups/finalizers
+  - subnets/finalizers
+  - tenants/finalizers
+  - virtualnetworks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
   - clusterorders
   - computeinstances
   - publicipattachments
@@ -89,20 +113,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - osac.openshift.io
-  resources:
-  - clusterorders/finalizers
-  - computeinstances/finalizers
-  - publicipattachments/finalizers
-  - publicippools/finalizers
-  - publicips/finalizers
-  - securitygroups/finalizers
-  - subnets/finalizers
-  - tenants/finalizers
-  - virtualnetworks/finalizers
-  verbs:
-  - update
 - apiGroups:
   - osac.openshift.io
   resources:

@@ -29,6 +29,7 @@ controllers:
   computeInstance: true
   tenant: true
   networking: true
+  bareMetalInstance: true
 
 configSecret:
   name: "osac-config"

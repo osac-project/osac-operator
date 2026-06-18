@@ -78,6 +78,10 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          - name: OSAC_BARE_METAL_INSTANCE_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_ORDER_CONTROLLER
             value: {{ .Values.controllers.clusterOrder | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
@@ -86,6 +90,8 @@ spec:
             value: {{ .Values.controllers.tenant | quote }}
           - name: OSAC_ENABLE_NETWORKING_CONTROLLER
             value: {{ .Values.controllers.networking | quote }}
+          - name: OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER
+            value: {{ .Values.controllers.bareMetalInstance | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
