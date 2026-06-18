@@ -114,7 +114,8 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=nodepools,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -494,19 +495,22 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	}
 
 	if ns != nil {
-		if err := r.deleteNodePools(ctx, instance, ns.GetName()); err != nil {
-			return ctrl.Result{}, err
-		}
-
 		hc, err := r.findHostedCluster(ctx, instance, ns.GetName())
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 
+		// AAP is responsible for deleting the HostedCluster. If it has been
+		// stuck in Terminating state past the threshold, force-remove its
+		// finalizers so deletion can proceed (especially affects FAILED
+		// clusters whose HyperShift controllers may not be active).
 		if hc != nil {
-			if hc.DeletionTimestamp.IsZero() {
-				log.Info("deleting hosted cluster", "name", hc.GetName(), "namespace", hc.GetNamespace())
-				if err := client.IgnoreNotFound(r.Client.Delete(ctx, hc)); err != nil {
+			if !hc.DeletionTimestamp.IsZero() && time.Since(hc.DeletionTimestamp.Time) > hostedClusterDeletionThreshold {
+				log.Info("hosted cluster stuck terminating, removing finalizers",
+					"name", hc.GetName(),
+					"namespace", hc.GetNamespace(),
+					"deletionTimestamp", hc.DeletionTimestamp.Time)
+				if err := r.removeHostedClusterFinalizers(ctx, hc); err != nil {
 					return ctrl.Result{}, err
 				}
 			}
@@ -535,24 +539,12 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	return ctrl.Result{}, nil
 }
 
-func (r *ClusterOrderReconciler) deleteNodePools(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) error {
-	log := ctrllog.FromContext(ctx)
-
-	var nodePoolList hypershiftv1beta1.NodePoolList
-	if err := r.List(ctx, &nodePoolList, client.InNamespace(nsName), labelSelectorFromInstance(instance)); err != nil {
-		return err
+func (r *ClusterOrderReconciler) removeHostedClusterFinalizers(ctx context.Context, hc *hypershiftv1beta1.HostedCluster) error {
+	if len(hc.Finalizers) == 0 {
+		return nil
 	}
-
-	for i := range nodePoolList.Items {
-		np := &nodePoolList.Items[i]
-		if np.DeletionTimestamp.IsZero() {
-			log.Info("deleting node pool", "name", np.GetName(), "namespace", np.GetNamespace())
-			if err := client.IgnoreNotFound(r.Client.Delete(ctx, np)); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	hc.Finalizers = nil
+	return r.Update(ctx, hc)
 }
 
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {

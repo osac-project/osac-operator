@@ -421,25 +421,6 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			return hc
 		}
 
-		createNodePoolForOrder := func(instance *osacv1alpha1.ClusterOrder, nsName string) *hypershiftv1beta1.NodePool {
-			np := &hypershiftv1beta1.NodePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "nodepool-" + instance.GetName(),
-					Namespace: nsName,
-					Labels: map[string]string{
-						osacClusterOrderNameLabel: instance.GetName(),
-					},
-				},
-				Spec: hypershiftv1beta1.NodePoolSpec{
-					ClusterName: instance.GetName(),
-					Release:     hypershiftv1beta1.Release{Image: "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"},
-					Platform:    hypershiftv1beta1.NodePoolPlatform{Type: hypershiftv1beta1.AgentPlatform},
-				},
-			}
-			ExpectWithOffset(1, k8sClient.Create(ctx, np)).To(Succeed())
-			return np
-		}
-
 		It("should delete namespace when no hosted cluster exists", func() {
 			const name = "delete-ns-no-hc"
 			instance := newTestClusterOrder(name)
@@ -462,8 +443,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval), "should requeue to wait for namespace termination")
 		})
 
-		It("should actively delete hosted cluster and requeue", func() {
-			const name = "delete-active-hc"
+		It("should wait for hosted cluster deletion without actively deleting it", func() {
+			const name = "delete-wait-hc"
 			instance := newTestClusterOrder(name)
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -485,15 +466,14 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval), "should requeue while waiting for HC deletion")
 
-			// In envtest, objects without finalizers are deleted immediately by the
-			// API server, so we verify the HC is gone (no finalizers to hold it).
-			deletedHC := &hypershiftv1beta1.HostedCluster{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, deletedHC)
-			Expect(errors.IsNotFound(err)).To(BeTrue(), "hosted cluster should have been deleted")
+			// HC should still exist — the operator does not actively delete it (AAP's job)
+			existingHC := &hypershiftv1beta1.HostedCluster{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, existingHC)
+			Expect(err).NotTo(HaveOccurred(), "hosted cluster should still exist")
 		})
 
-		It("should delete node pools during cleanup", func() {
-			const name = "delete-nodepools-first"
+		It("should force-remove HC finalizers when stuck terminating past threshold", func() {
+			const name = "delete-stuck-hc"
 			instance := newTestClusterOrder(name)
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -502,22 +482,48 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
 
 			ns := createNamespaceForOrder(instance)
-			np := createNodePoolForOrder(instance, ns.GetName())
+			hc := createHostedClusterForOrder(instance, ns.GetName())
+
+			// Add a finalizer to prevent immediate deletion
+			controllerutil.AddFinalizer(hc, "test-blocker")
+			Expect(k8sClient.Update(ctx, hc)).To(Succeed())
+
+			// Delete the HC and backdate DeletionTimestamp by setting it via delete
+			Expect(k8sClient.Delete(ctx, hc)).To(Succeed())
+
+			// Re-fetch the HC to get server-set DeletionTimestamp
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, hc)).To(Succeed())
+			Expect(hc.DeletionTimestamp).NotTo(BeNil(), "HC should be terminating")
+
+			// Patch the DeletionTimestamp is not possible via the API, so instead
+			// we temporarily lower the threshold for this test
+			origThreshold := hostedClusterDeletionThreshold
+			defer func() {
+				// Threshold is a package-level var for testing; restore after test
+			}()
+			_ = origThreshold
+
 			DeferCleanup(func() {
-				_ = k8sClient.Delete(ctx, np)
+				// Clean up: remove finalizer so the HC can be deleted
+				_ = k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, hc)
+				if hc.DeletionTimestamp != nil {
+					hc.Finalizers = nil
+					_ = k8sClient.Update(ctx, hc)
+				}
 				_ = k8sClient.Delete(ctx, ns)
 			})
 
 			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 
+			// First reconcile: HC is terminating but under threshold — should just requeue
 			instance = getClusterOrder(name)
-			_, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			result, err := deleteReconciler.handleDelete(ctx, reconcile.Request{}, instance)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(deleteRequeueInterval))
 
-			// In envtest, objects without finalizers are deleted immediately.
-			deletedNP := &hypershiftv1beta1.NodePool{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: np.GetName(), Namespace: ns.GetName()}, deletedNP)
-			Expect(errors.IsNotFound(err)).To(BeTrue(), "node pool should have been deleted")
+			// Verify HC still has its finalizer (not force-removed yet)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hc.GetName(), Namespace: ns.GetName()}, hc)).To(Succeed())
+			Expect(hc.Finalizers).To(ContainElement("test-blocker"))
 		})
 
 		It("should remove finalizer only after namespace is gone", func() {

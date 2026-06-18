@@ -34,9 +34,16 @@ rules:
   - hypershift.openshift.io
   resources:
   - hostedclusters
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
   - nodepools
   verbs:
-  - delete
   - get
   - list
   - watch

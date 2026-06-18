@@ -8,6 +8,7 @@ import (
 )
 
 const deleteRequeueInterval = 5 * time.Second
+const hostedClusterDeletionThreshold = 10 * time.Minute
 
 const (
 	subjectKindServiceAccount    string = "ServiceAccount"
