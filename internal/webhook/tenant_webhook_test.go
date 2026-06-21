@@ -88,6 +88,7 @@ func TestValidateCreate_InvalidDomains(t *testing.T) {
 		{"underscore", []string{"my_domain.com"}, "my_domain.com"},
 		{"exclamation mark", []string{"bad!.com"}, "bad!.com"},
 		{"domain too long label", []string{string(make([]byte, 64)) + ".com"}, ""},
+		{"domain too long total", []string{string(make([]byte, 63)) + "." + string(make([]byte, 63)) + "." + string(make([]byte, 63)) + "." + string(make([]byte, 63)) + ".com"}, "253"},
 	}
 
 	v := &TenantValidator{}
