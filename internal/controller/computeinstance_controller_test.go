@@ -52,7 +52,10 @@ func createReadyTenant(ctx context.Context, namespace, name string) {
 				Name:      name,
 				Namespace: namespace,
 			},
-			Spec: osacv1alpha1.TenantSpec{},
+			Spec: osacv1alpha1.TenantSpec{
+				DisplayName:  "Test Tenant",
+				EmailDomains: []string{"example.com"},
+			},
 		}
 		Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 	}
@@ -93,7 +96,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      tenantName,
 					Namespace: namespaceName,
 				},
-				Spec: osacv1alpha1.TenantSpec{},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, &osacv1alpha1.Tenant{})
 			if err != nil && errors.IsNotFound(err) {
@@ -1511,6 +1517,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
@@ -1570,6 +1580,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
@@ -1810,6 +1824,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 			// Create tenant in Progressing state (no StorageClassReady condition)
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
@@ -1857,6 +1875,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 			// Create tenant in Progressing state with a StorageClassReady condition
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
@@ -1911,6 +1933,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 			// Create tenant in Progressing state
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Spec: osacv1alpha1.TenantSpec{
+					DisplayName:  "Test Tenant",
+					EmailDomains: []string{"example.com"},
+				},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
