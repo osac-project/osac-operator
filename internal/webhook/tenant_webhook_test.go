@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,8 +88,8 @@ func TestValidateCreate_InvalidDomains(t *testing.T) {
 		{"empty string", []string{""}, ""},
 		{"underscore", []string{"my_domain.com"}, "my_domain.com"},
 		{"exclamation mark", []string{"bad!.com"}, "bad!.com"},
-		{"domain too long label", []string{string(make([]byte, 64)) + ".com"}, ""},
-		{"domain too long total", []string{string(make([]byte, 63)) + "." + string(make([]byte, 63)) + "." + string(make([]byte, 63)) + "." + string(make([]byte, 63)) + ".com"}, "253"},
+		{"label too long", []string{strings.Repeat("a", 64) + ".com"}, "at most 63 characters"},
+		{"domain too long total", []string{strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".com"}, "253"},
 	}
 
 	v := &TenantValidator{}
@@ -102,7 +103,7 @@ func TestValidateCreate_InvalidDomains(t *testing.T) {
 			}
 			if tt.wantMsg != "" {
 				errStr := err.Error()
-				if !containsStr(errStr, tt.wantMsg) {
+				if !strings.Contains(errStr, tt.wantMsg) {
 					t.Errorf("error message should contain %q, got: %s", tt.wantMsg, errStr)
 				}
 			}
@@ -118,10 +119,10 @@ func TestValidateCreate_MultipleInvalidDomains(t *testing.T) {
 		t.Fatal("expected error for mixed valid/invalid domains, got nil")
 	}
 	errStr := err.Error()
-	if !containsStr(errStr, "-bad.com") {
+	if !strings.Contains(errStr, "-bad.com") {
 		t.Errorf("error should mention -bad.com, got: %s", errStr)
 	}
-	if !containsStr(errStr, "also bad!.com") {
+	if !strings.Contains(errStr, "also bad!.com") {
 		t.Errorf("error should mention also bad!.com, got: %s", errStr)
 	}
 }
@@ -171,17 +172,4 @@ func TestValidateDelete_AlwaysSucceeds(t *testing.T) {
 	if len(warnings) > 0 {
 		t.Errorf("expected no warnings, got: %v", warnings)
 	}
-}
-
-func containsStr(s, substr string) bool {
-	return len(substr) == 0 || len(s) >= len(substr) && searchStr(s, substr)
-}
-
-func searchStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
