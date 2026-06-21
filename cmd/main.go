@@ -63,6 +63,7 @@ import (
 	"github.com/osac-project/osac-operator/helpers"
 	"github.com/osac-project/osac-operator/internal/controller"
 	"github.com/osac-project/osac-operator/internal/migrations"
+	osacwebhook "github.com/osac-project/osac-operator/internal/webhook"
 	"github.com/osac-project/osac-operator/pkg/aap"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
@@ -799,6 +800,13 @@ func main() {
 			setupLog.Error(err, "unable to setup baremetalinstance controllers")
 			os.Exit(1)
 		}
+	}
+
+	if err := ctrl.NewWebhookManagedBy(mgr.GetLocalManager(), &v1alpha1.Tenant{}).
+		WithValidator(&osacwebhook.TenantValidator{}).
+		Complete(); err != nil {
+		setupLog.Error(err, "unable to create Tenant webhook")
+		os.Exit(1)
 	}
 
 	// +kubebuilder:scaffold:builder
