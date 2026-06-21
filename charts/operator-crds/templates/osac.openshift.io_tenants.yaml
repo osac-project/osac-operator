@@ -17,18 +17,15 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.namespace
-      name: Tenant Namespace
-      type: string
-    - jsonPath: .status.storageClasses[*].name
-      name: Storage Classes
-      type: string
-    - jsonPath: .status.storageClasses[*].tier
-      name: Storage Tiers
+    - jsonPath: .spec.displayName
+      name: DisplayName
       type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -53,6 +50,21 @@ spec:
             type: object
           spec:
             description: TenantSpec defines the desired state of Tenant.
+            properties:
+              displayName:
+                description: DisplayName is the tenant's display name
+                minLength: 1
+                type: string
+              emailDomains:
+                description: EmailDomains is the list of email domains for tenant
+                  users
+                items:
+                  type: string
+                minItems: 1
+                type: array
+            required:
+            - displayName
+            - emailDomains
             type: object
           status:
             description: TenantStatus defines the observed state of Tenant.
