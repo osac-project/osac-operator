@@ -25,6 +25,15 @@ import (
 
 // TenantSpec defines the desired state of Tenant.
 type TenantSpec struct {
+	// DisplayName is the tenant's display name
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Required
+	DisplayName string `json:"displayName"`
+
+	// EmailDomains is the list of email domains for tenant users
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:Required
+	EmailDomains []string `json:"emailDomains"`
 }
 
 type TenantPhaseType string
@@ -98,10 +107,9 @@ type TenantStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
-// +kubebuilder:printcolumn:name="Storage Classes",type=string,JSONPath=`.status.storageClasses[*].name`
-// +kubebuilder:printcolumn:name="Storage Tiers",type=string,JSONPath=`.status.storageClasses[*].tier`
+// +kubebuilder:printcolumn:name="DisplayName",type=string,JSONPath=`.spec.displayName`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Tenant is the Schema for the tenants API.
 type Tenant struct {
