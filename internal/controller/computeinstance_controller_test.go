@@ -753,7 +753,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 					DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 				}
 				return provisioning.EvaluateAction(provState, func() bool {
-					return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ComputeInstance{}, func(obj client.Object) []osacv1alpha1.JobStatus { return obj.(*osacv1alpha1.ComputeInstance).Status.ProvisioningJobs })
+					return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ComputeInstance{}, func(obj client.Object) []osacv1alpha1.JobStatus {
+						return obj.(*osacv1alpha1.ComputeInstance).Status.ProvisioningJobs
+					})
 				})
 			}
 

@@ -96,7 +96,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 			}
 			return provisioning.EvaluateAction(provState, func() bool {
-				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs })
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
+				})
 			})
 		}
 

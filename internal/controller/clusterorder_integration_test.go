@@ -178,7 +178,9 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				DesiredConfigVersion: staleInstance.Status.DesiredConfigVersion,
 			}
 			action, _ := provisioning.EvaluateAction(provState, func() bool {
-				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(staleInstance), &osacv1alpha1.ClusterOrder{}, func(obj client.Object) []osacv1alpha1.JobStatus { return obj.(*osacv1alpha1.ClusterOrder).Status.ProvisioningJobs })
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(staleInstance), &osacv1alpha1.ClusterOrder{}, func(obj client.Object) []osacv1alpha1.JobStatus {
+					return obj.(*osacv1alpha1.ClusterOrder).Status.ProvisioningJobs
+				})
 			})
 			Expect(action).To(Equal(provisioning.Requeue), "should detect non-terminal job via API server and requeue")
 		})
@@ -262,7 +264,9 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 			}
 			action, job := provisioning.EvaluateAction(provState, func() bool {
-				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ClusterOrder{}, func(obj client.Object) []osacv1alpha1.JobStatus { return obj.(*osacv1alpha1.ClusterOrder).Status.ProvisioningJobs })
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ClusterOrder{}, func(obj client.Object) []osacv1alpha1.JobStatus {
+					return obj.(*osacv1alpha1.ClusterOrder).Status.ProvisioningJobs
+				})
 			})
 			Expect(action).To(Equal(provisioning.Skip))
 			Expect(job).NotTo(BeNil())
