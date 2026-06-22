@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package dbwatch provides a polling-based watcher for detecting tenant
+// changes in the fulfillment-service PostgreSQL database.
 package dbwatch
 
 import (

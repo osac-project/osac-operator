@@ -63,18 +63,6 @@ func (m *mockQuerier) Close() error {
 	return nil
 }
 
-func (m *mockQuerier) setTenants(tenants []TenantRecord) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.tenants = tenants
-}
-
-func (m *mockQuerier) setError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.err = err
-}
-
 func (m *mockQuerier) getCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

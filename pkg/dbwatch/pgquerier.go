@@ -61,7 +61,7 @@ func (q *PgQuerier) ListTenants(ctx context.Context) ([]TenantRecord, error) {
 
 	rows, err := q.conn.Query(ctx, "SELECT id, name, data FROM organizations")
 	if err != nil {
-		q.closeConn()
+		_ = q.closeConn()
 		return nil, fmt.Errorf("query organizations: %w", err)
 	}
 	defer rows.Close()
