@@ -37,3 +37,6 @@ go.work
 
 # Development memory/notes (local only)
 MEMORY.md
+
+# Implementation workflow artifacts
+.artifacts/
