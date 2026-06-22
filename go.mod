@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/go-logr/logr v1.4.3
-	github.com/onsi/ginkgo/v2 v2.31.0
+	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.0
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
 	github.com/osac-project/bare-metal-fulfillment-operator v0.0.0-20260616184921-2cde1e5a2e25
