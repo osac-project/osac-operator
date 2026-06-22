@@ -397,6 +397,11 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 
 	dbEventCh, watcher := setupTenantDBWatcher(tenantNamespace)
 
+	var tenantLookup dbwatch.TenantLookup
+	if watcher != nil {
+		tenantLookup = watcher
+	}
+
 	if err := (controller.NewTenantReconciler(
 		mgr,
 		tenantNamespace,
@@ -405,6 +410,7 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 		tenantPollInterval,
 		maxJobHistory,
 		dbEventCh,
+		tenantLookup,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
 	}

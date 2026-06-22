@@ -40,6 +40,11 @@ const (
 	eventReasonStorageClassNotReady = "StorageClassNotReady"
 )
 
+const (
+	osacManagedByAnnotation = osacPrefix + "/managed-by"
+	osacManagedByValue      = "fulfillment-service"
+)
+
 var (
 	// osacTenantRefLabel the label used to reference the tenant object
 	osacTenantRefLabel string = fmt.Sprintf("%s/tenant-ref", osacPrefix)

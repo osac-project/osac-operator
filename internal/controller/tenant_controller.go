@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,6 +51,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/pkg/dbwatch"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
@@ -67,6 +69,7 @@ type TenantReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	dbEventCh            <-chan event.TypedGenericEvent[string]
+	tenantLookup         dbwatch.TenantLookup
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
@@ -85,6 +88,7 @@ func NewTenantReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	dbEventCh <-chan event.TypedGenericEvent[string],
+	tenantLookup dbwatch.TenantLookup,
 ) *TenantReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -109,6 +113,7 @@ func NewTenantReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		dbEventCh:            dbEventCh,
+		tenantLookup:         tenantLookup,
 	}
 }
 
@@ -120,10 +125,21 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 	instance := &v1alpha1.Tenant{}
 	err := r.Get(ctx, req.NamespacedName, instance)
 	if err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			return r.handleDBCreate(ctx, req.Name)
+		}
+		return ctrl.Result{}, err
 	}
 
 	log.Info("start reconcile")
+
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() && r.shouldDeleteManagedCR(instance) {
+		log.Info("tenant removed from database, deleting managed CR", "name", instance.Name)
+		if err := r.Delete(ctx, instance); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	oldstatus := instance.Status.DeepCopy()
 
@@ -392,6 +408,57 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, instance *v1alpha1.
 
 	log.Info("tenant finalizer removed, deletion will proceed")
 	return ctrl.Result{}, nil
+}
+
+// handleDBCreate creates a Tenant CR from database data when no CR exists.
+func (r *TenantReconciler) handleDBCreate(ctx context.Context, name string) (ctrl.Result, error) {
+	if r.tenantLookup == nil || !r.tenantLookup.Ready() {
+		return ctrl.Result{}, nil
+	}
+
+	log := ctrllog.FromContext(ctx)
+
+	record, found := r.tenantLookup.GetTenantByName(name)
+	if !found {
+		return ctrl.Result{}, nil
+	}
+
+	tenant := &v1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: r.tenantNamespace,
+			Annotations: map[string]string{
+				osacManagedByAnnotation: osacManagedByValue,
+			},
+		},
+		Spec: v1alpha1.TenantSpec{
+			DisplayName:  record.DisplayName,
+			EmailDomains: record.EmailDomains,
+		},
+	}
+
+	if err := r.Create(ctx, tenant); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	log.Info("created Tenant CR from database", "name", name)
+	return ctrl.Result{}, nil
+}
+
+// shouldDeleteManagedCR returns true when the CR was created by this controller
+// and the tenant no longer exists in the database.
+func (r *TenantReconciler) shouldDeleteManagedCR(instance *v1alpha1.Tenant) bool {
+	if r.tenantLookup == nil || !r.tenantLookup.Ready() {
+		return false
+	}
+	if instance.Annotations[osacManagedByAnnotation] != osacManagedByValue {
+		return false
+	}
+	_, found := r.tenantLookup.GetTenantByName(instance.Name)
+	return !found
 }
 
 // handleStorageDeprovisioning triggers an AAP job to remove tenant storage and
