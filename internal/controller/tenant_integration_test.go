@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -219,7 +220,7 @@ var _ = Describe("Tenant Lifecycle Integration", Ordered, func() {
 				err := k8sClient.Get(integCtx, types.NamespacedName{
 					Name: "integ-delete-tenant", Namespace: integNamespace,
 				}, &v1alpha1.Tenant{})
-				return err != nil
+				return apierrors.IsNotFound(err)
 			}, timeout, polling).Should(BeTrue())
 		})
 
@@ -292,13 +293,13 @@ var _ = Describe("Tenant Lifecycle Integration", Ordered, func() {
 			}
 			Expect(k8sClient.Create(integCtx, manual)).To(Succeed())
 
-			time.Sleep(2 * reconcileIvl)
-
-			var tenant v1alpha1.Tenant
-			Expect(k8sClient.Get(integCtx, types.NamespacedName{
-				Name: "integ-manual-tenant", Namespace: integNamespace,
-			}, &tenant)).To(Succeed())
-			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			Consistently(func(g Gomega) {
+				var tenant v1alpha1.Tenant
+				g.Expect(k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-manual-tenant", Namespace: integNamespace,
+				}, &tenant)).To(Succeed())
+				g.Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			}, 2*reconcileIvl, polling).Should(Succeed())
 		})
 	})
 
@@ -364,13 +365,13 @@ var _ = Describe("Tenant Lifecycle Integration", Ordered, func() {
 				DisplayName: "", EmailDomains: []string{},
 			})
 
-			time.Sleep(2 * reconcileIvl)
-
-			var tenant v1alpha1.Tenant
-			Expect(k8sClient.Get(integCtx, types.NamespacedName{
-				Name: "integ-incomplete-tenant", Namespace: integNamespace,
-			}, &tenant)).To(Succeed())
-			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			Consistently(func(g Gomega) {
+				var tenant v1alpha1.Tenant
+				g.Expect(k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-incomplete-tenant", Namespace: integNamespace,
+				}, &tenant)).To(Succeed())
+				g.Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			}, 2*reconcileIvl, polling).Should(Succeed())
 		})
 
 		It("leaves CR unmanaged when no DB match exists", func() {
@@ -383,13 +384,13 @@ var _ = Describe("Tenant Lifecycle Integration", Ordered, func() {
 			}
 			Expect(k8sClient.Create(integCtx, noMatch)).To(Succeed())
 
-			time.Sleep(2 * reconcileIvl)
-
-			var tenant v1alpha1.Tenant
-			Expect(k8sClient.Get(integCtx, types.NamespacedName{
-				Name: "integ-nomatch-tenant", Namespace: integNamespace,
-			}, &tenant)).To(Succeed())
-			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			Consistently(func(g Gomega) {
+				var tenant v1alpha1.Tenant
+				g.Expect(k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-nomatch-tenant", Namespace: integNamespace,
+				}, &tenant)).To(Succeed())
+				g.Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+			}, 2*reconcileIvl, polling).Should(Succeed())
 		})
 	})
 })
