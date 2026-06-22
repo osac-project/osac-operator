@@ -108,6 +108,9 @@ const (
 	envDatabaseURL          = "OSAC_DATABASE_URL"
 	envDatabasePollInterval = "OSAC_DATABASE_POLL_INTERVAL"
 
+	// Reconciliation interval for periodic full-diff reconciliation
+	envReconcileInterval = "OSAC_RECONCILE_INTERVAL"
+
 	// Remote cluster (tenant and compute-instance controllers)
 	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
@@ -402,6 +405,15 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 		tenantLookup = watcher
 	}
 
+	reconcileInterval := 5 * time.Minute
+	if v := os.Getenv(envReconcileInterval); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("parsing %s: %w", envReconcileInterval, err)
+		}
+		reconcileInterval = d
+	}
+
 	if err := (controller.NewTenantReconciler(
 		mgr,
 		tenantNamespace,
@@ -411,6 +423,7 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 		maxJobHistory,
 		dbEventCh,
 		tenantLookup,
+		reconcileInterval,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
 	}

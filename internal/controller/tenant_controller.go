@@ -70,6 +70,7 @@ type TenantReconciler struct {
 	MaxJobHistory        int
 	dbEventCh            <-chan event.TypedGenericEvent[string]
 	tenantLookup         dbwatch.TenantLookup
+	reconcileInterval    time.Duration
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
@@ -89,6 +90,7 @@ func NewTenantReconciler(
 	maxJobHistory int,
 	dbEventCh <-chan event.TypedGenericEvent[string],
 	tenantLookup dbwatch.TenantLookup,
+	reconcileInterval time.Duration,
 ) *TenantReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -114,6 +116,7 @@ func NewTenantReconciler(
 		MaxJobHistory:        maxJobHistory,
 		dbEventCh:            dbEventCh,
 		tenantLookup:         tenantLookup,
+		reconcileInterval:    reconcileInterval,
 	}
 }
 
@@ -874,6 +877,54 @@ func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Obj
 	}
 }
 
+// runFullReconciliation performs a complete diff between DB state and cluster CRs.
+// It enqueues reconcile requests for the union of DB tenant names and CR names,
+// so that both missing CRs (creates) and orphaned CRs (deletes) are handled.
+func (r *TenantReconciler) runFullReconciliation(ctx context.Context) error {
+	log := ctrllog.FromContext(ctx)
+
+	if r.tenantLookup == nil || !r.tenantLookup.Ready() {
+		log.Info("skipping full reconciliation: tenant lookup not ready")
+		return nil
+	}
+
+	dbTenants := r.tenantLookup.AllTenants()
+	dbNames := make(map[string]struct{}, len(dbTenants))
+	for _, t := range dbTenants {
+		dbNames[t.Name] = struct{}{}
+	}
+
+	crList := &v1alpha1.TenantList{}
+	if err := r.List(ctx, crList, client.InNamespace(r.tenantNamespace)); err != nil {
+		return fmt.Errorf("listing tenant CRs for full reconciliation: %w", err)
+	}
+
+	allNames := make(map[string]struct{}, len(dbNames)+len(crList.Items))
+	for name := range dbNames {
+		allNames[name] = struct{}{}
+	}
+	for i := range crList.Items {
+		allNames[crList.Items[i].Name] = struct{}{}
+	}
+
+	for name := range allNames {
+		_, err := r.Reconcile(ctx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: r.tenantNamespace,
+					Name:      name,
+				},
+			},
+		})
+		if err != nil {
+			log.Error(err, "error during full reconciliation", "tenant", name)
+		}
+	}
+
+	log.Info("full reconciliation complete", "tenantsChecked", len(allNames))
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	// Predicate to filter resources with tenant label
@@ -909,6 +960,33 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		builder = builder.WatchesRawSource(
 			source.TypedChannel(r.dbEventCh, r.dbEventHandler()),
 		)
+	}
+
+	if r.tenantLookup != nil && r.reconcileInterval > 0 {
+		localMgr := mgr.GetLocalManager()
+		reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
+		go func() {
+			<-localMgr.Elected()
+
+			log := ctrl.Log.WithName("tenant-reconciliation-loop")
+			log.Info("starting periodic full reconciliation", "interval", r.reconcileInterval)
+
+			ticker := time.NewTicker(r.reconcileInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-reconcileCtx.Done():
+					log.Info("stopping periodic full reconciliation")
+					return
+				case <-ticker.C:
+					if err := r.runFullReconciliation(reconcileCtx); err != nil {
+						log.Error(err, "full reconciliation failed")
+					}
+				}
+			}
+		}()
+		_ = reconcileCancel // cancelled when the process exits
 	}
 
 	return builder.Complete(r)

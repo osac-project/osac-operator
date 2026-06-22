@@ -106,7 +106,7 @@ func mcReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
 // namespaces are never fully deleted).
 func reconcileUntilDeleting(ctx context.Context, nn types.NamespacedName) {
 	Eventually(func(g Gomega) {
-		r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil)
+		r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil, 0)
 		_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 		g.Expect(err).NotTo(HaveOccurred())
 	}).Should(Succeed())
@@ -140,7 +140,7 @@ var _ = Describe("Tenant Controller", func() {
 
 		It("should transition through all Ready/Progressing phases with multi-tier StorageClasses", func() {
 			fakeRecorder := events.NewFakeRecorder(100)
-			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil)
+			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil, 0)
 			controllerReconciler.Recorder = fakeRecorder
 
 			By("waiting for the Tenant to appear in the controller's cache")
@@ -424,7 +424,7 @@ var _ = Describe("Tenant Controller", func() {
 
 		It("should trigger provisioning and become Ready after SC is created", func() {
 			provider := &mockProvisioningProvider{}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil, 0)
 
 			By("first reconcile: trigger provisioning job")
 			Eventually(func(g Gomega) {
@@ -509,7 +509,7 @@ var _ = Describe("Tenant Controller", func() {
 					}, nil
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil, 0)
 
 			By("reconciling until job is triggered and fails")
 			Eventually(func(g Gomega) {
@@ -570,7 +570,7 @@ var _ = Describe("Tenant Controller", func() {
 					return nil, fmt.Errorf("connection refused")
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil, 0)
 
 			By("first reconcile: trigger fails, records job with empty JobID")
 			Eventually(func(g Gomega) {
@@ -637,7 +637,7 @@ var _ = Describe("Tenant Controller", func() {
 				})).To(Succeed())
 			}
 
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil, 0)
 			Eventually(func(g Gomega) {
 				_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 				g.Expect(err).NotTo(HaveOccurred())
@@ -671,7 +671,7 @@ var _ = Describe("Tenant Controller", func() {
 					}, nil
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, provider, 1*time.Second, provisioning.DefaultMaxJobHistory, nil, nil, 0)
 
 			By("deleting the Tenant CR")
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
@@ -733,7 +733,7 @@ var _ = Describe("Tenant Controller", func() {
 				})).To(Succeed())
 			}
 
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil, 0)
 			Eventually(func(g Gomega) {
 				_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 				g.Expect(err).NotTo(HaveOccurred())
@@ -751,7 +751,7 @@ var _ = Describe("Tenant Controller", func() {
 		})
 
 		It("should block deletion until StorageClass is manually removed", func() {
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 1*time.Second, 0, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 1*time.Second, 0, nil, nil, 0)
 
 			By("deleting the Tenant CR")
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
@@ -794,7 +794,7 @@ var _ = Describe("Tenant Controller", func() {
 					"db-tenant": {ID: "id-1", Name: "db-tenant", DisplayName: "DB Tenant", EmailDomains: []string{"example.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "db-tenant", Namespace: "default"}
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
@@ -811,7 +811,7 @@ var _ = Describe("Tenant Controller", func() {
 		})
 
 		It("should not create CR when tenantLookup is nil", func() {
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, nil, 0)
 			nn := types.NamespacedName{Name: "no-lookup-tenant", Namespace: "default"}
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
@@ -824,7 +824,7 @@ var _ = Describe("Tenant Controller", func() {
 
 		It("should not create CR when tenantLookup is not ready", func() {
 			lookup := &mockTenantLookup{ready: false}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "not-ready-tenant", Namespace: "default"}
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
@@ -837,7 +837,7 @@ var _ = Describe("Tenant Controller", func() {
 
 		It("should not create CR when tenant not in database", func() {
 			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "missing-tenant", Namespace: "default"}
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
@@ -865,7 +865,7 @@ var _ = Describe("Tenant Controller", func() {
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 
 			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "managed-del", Namespace: "default"}
 
 			Eventually(func() error {
@@ -892,7 +892,7 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
 
 			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "manual-tenant", Namespace: "default"}
 
 			Eventually(func() error {
@@ -920,7 +920,7 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
 
 			lookup := &mockTenantLookup{ready: false}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "notready-del", Namespace: "default"}
 
 			Eventually(func() error {
@@ -959,7 +959,7 @@ var _ = Describe("Tenant Controller", func() {
 					"sync-display": {ID: "id-1", Name: "sync-display", DisplayName: "New Name", EmailDomains: []string{"example.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "sync-display", Namespace: "default"}
 
 			Eventually(func() error {
@@ -998,7 +998,7 @@ var _ = Describe("Tenant Controller", func() {
 					"sync-email": {ID: "id-1", Name: "sync-email", DisplayName: "Test", EmailDomains: []string{"new.com", "extra.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "sync-email", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1035,7 +1035,7 @@ var _ = Describe("Tenant Controller", func() {
 					"sync-noop": {ID: "id-1", Name: "sync-noop", DisplayName: "Same", EmailDomains: []string{"same.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "sync-noop", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1076,7 +1076,7 @@ var _ = Describe("Tenant Controller", func() {
 					"legacy-adopt": {ID: "id-1", Name: "legacy-adopt", DisplayName: "Legacy Tenant", EmailDomains: []string{"legacy.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "legacy-adopt", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1112,7 +1112,7 @@ var _ = Describe("Tenant Controller", func() {
 					"legacy-partial": {ID: "id-1", Name: "legacy-partial", DisplayName: "Backfill Name", EmailDomains: []string{"db.com"}},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "legacy-partial", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1140,7 +1140,7 @@ var _ = Describe("Tenant Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
 
 			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "no-db-match", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1172,7 +1172,7 @@ var _ = Describe("Tenant Controller", func() {
 					"empty-db-fields": {ID: "id-1", Name: "empty-db-fields", DisplayName: "", EmailDomains: nil},
 				},
 			}
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
 			nn := types.NamespacedName{Name: "empty-db-fields", Namespace: "default"}
 
 			Eventually(func() error {
@@ -1184,6 +1184,92 @@ var _ = Describe("Tenant Controller", func() {
 			updated := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
 			Expect(updated.Annotations[osacManagedByAnnotation]).To(BeEmpty())
+		})
+	})
+
+	Context("When full reconciliation runs", func() {
+		ctx := context.Background()
+
+		It("should create missing CRs for tenants in DB but not in cluster", func() {
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"full-recon-create": {ID: "id-1", Name: "full-recon-create", DisplayName: "New Tenant", EmailDomains: []string{"new.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
+
+			err := r.runFullReconciliation(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			nn := types.NamespacedName{Name: "full-recon-create", Namespace: "default"}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Spec.DisplayName).To(Equal("New Tenant"))
+			Expect(tenant.Annotations[osacManagedByAnnotation]).To(Equal(osacManagedByValue))
+
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+		})
+
+		It("should delete orphaned managed CRs not in DB", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "full-recon-orphan",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagedByAnnotation: osacManagedByValue,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+
+			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, types.NamespacedName{Name: "full-recon-orphan", Namespace: "default"}, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			err := r.runFullReconciliation(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			// The reconciliation enqueues requests — run Reconcile to process the deletion
+			nn := types.NamespacedName{Name: "full-recon-orphan", Namespace: "default"}
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, nn, &v1alpha1.Tenant{})
+				return errors.IsNotFound(err)
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+
+		It("should be idempotent — running twice produces the same state", func() {
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"full-recon-idem": {ID: "id-1", Name: "full-recon-idem", DisplayName: "Idem Tenant", EmailDomains: []string{"idem.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup, 0)
+
+			err := r.runFullReconciliation(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			nn := types.NamespacedName{Name: "full-recon-idem", Namespace: "default"}
+			first := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, first)).To(Succeed())
+			rvFirst := first.ResourceVersion
+
+			err = r.runFullReconciliation(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second run should not create a duplicate — exactly one CR exists
+			second := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, second)).To(Succeed())
+			Expect(second.Spec.DisplayName).To(Equal("Idem Tenant"))
+			_ = rvFirst
+
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, first) })
 		})
 	})
 })
