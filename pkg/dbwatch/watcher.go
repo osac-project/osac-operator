@@ -20,12 +20,19 @@ package dbwatch
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+// TenantLookup provides read-only access to the watcher's tenant snapshot.
+type TenantLookup interface {
+	GetTenantByName(name string) (TenantRecord, bool)
+	Ready() bool
+}
 
 // TenantRecord represents a tenant row from the fulfillment database.
 type TenantRecord struct {
@@ -98,13 +105,16 @@ func init() {
 }
 
 // Watcher polls the fulfillment database for tenant changes and calls
-// the enqueuer when changes are detected. Implements manager.LeaderElectionRunnable.
+// the enqueuer when changes are detected. Implements manager.LeaderElectionRunnable
+// and TenantLookup.
 type Watcher struct {
 	querier  Querier
 	interval time.Duration
 	enqueuer ReconcileEnqueuer
 	log      logr.Logger
+	mu       sync.RWMutex
 	snapshot map[string]TenantRecord
+	ready    bool
 }
 
 // New creates a Watcher.
@@ -147,6 +157,26 @@ func (w *Watcher) NeedLeaderElection() bool {
 	return true
 }
 
+// GetTenantByName returns the TenantRecord for the given name, or false if
+// the tenant is not in the current snapshot.
+func (w *Watcher) GetTenantByName(name string) (TenantRecord, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	for _, t := range w.snapshot {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return TenantRecord{}, false
+}
+
+// Ready returns true after the first successful poll has populated the snapshot.
+func (w *Watcher) Ready() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.ready
+}
+
 func (w *Watcher) poll(ctx context.Context) {
 	pollsTotal.Inc()
 
@@ -164,7 +194,10 @@ func (w *Watcher) poll(ctx context.Context) {
 		current[t.ID] = t
 	}
 
+	w.mu.RLock()
 	events := w.diff(current)
+	w.mu.RUnlock()
+
 	for _, evt := range events {
 		eventsTotal.WithLabelValues(string(evt.Type)).Inc()
 		w.log.Info("tenant change detected",
@@ -175,7 +208,10 @@ func (w *Watcher) poll(ctx context.Context) {
 		w.enqueuer(evt.Tenant.Name)
 	}
 
+	w.mu.Lock()
 	w.snapshot = current
+	w.ready = true
+	w.mu.Unlock()
 }
 
 func (w *Watcher) diff(current map[string]TenantRecord) []TenantEvent {

@@ -375,6 +375,118 @@ var _ = Describe("Watcher", func() {
 		})
 	})
 
+	Describe("TenantLookup", func() {
+		Describe("Ready", func() {
+			It("returns false before first poll", func() {
+				w := &Watcher{
+					log: newTestLogger(),
+				}
+				Expect(w.Ready()).To(BeFalse())
+			})
+
+			It("returns true after first successful poll", func() {
+				collector := &enqueueCollector{}
+				querier := &mockQuerier{
+					tenants: []TenantRecord{
+						{ID: "id-1", Name: "tenant-a"},
+					},
+				}
+				w := &Watcher{
+					querier:  querier,
+					enqueuer: collector.enqueue,
+					log:      newTestLogger(),
+				}
+
+				w.poll(context.Background())
+				Expect(w.Ready()).To(BeTrue())
+			})
+
+			It("remains false after a failed poll", func() {
+				collector := &enqueueCollector{}
+				querier := &mockQuerier{
+					err: fmt.Errorf("connection refused"),
+				}
+				w := &Watcher{
+					querier:  querier,
+					enqueuer: collector.enqueue,
+					log:      newTestLogger(),
+				}
+
+				w.poll(context.Background())
+				Expect(w.Ready()).To(BeFalse())
+			})
+		})
+
+		Describe("GetTenantByName", func() {
+			It("returns the record when tenant exists in snapshot", func() {
+				w := &Watcher{log: newTestLogger()}
+				w.snapshot = map[string]TenantRecord{
+					"id-1": {ID: "id-1", Name: "tenant-a", DisplayName: "Tenant A", EmailDomains: []string{"a.com"}},
+				}
+				w.ready = true
+
+				record, found := w.GetTenantByName("tenant-a")
+				Expect(found).To(BeTrue())
+				Expect(record.ID).To(Equal("id-1"))
+				Expect(record.DisplayName).To(Equal("Tenant A"))
+				Expect(record.EmailDomains).To(Equal([]string{"a.com"}))
+			})
+
+			It("returns false when tenant is not in snapshot", func() {
+				w := &Watcher{log: newTestLogger()}
+				w.snapshot = map[string]TenantRecord{
+					"id-1": {ID: "id-1", Name: "tenant-a"},
+				}
+				w.ready = true
+
+				_, found := w.GetTenantByName("tenant-b")
+				Expect(found).To(BeFalse())
+			})
+
+			It("returns false when snapshot is nil", func() {
+				w := &Watcher{log: newTestLogger()}
+
+				_, found := w.GetTenantByName("tenant-a")
+				Expect(found).To(BeFalse())
+			})
+
+			It("does not panic under concurrent access with poll", func() {
+				collector := &enqueueCollector{}
+				callCount := 0
+				querier := &mockQuerier{
+					tenantFn: func(_ int) ([]TenantRecord, error) {
+						callCount++
+						return []TenantRecord{
+							{ID: "id-1", Name: fmt.Sprintf("tenant-%d", callCount)},
+						}, nil
+					},
+				}
+				w := &Watcher{
+					querier:  querier,
+					enqueuer: collector.enqueue,
+					log:      newTestLogger(),
+				}
+
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				// Poll concurrently
+				go func() {
+					for ctx.Err() == nil {
+						w.poll(ctx)
+					}
+				}()
+
+				// Read concurrently — should not panic
+				Consistently(func() bool {
+					w.GetTenantByName("tenant-1")
+					w.Ready()
+					return true
+				}, 200*time.Millisecond, 5*time.Millisecond).Should(BeTrue())
+			})
+		})
+	})
+
 	Describe("TenantRecord.equal", func() {
 		It("returns true for identical records", func() {
 			a := TenantRecord{ID: "1", Name: "a", DisplayName: "A", EmailDomains: []string{"a.com"}}
