@@ -31,3 +31,7 @@ go.work
 
 # Development memory/notes (local only)
 MEMORY.md
+
+# Helm dependency build artifacts
+charts/*/charts/
+charts/*/Chart.lock
