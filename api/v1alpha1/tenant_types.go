@@ -25,6 +25,11 @@ import (
 
 // TenantSpec defines the desired state of Tenant.
 type TenantSpec struct {
+	// +kubebuilder:validation:Optional
+	DisplayName string `json:"displayName,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	EmailDomains []string `json:"emailDomains,omitempty"`
 }
 
 type TenantPhaseType string
