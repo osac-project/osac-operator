@@ -38,6 +38,12 @@ const (
 
 	// eventReasonStorageClassNotReady is the event reason emitted when no storage tier resolves
 	eventReasonStorageClassNotReady = "StorageClassNotReady"
+
+	// eventReasonSpecSynced is the event reason emitted when a managed CR's spec is synced from DB
+	eventReasonSpecSynced = "SpecSynced"
+
+	// eventReasonAdopted is the event reason emitted when a legacy CR is adopted
+	eventReasonAdopted = "Adopted"
 )
 
 const (

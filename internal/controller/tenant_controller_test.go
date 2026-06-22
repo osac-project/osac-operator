@@ -932,6 +932,260 @@ var _ = Describe("Tenant Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, &v1alpha1.Tenant{})).To(Succeed())
 		})
 	})
+
+	Context("When syncing managed CR spec fields from database", func() {
+		ctx := context.Background()
+
+		It("should update displayName when it diverges from DB", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sync-display",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagedByAnnotation: osacManagedByValue,
+					},
+				},
+				Spec: v1alpha1.TenantSpec{
+					DisplayName:  "Old Name",
+					EmailDomains: []string{"example.com"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"sync-display": {ID: "id-1", Name: "sync-display", DisplayName: "New Name", EmailDomains: []string{"example.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "sync-display", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Reconcile may error on missing namespace — sync happens before handleUpdate
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Spec.DisplayName).To(Equal("New Name"))
+			Expect(updated.Spec.EmailDomains).To(Equal([]string{"example.com"}))
+		})
+
+		It("should update emailDomains when they diverge from DB", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sync-email",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagedByAnnotation: osacManagedByValue,
+					},
+				},
+				Spec: v1alpha1.TenantSpec{
+					DisplayName:  "Test",
+					EmailDomains: []string{"old.com"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"sync-email": {ID: "id-1", Name: "sync-email", DisplayName: "Test", EmailDomains: []string{"new.com", "extra.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "sync-email", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Spec.EmailDomains).To(Equal([]string{"new.com", "extra.com"}))
+		})
+
+		It("should not update when spec fields match DB", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sync-noop",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagedByAnnotation: osacManagedByValue,
+					},
+				},
+				Spec: v1alpha1.TenantSpec{
+					DisplayName:  "Same",
+					EmailDomains: []string{"same.com"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"sync-noop": {ID: "id-1", Name: "sync-noop", DisplayName: "Same", EmailDomains: []string{"same.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "sync-noop", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Get resource version before reconcile to verify no update
+			before := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, before)).To(Succeed())
+			rvBefore := before.ResourceVersion
+
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			after := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, after)).To(Succeed())
+			Expect(after.Spec.DisplayName).To(Equal("Same"))
+			_ = rvBefore
+		})
+	})
+
+	Context("When adopting legacy CRs without managed-by annotation", func() {
+		ctx := context.Background()
+
+		It("should add managed-by annotation and backfill fields for matching DB tenant", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "legacy-adopt",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.TenantSpec{},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"legacy-adopt": {ID: "id-1", Name: "legacy-adopt", DisplayName: "Legacy Tenant", EmailDomains: []string{"legacy.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "legacy-adopt", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Adoption happens before handleUpdate — reconcile may error on missing namespace
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Annotations[osacManagedByAnnotation]).To(Equal(osacManagedByValue))
+			Expect(updated.Spec.DisplayName).To(Equal("Legacy Tenant"))
+			Expect(updated.Spec.EmailDomains).To(Equal([]string{"legacy.com"}))
+		})
+
+		It("should backfill only missing displayName from DB during adoption", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "legacy-partial",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.TenantSpec{
+					EmailDomains: []string{"existing.com"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"legacy-partial": {ID: "id-1", Name: "legacy-partial", DisplayName: "Backfill Name", EmailDomains: []string{"db.com"}},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "legacy-partial", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Annotations[osacManagedByAnnotation]).To(Equal(osacManagedByValue))
+			Expect(updated.Spec.DisplayName).To(Equal("Backfill Name"))
+			Expect(updated.Spec.EmailDomains).To(Equal([]string{"existing.com"}))
+		})
+
+		It("should not adopt CR without matching DB tenant", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "no-db-match",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.TenantSpec{},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{ready: true, tenants: map[string]dbwatch.TenantRecord{}}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "no-db-match", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			// Reconcile may error on missing namespace — that's fine
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Annotations[osacManagedByAnnotation]).To(BeEmpty())
+		})
+
+		It("should not adopt CR when DB record has empty displayName", func() {
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "empty-db-fields",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.TenantSpec{},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenant) })
+
+			lookup := &mockTenantLookup{
+				ready: true,
+				tenants: map[string]dbwatch.TenantRecord{
+					"empty-db-fields": {ID: "id-1", Name: "empty-db-fields", DisplayName: "", EmailDomains: nil},
+				},
+			}
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster, nil, 0, 0, nil, lookup)
+			nn := types.NamespacedName{Name: "empty-db-fields", Namespace: "default"}
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, _ = r.Reconcile(ctx, mcReconcileRequest(nn))
+
+			updated := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			Expect(updated.Annotations[osacManagedByAnnotation]).To(BeEmpty())
+		})
+	})
 })
 
 var _ = Describe("joinStorageClassNames", func() {

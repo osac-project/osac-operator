@@ -141,6 +141,18 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 		return ctrl.Result{}, nil
 	}
 
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() && r.tenantLookup != nil && r.tenantLookup.Ready() {
+		if instance.Annotations[osacManagedByAnnotation] == osacManagedByValue {
+			if err := r.syncManagedCR(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+		} else {
+			if err := r.adoptLegacyCR(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
 	oldstatus := instance.Status.DeepCopy()
 
 	var res ctrl.Result
@@ -459,6 +471,87 @@ func (r *TenantReconciler) shouldDeleteManagedCR(instance *v1alpha1.Tenant) bool
 	}
 	_, found := r.tenantLookup.GetTenantByName(instance.Name)
 	return !found
+}
+
+// syncManagedCR updates a managed CR's spec fields if they diverge from DB state.
+func (r *TenantReconciler) syncManagedCR(ctx context.Context, instance *v1alpha1.Tenant) error {
+	log := ctrllog.FromContext(ctx)
+
+	record, found := r.tenantLookup.GetTenantByName(instance.Name)
+	if !found {
+		return nil
+	}
+
+	needsUpdate := false
+	if instance.Spec.DisplayName != record.DisplayName {
+		instance.Spec.DisplayName = record.DisplayName
+		needsUpdate = true
+	}
+	if !stringSlicesEqual(instance.Spec.EmailDomains, record.EmailDomains) {
+		instance.Spec.EmailDomains = record.EmailDomains
+		needsUpdate = true
+	}
+
+	if !needsUpdate {
+		return nil
+	}
+
+	if err := r.Update(ctx, instance); err != nil {
+		return err
+	}
+	log.Info("synced managed CR spec from database", "name", instance.Name)
+	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonSpecSynced, "SpecSync",
+		"Synced spec fields from database for tenant %q", instance.Name)
+	return nil
+}
+
+// adoptLegacyCR adds the managed-by annotation and backfills missing fields for
+// an unmanaged CR that matches a database tenant.
+func (r *TenantReconciler) adoptLegacyCR(ctx context.Context, instance *v1alpha1.Tenant) error {
+	log := ctrllog.FromContext(ctx)
+
+	record, found := r.tenantLookup.GetTenantByName(instance.Name)
+	if !found {
+		return nil
+	}
+
+	if record.DisplayName == "" {
+		log.Info("skipping adoption: DB record has empty displayName", "name", instance.Name)
+		return nil
+	}
+
+	if instance.Annotations == nil {
+		instance.Annotations = make(map[string]string)
+	}
+	instance.Annotations[osacManagedByAnnotation] = osacManagedByValue
+
+	if instance.Spec.DisplayName == "" {
+		instance.Spec.DisplayName = record.DisplayName
+	}
+	if len(instance.Spec.EmailDomains) == 0 && len(record.EmailDomains) > 0 {
+		instance.Spec.EmailDomains = record.EmailDomains
+	}
+
+	if err := r.Update(ctx, instance); err != nil {
+		return err
+	}
+	log.Info("adopted legacy CR", "name", instance.Name)
+	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonAdopted, "Adoption",
+		"Adopted legacy tenant CR %q with managed-by annotation", instance.Name)
+	return nil
+}
+
+// stringSlicesEqual returns true if two string slices have the same elements in order.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // handleStorageDeprovisioning triggers an AAP job to remove tenant storage and
