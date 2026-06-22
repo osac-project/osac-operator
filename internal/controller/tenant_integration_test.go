@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -247,6 +248,148 @@ var _ = Describe("Tenant Lifecycle Integration", Ordered, func() {
 				}, &tenant)).To(Succeed())
 				g.Expect(tenant.Spec.DisplayName).To(Equal("After Update"))
 			}, timeout, polling).Should(Succeed())
+		})
+	})
+
+	Context("Reconciliation recovery", func() {
+		It("recreates CR after manual deletion", func() {
+			querier.addTenant(dbwatch.TenantRecord{
+				ID: "integ-recreate-1", Name: "integ-recreate-tenant",
+				DisplayName: "Recreate Me", EmailDomains: []string{"recreate.test"},
+			})
+
+			Eventually(func() error {
+				return k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-recreate-tenant", Namespace: integNamespace,
+				}, &v1alpha1.Tenant{})
+			}, timeout, polling).Should(Succeed())
+
+			var tenant v1alpha1.Tenant
+			Expect(k8sClient.Get(integCtx, types.NamespacedName{
+				Name: "integ-recreate-tenant", Namespace: integNamespace,
+			}, &tenant)).To(Succeed())
+			Expect(k8sClient.Delete(integCtx, &tenant)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				var recreated v1alpha1.Tenant
+				g.Expect(k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-recreate-tenant", Namespace: integNamespace,
+				}, &recreated)).To(Succeed())
+				g.Expect(recreated.Annotations[osacManagedByAnnotation]).To(Equal(osacManagedByValue))
+			}, timeout, polling).Should(Succeed())
+		})
+
+		It("ignores CRs without managed-by annotation", func() {
+			manual := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "integ-manual-tenant",
+					Namespace: integNamespace,
+				},
+				Spec: v1alpha1.TenantSpec{
+					DisplayName:  "Manual Tenant",
+					EmailDomains: []string{"manual.test"},
+				},
+			}
+			Expect(k8sClient.Create(integCtx, manual)).To(Succeed())
+
+			time.Sleep(2 * reconcileIvl)
+
+			var tenant v1alpha1.Tenant
+			Expect(k8sClient.Get(integCtx, types.NamespacedName{
+				Name: "integ-manual-tenant", Namespace: integNamespace,
+			}, &tenant)).To(Succeed())
+			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+		})
+	})
+
+	Context("Failure recovery", func() {
+		It("recovers from database connection failure", func() {
+			querier.setError(fmt.Errorf("connection refused"))
+
+			time.Sleep(3 * pollInterval)
+
+			querier.clearError()
+			querier.addTenant(dbwatch.TenantRecord{
+				ID: "integ-recover-1", Name: "integ-recover-tenant",
+				DisplayName: "Recovered", EmailDomains: []string{"recover.test"},
+			})
+
+			Eventually(func() error {
+				return k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-recover-tenant", Namespace: integNamespace,
+				}, &v1alpha1.Tenant{})
+			}, timeout, polling).Should(Succeed())
+		})
+	})
+
+	Context("Legacy CR adoption", func() {
+		It("adopts pre-existing legacy CR and backfills fields", func() {
+			legacy := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "integ-adopt-tenant",
+					Namespace: integNamespace,
+				},
+				Spec: v1alpha1.TenantSpec{},
+			}
+			Expect(k8sClient.Create(integCtx, legacy)).To(Succeed())
+
+			querier.addTenant(dbwatch.TenantRecord{
+				ID: "integ-adopt-1", Name: "integ-adopt-tenant",
+				DisplayName: "Adopted Tenant", EmailDomains: []string{"adopt.test"},
+			})
+
+			Eventually(func(g Gomega) {
+				var tenant v1alpha1.Tenant
+				g.Expect(k8sClient.Get(integCtx, types.NamespacedName{
+					Name: "integ-adopt-tenant", Namespace: integNamespace,
+				}, &tenant)).To(Succeed())
+				g.Expect(tenant.Annotations[osacManagedByAnnotation]).To(Equal(osacManagedByValue))
+				g.Expect(tenant.Spec.DisplayName).To(Equal("Adopted Tenant"))
+				g.Expect(tenant.Spec.EmailDomains).To(ContainElement("adopt.test"))
+			}, timeout, polling).Should(Succeed())
+		})
+
+		It("leaves CR unmanaged when DB record has empty displayName", func() {
+			unmanaged := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "integ-incomplete-tenant",
+					Namespace: integNamespace,
+				},
+				Spec: v1alpha1.TenantSpec{DisplayName: "Existing"},
+			}
+			Expect(k8sClient.Create(integCtx, unmanaged)).To(Succeed())
+
+			querier.addTenant(dbwatch.TenantRecord{
+				ID: "integ-incomplete-1", Name: "integ-incomplete-tenant",
+				DisplayName: "", EmailDomains: []string{},
+			})
+
+			time.Sleep(2 * reconcileIvl)
+
+			var tenant v1alpha1.Tenant
+			Expect(k8sClient.Get(integCtx, types.NamespacedName{
+				Name: "integ-incomplete-tenant", Namespace: integNamespace,
+			}, &tenant)).To(Succeed())
+			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
+		})
+
+		It("leaves CR unmanaged when no DB match exists", func() {
+			noMatch := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "integ-nomatch-tenant",
+					Namespace: integNamespace,
+				},
+				Spec: v1alpha1.TenantSpec{DisplayName: "No Match"},
+			}
+			Expect(k8sClient.Create(integCtx, noMatch)).To(Succeed())
+
+			time.Sleep(2 * reconcileIvl)
+
+			var tenant v1alpha1.Tenant
+			Expect(k8sClient.Get(integCtx, types.NamespacedName{
+				Name: "integ-nomatch-tenant", Namespace: integNamespace,
+			}, &tenant)).To(Succeed())
+			Expect(tenant.Annotations).NotTo(HaveKey(osacManagedByAnnotation))
 		})
 	})
 })
