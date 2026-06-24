@@ -106,6 +106,8 @@ spec:
             value: {{ .Values.controllers.networking | quote }}
           - name: OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER
             value: {{ .Values.controllers.bareMetalInstance | quote }}
+          - name: OSAC_ENABLE_STORAGE_CONTROLLER
+            value: {{ .Values.controllers.storageController | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
