@@ -1,0 +1,38 @@
+---
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build-pr-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          IMAGE="ghcr.io/osac-project/osac-operator:pr-${{ github.event.pull_request.number || github.run_id }}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push PR image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          podman build -t "${{ steps.meta.outputs.image }}" -f Containerfile .
+          podman push "${{ steps.meta.outputs.image }}"
+
+  e2e:
+    needs: build-pr-image
+    uses: osac-project/osac-test-infra/.github/workflows/e2e.yml@main
+    with:
+      component-image: ${{ needs.build-pr-image.outputs.image }}
+      component-image-name: ghcr.io/osac-project/osac-operator
