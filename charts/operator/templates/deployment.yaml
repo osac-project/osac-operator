@@ -41,7 +41,14 @@ spec:
           - name: OSAC_AAP_URL
             value: {{ .Values.aap.url | quote }}
           {{- end }}
-          {{- if .Values.aap.token }}
+          {{- if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name }}
+          - name: OSAC_AAP_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.aap.tokenSecret.name }}
+                key: {{ .Values.aap.tokenSecret.key | default "token" }}
+                optional: true
+          {{- else if .Values.aap.token }}
           - name: OSAC_AAP_TOKEN
             value: {{ .Values.aap.token | quote }}
           {{- end }}
