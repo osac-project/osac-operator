@@ -13,6 +13,8 @@ filters:
     - rgolangh
     - eliorerz
     - ori-amizur
+    - rccrdpccl
+    - carbonin
     reviewers:
     - jhernand
     - adriengentil
@@ -26,3 +28,5 @@ filters:
     - rgolangh
     - eliorerz
     - ori-amizur
+    - rccrdpccl
+    - carbonin
