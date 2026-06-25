@@ -35,6 +35,56 @@ users:
 `)
 }
 
+func kubeconfigWithExec() []byte {
+	return []byte(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://remote-cluster:6443
+  name: remote
+contexts:
+- context:
+    cluster: remote
+    user: test
+  name: remote
+current-context: remote
+users:
+- name: test
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: /bin/sh
+      args:
+      - -c
+      - echo should-not-run
+      interactiveMode: Never
+`)
+}
+
+func kubeconfigWithAuthProvider() []byte {
+	return []byte(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://remote-cluster:6443
+  name: remote
+contexts:
+- context:
+    cluster: remote
+    user: test
+  name: remote
+current-context: remote
+users:
+- name: test
+  user:
+    auth-provider:
+      name: oidc
+      config:
+        idp-issuer-url: https://accounts.example.com
+        client-id: my-client
+`)
+}
+
 func labeledSecret(namespace, name string, data map[string][]byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -73,6 +123,8 @@ var _ = Describe("RemoteConfigResolver", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(config.Host).To(Equal(wantHost))
+			Expect(config.ExecProvider).To(BeNil(), "exec plugin must be stripped from parsed kubeconfig")
+			Expect(config.AuthProvider).To(BeNil(), "auth-provider must be stripped from parsed kubeconfig")
 		},
 		Entry("success",
 			"osac-dev",
@@ -121,6 +173,22 @@ var _ = Describe("RemoteConfigResolver", func() {
 				}),
 			},
 			"", "no remote kubeconfig secret found"),
+		Entry("strips exec plugin from kubeconfig",
+			"osac-dev",
+			[]runtime.Object{
+				labeledSecret("osac-dev", "exec-kubeconfig", map[string][]byte{
+					remoteKubeconfigKey: kubeconfigWithExec(),
+				}),
+			},
+			"https://remote-cluster:6443", ""),
+		Entry("strips auth-provider from kubeconfig",
+			"osac-dev",
+			[]runtime.Object{
+				labeledSecret("osac-dev", "oidc-kubeconfig", map[string][]byte{
+					remoteKubeconfigKey: kubeconfigWithAuthProvider(),
+				}),
+			},
+			"https://remote-cluster:6443", ""),
 	)
 
 	It("returns source containing the secret name", func() {

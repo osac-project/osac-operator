@@ -84,6 +84,8 @@ func (r *RemoteConfigResolver) ResolveConfig(ctx context.Context, namespace stri
 	if err != nil {
 		return nil, "", fmt.Errorf("parsing kubeconfig from secret %q in namespace %q: %w", secret.Name, namespace, err)
 	}
+	config.ExecProvider = nil
+	config.AuthProvider = nil
 	r.logger.InfoContext(ctx, "Resolved VM cluster config from remote kubeconfig secret",
 		slog.String("secret", secret.Name),
 		slog.String("namespace", namespace),
