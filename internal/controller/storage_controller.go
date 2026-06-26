@@ -22,11 +22,13 @@ import (
 	"os"
 	"time"
 
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,7 +71,8 @@ type StorageReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
-// Secrets RBAC is scoped to osac-system via a namespaced Role (config/rbac/storage_secrets_role.yaml)
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -468,9 +471,69 @@ func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []re
 	return requests
 }
 
-// TODO(OSAC-1123): implement ClusterOrder-to-Tenant mapping when CaaS defines the association
-func (r *StorageReconciler) mapClusterOrderToTenant(_ context.Context, _ client.Object) []reconcile.Request {
-	return nil
+// mapClusterOrderToTenant maps ClusterOrder events to the owning Tenant so the
+// storage controller can evaluate CaaS cluster storage provisioning/teardown.
+func (r *StorageReconciler) mapClusterOrderToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	tenantName, exists := obj.GetAnnotations()[osacTenantKey]
+	if !exists || tenantName == "" {
+		return nil
+	}
+
+	tenant := &v1alpha1.Tenant{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.tenantNamespace, Name: tenantName}, tenant); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to get Tenant for ClusterOrder",
+				"clusterOrder", obj.GetName(), "tenant", tenantName)
+		}
+		return nil
+	}
+
+	return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(tenant)}}
+}
+
+// getClusterKubeconfig retrieves the admin kubeconfig for a CaaS cluster by
+// reading the HostedControlPlane's kubeConfig Secret reference. Returns nil
+// without error if the HostedControlPlane or Secret is not yet available.
+func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrder *v1alpha1.ClusterOrder) ([]byte, error) {
+	ref := clusterOrder.Status.ClusterReference
+	if ref == nil || ref.Namespace == "" || ref.HostedClusterName == "" {
+		return nil, nil
+	}
+
+	hcp := &hypershiftv1beta1.HostedControlPlane{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Namespace: ref.Namespace,
+		Name:      ref.HostedClusterName,
+	}, hcp); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return nil, fmt.Errorf("get HostedControlPlane %s/%s: %w", ref.Namespace, ref.HostedClusterName, err)
+		}
+		return nil, nil
+	}
+
+	if hcp.Status.KubeConfig == nil || hcp.Status.KubeConfig.Name == "" {
+		return nil, nil
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Namespace: ref.Namespace,
+		Name:      hcp.Status.KubeConfig.Name,
+	}, secret); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return nil, fmt.Errorf("get kubeconfig Secret %s/%s: %w", ref.Namespace, hcp.Status.KubeConfig.Name, err)
+		}
+		return nil, nil
+	}
+
+	kubeconfig, exists := secret.Data[hcp.Status.KubeConfig.Key]
+	if !exists || len(kubeconfig) == 0 {
+		return nil, nil
+	}
+
+	return kubeconfig, nil
 }
 
 func (r *StorageReconciler) SetupWithManager(mgr mcmanager.Manager) error {
