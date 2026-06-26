@@ -24,7 +24,10 @@ import (
 
 type contextKey int
 
-const tenantStorageClassesKey contextKey = iota
+const (
+	tenantStorageClassesKey contextKey = iota
+	adminKubeconfigKey
+)
 
 // WithTenantStorageClasses returns a context carrying the tenant's resolved
 // storage classes. The AAP provider reads this when building extra_vars.
@@ -37,4 +40,17 @@ func WithTenantStorageClasses(ctx context.Context, scs []v1alpha1.ResolvedStorag
 func TenantStorageClassesFromContext(ctx context.Context) []v1alpha1.ResolvedStorageClass {
 	scs, _ := ctx.Value(tenantStorageClassesKey).([]v1alpha1.ResolvedStorageClass)
 	return scs
+}
+
+// WithAdminKubeconfig returns a context carrying the admin kubeconfig for a
+// CaaS cluster. The AAP provider reads this when building extra_vars.
+func WithAdminKubeconfig(ctx context.Context, kubeconfig string) context.Context {
+	return context.WithValue(ctx, adminKubeconfigKey, kubeconfig)
+}
+
+// AdminKubeconfigFromContext retrieves the admin kubeconfig from the context,
+// or empty string if not set.
+func AdminKubeconfigFromContext(ctx context.Context) string {
+	kc, _ := ctx.Value(adminKubeconfigKey).(string)
+	return kc
 }

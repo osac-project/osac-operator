@@ -353,6 +353,10 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		event["tenant_storage_classes"] = scList
 	}
 
+	if kc := AdminKubeconfigFromContext(ctx); kc != "" {
+		event["admin_kubeconfig"] = kc
+	}
+
 	// Wrap in ansible_eda.event structure for AAP template compatibility.
 	return map[string]any{
 		"ansible_eda": map[string]any{

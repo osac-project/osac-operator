@@ -799,4 +799,44 @@ var _ = Describe("AAPProvider", func() {
 		})
 
 	})
+
+	Describe("ExtraVars admin kubeconfig injection", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+		})
+
+		It("should include admin_kubeconfig in event when set in context", func() {
+			kubeconfig := "apiVersion: v1\nclusters: []\n"
+			ctx = provisioning.WithAdminKubeconfig(ctx, kubeconfig)
+
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).To(HaveKeyWithValue("admin_kubeconfig", kubeconfig))
+				return &aap.LaunchJobTemplateResponse{JobID: 100}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should omit admin_kubeconfig from event when not set in context", func() {
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).NotTo(HaveKey("admin_kubeconfig"))
+				return &aap.LaunchJobTemplateResponse{JobID: 101}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
 })
