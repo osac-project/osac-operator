@@ -687,8 +687,8 @@ var _ = Describe("Storage Controller", func() {
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)
 
 			co := newClusterOrder("caas-map-co-1", testNamespace, map[string]string{
-						osacTenantKey: tenantName,
-					})
+				osacTenantKey: tenantName,
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
@@ -719,8 +719,8 @@ var _ = Describe("Storage Controller", func() {
 
 		It("should return nil when tenant annotation is empty", func() {
 			co := newClusterOrder("caas-map-empty-annotation", testNamespace, map[string]string{
-						osacTenantKey: "",
-					})
+				osacTenantKey: "",
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
@@ -735,8 +735,8 @@ var _ = Describe("Storage Controller", func() {
 
 		It("should return nil when referenced Tenant does not exist", func() {
 			co := newClusterOrder("caas-map-no-tenant", testNamespace, map[string]string{
-						osacTenantKey: "nonexistent-tenant",
-					})
+				osacTenantKey: "nonexistent-tenant",
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
@@ -891,8 +891,8 @@ var _ = Describe("Storage Controller", func() {
 			createLabeledStorageClass(ctx, tenantName+"-vmaas-sc", tenantName, "default")
 
 			co := newClusterOrder("caas-prov-co-1", testNamespace, map[string]string{
-						osacTenantKey: tenantName,
-					})
+				osacTenantKey: tenantName,
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
@@ -927,8 +927,8 @@ var _ = Describe("Storage Controller", func() {
 			createHubSecret(ctx, tenantName, secretsNamespace)
 
 			co := newClusterOrder("caas-prov-co-notready", testNamespace, map[string]string{
-						osacTenantKey: tenantName,
-					})
+				osacTenantKey: tenantName,
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
@@ -960,8 +960,8 @@ var _ = Describe("Storage Controller", func() {
 
 			// Create a CaaS ClusterOrder for the same tenant
 			co := newClusterOrder("caas-regression-co", testNamespace, map[string]string{
-						osacTenantKey: tenantName,
-					})
+				osacTenantKey: tenantName,
+			})
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 
