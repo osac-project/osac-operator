@@ -7,6 +7,8 @@ permissions:
 on:
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 */12 * * *"
   workflow_dispatch:
     inputs:
       test-suite:
