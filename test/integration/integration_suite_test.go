@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package e2e
+package integration
 
 import (
 	"fmt"
@@ -118,8 +118,8 @@ var _ = AfterSuite(func() {
 	utils.UninstallCertManager()
 })
 
-func TestE2E(t *testing.T) {
+func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting osac-operator suite\n")
-	RunSpecs(t, "e2e suite")
+	RunSpecs(t, "integration suite")
 }

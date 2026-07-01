@@ -125,7 +125,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/integration$$') -coverprofile cover.out
 
 .PHONY: test-integration
 test-integration: test test-kustomize test-smoke ## Run all tests including integration (kustomize + smoke).
@@ -157,10 +157,10 @@ test-smoke: kustomize ## Run smoke test in kind cluster (creates/deletes test cl
 	$(KIND) delete cluster --name osac-test
 	@echo "Smoke test passed!"
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+# Run integration tests against a Kind cluster that is spun up.
+.PHONY: test-integration-kind
+test-integration-kind:
+	go test ./test/integration/ -v -ginkgo.v
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
