@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
@@ -173,73 +174,118 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		return ctrl.Result{}, err
 	}
 
+	// TODO(OSAC-1957): BackendProvider != nil only means AAP is configured, not
+	// that a storage backend (e.g. VAST) is registered. When AAP is configured
+	// for compute provisioning but no backend exists, the controller triggers
+	// a backend provisioning job that will fail. Wire the Backend API
+	// (private.v1.StorageBackends/List) to check if a backend is registered
+	// before entering the AAP path.
 	if !hubSecretReady {
-		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-			metav1.ConditionFalse,
-			v1alpha1.TenantReasonNotFound,
-			fmt.Sprintf("Hub Secret for tenant %q not found", tenantName))
-
 		if r.BackendProvider != nil {
+			instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				fmt.Sprintf("Hub Secret for tenant %q not found", tenantName))
 			return r.handleBackendProvisioning(ctx, instance)
 		}
+		// When no provisioning provider is configured (no AAP URL/token),
+		// the controller cannot create hub Secrets via AAP. This is the
+		// normal state for prepare-tenant.sh environments that run OSAC
+		// without a VAST storage backend. Instead of blocking here, fall
+		// through to Stage 2 so the controller can resolve StorageClasses
+		// from manually labeled SCs and populate status.storageClasses,
+		// which the compute instance controller needs to provision VMs.
 		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
 			metav1.ConditionFalse,
 			v1alpha1.TenantReasonNoProvider,
 			"No backend provider configured")
-		return ctrl.Result{}, nil
+	} else {
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionTrue,
+			v1alpha1.TenantReasonFound,
+			fmt.Sprintf("Hub Secret for tenant %q exists", tenantName))
 	}
-
-	instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-		metav1.ConditionTrue,
-		v1alpha1.TenantReasonFound,
-		fmt.Sprintf("Hub Secret for tenant %q exists", tenantName))
 	// TODO(OSAC-1111): populate StorageBackendStatus once StorageBackend API provides name/provider
 
-	// Stage 2: resolve StorageClasses on target cluster
+	// Stage 2: resolve StorageClasses on target cluster.
 	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	result, err := getTenantStorageClasses(ctx, targetClient, tenantName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	for _, msg := range result.duplicateMessages {
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
-	}
-
 	clusterName := string(r.targetCluster)
 
-	if len(result.resolved) == 0 {
-		reason := v1alpha1.TenantReasonNotFound
-		if len(result.duplicateMessages) > 0 {
-			reason = v1alpha1.TenantReasonMultipleFound
-		}
-		condMsg := result.conditionMessage()
-		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-			metav1.ConditionFalse,
-			reason,
-			condMsg)
-		instance.Status.StorageClasses = nil
-		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-			{ClusterName: clusterName, Ready: false, Reason: reason},
+	if r.ClusterStorageProvider != nil {
+		// When AAP is configured, only accept tenant-specific StorageClasses
+		// (labeled osac.openshift.io/tenant=<tenantName>). Default tenant SCs
+		// (labeled tenant=Default) are not used as a substitute for
+		// AAP-provisioned storage. If no tenant-specific SC exists, trigger
+		// the AAP cluster storage job to create one.
+		result, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
 
-		if r.ClusterStorageProvider != nil && reason == v1alpha1.TenantReasonNotFound {
+		if len(result) == 0 {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				fmt.Sprintf("no tenant-specific StorageClass found for tenant %q", tenantName))
+			instance.Status.StorageClasses = nil
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
+			}
 			return r.handleClusterStorageProvisioning(ctx, instance)
 		}
-		return ctrl.Result{}, nil
-	}
 
-	instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-		metav1.ConditionTrue,
-		v1alpha1.TenantReasonFound,
-		result.conditionMessage())
-	instance.Status.StorageClasses = result.resolved
-	instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-		{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+			metav1.ConditionTrue,
+			v1alpha1.TenantReasonFound,
+			formatResolvedStorageClasses(result))
+		instance.Status.StorageClasses = result
+		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+		}
+	} else {
+		// When no provisioning provider is configured, resolve StorageClasses
+		// using the full tier resolution logic: tenant-specific SCs take
+		// priority, with shared default SCs (labeled tenant=Default) as
+		// fallback. This serves environments running OSAC without AAP/VAST
+		// where an admin or prepare-tenant.sh has labeled existing
+		// StorageClasses manually.
+		result, err := getTenantStorageClasses(ctx, targetClient, tenantName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		for _, msg := range result.duplicateMessages {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
+		}
+
+		if len(result.resolved) == 0 {
+			reason := v1alpha1.TenantReasonNotFound
+			if len(result.duplicateMessages) > 0 {
+				reason = v1alpha1.TenantReasonMultipleFound
+			}
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				reason,
+				result.conditionMessage())
+			instance.Status.StorageClasses = nil
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: false, Reason: reason},
+			}
+			return ctrl.Result{}, nil
+		}
+
+		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+			metav1.ConditionTrue,
+			v1alpha1.TenantReasonFound,
+			result.conditionMessage())
+		instance.Status.StorageClasses = result.resolved
+		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+		}
 	}
 
 	// Poll any non-terminal class provision job to update its status
@@ -783,6 +829,40 @@ func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []re
 
 // mapClusterOrderToTenant maps ClusterOrder events to the owning Tenant so the
 // storage controller can evaluate CaaS cluster storage provisioning/teardown.
+
+// resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
+// given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
+// AAP is configured and the controller should not fall back to shared defaults.
+func (r *StorageReconciler) resolveTenantSpecificStorageClasses(
+	ctx context.Context, targetClient client.Client, tenantName string,
+) ([]v1alpha1.ResolvedStorageClass, error) {
+	scList := &storagev1.StorageClassList{}
+	if err := targetClient.List(ctx, scList, client.MatchingLabels{osacTenantKey: tenantName}); err != nil {
+		return nil, err
+	}
+	byTier := groupByTier(scList.Items)
+	var resolved []v1alpha1.ResolvedStorageClass
+	for tier, scs := range byTier {
+		if len(scs) == 1 {
+			resolved = append(resolved, v1alpha1.ResolvedStorageClass{
+				Name: scs[0].GetName(),
+				Tier: tier,
+			})
+		}
+	}
+	return resolved, nil
+}
+
+// formatResolvedStorageClasses builds a human-readable condition message
+// listing each resolved tier and its StorageClass name.
+func formatResolvedStorageClasses(classes []v1alpha1.ResolvedStorageClass) string {
+	parts := make([]string, len(classes))
+	for i, sc := range classes {
+		parts[i] = fmt.Sprintf("tier %q: StorageClass %q (tenant-specific)", sc.Tier, sc.Name)
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (r *StorageReconciler) mapClusterOrderToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
