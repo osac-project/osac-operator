@@ -814,16 +814,19 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 		return nil, nil
 	}
 
+	// HyperShift places the HostedControlPlane in {HostedCluster-namespace}-{HostedCluster-name}.
+	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
+
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
 	if err := r.Get(ctx, types.NamespacedName{
-		Namespace: ref.Namespace,
+		Namespace: hcpNamespace,
 		Name:      ref.HostedClusterName,
 	}, hcp); err != nil {
 		if client.IgnoreNotFound(err) != nil {
-			return nil, fmt.Errorf("get HostedControlPlane %s/%s: %w", ref.Namespace, ref.HostedClusterName, err)
+			return nil, fmt.Errorf("get HostedControlPlane %s/%s: %w", hcpNamespace, ref.HostedClusterName, err)
 		}
 		log.Info("HostedControlPlane not found", "clusterOrder", clusterOrder.Name,
-			"namespace", ref.Namespace, "hostedClusterName", ref.HostedClusterName)
+			"namespace", hcpNamespace, "hostedClusterName", ref.HostedClusterName)
 		return nil, nil
 	}
 
@@ -835,14 +838,14 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{
-		Namespace: ref.Namespace,
+		Namespace: hcpNamespace,
 		Name:      hcp.Status.KubeConfig.Name,
 	}, secret); err != nil {
 		if client.IgnoreNotFound(err) != nil {
-			return nil, fmt.Errorf("get kubeconfig Secret %s/%s: %w", ref.Namespace, hcp.Status.KubeConfig.Name, err)
+			return nil, fmt.Errorf("get kubeconfig Secret %s/%s: %w", hcpNamespace, hcp.Status.KubeConfig.Name, err)
 		}
 		log.Info("kubeconfig Secret not found", "clusterOrder", clusterOrder.Name,
-			"secret", hcp.Status.KubeConfig.Name, "namespace", ref.Namespace)
+			"secret", hcp.Status.KubeConfig.Name, "namespace", hcpNamespace)
 		return nil, nil
 	}
 
