@@ -210,8 +210,39 @@ var _ = Describe("Storage Controller", func() {
 			Expect(cond.Reason).To(Equal(v1alpha1.TenantReasonFound))
 		})
 
-		It("should set StorageBackendReady=False with NoProvider when no provider configured", func() {
+		It("should set StorageBackendReady=False with NoProvider and continue to Stage 2 when no provider configured", func() {
 			name := "storage-test-no-provider"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue))
+
+			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
+			Expect(tenant.Status.StorageClasses[0].Name).To(Equal("default-sc-" + name))
+		})
+
+		It("should set ClusterStorageReady=False when no provider and no labeled SCs", func() {
+			name := "storage-test-no-provider-no-sc"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 
 			r := NewStorageReconciler(
@@ -227,10 +258,16 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
+
+			Expect(tenant.Status.StorageClasses).To(BeNil())
 		})
 
 		It("should propagate trigger error without creating fake job", func() {
@@ -314,6 +351,65 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
 			Expect(tenant.Status.StorageClasses[0].Name).To(Equal(name + "-default-sc"))
 			Expect(tenant.Status.StorageClasses[0].Tier).To(Equal("default"))
+		})
+
+		It("should trigger cluster storage provisioning when only default SC exists and provider is configured", func() {
+			name := "storage-test-default-only-with-provider"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+			createLabeledStorageClass(ctx, "shared-default-sc-"+name, defaultStorageClassSentinel, "default")
+
+			clusterProvider := &mockProvisioningProvider{name: "cluster-storage-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(clusterCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+
+			Expect(tenant.Status.StorageClasses).To(BeNil())
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
+		})
+
+		It("should not trigger provisioning when tenant-specific SC exists and provider is configured", func() {
+			name := "storage-test-tenant-sc-with-provider"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+			createLabeledStorageClass(ctx, name+"-vast-sc", name, "default")
+
+			clusterProvider := &mockProvisioningProvider{name: "cluster-storage-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue))
+
+			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
+			Expect(tenant.Status.StorageClasses[0].Name).To(Equal(name + "-vast-sc"))
+
+			Expect(tenant.Status.ClusterStorageJobs).To(BeEmpty())
 		})
 	})
 

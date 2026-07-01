@@ -30,7 +30,7 @@ controllers:
   tenant: true
   networking: true
   bareMetalInstance: true
-  storageController: false
+  storage: true
 
 configSecret:
   name: "osac-config"
