@@ -12,6 +12,8 @@ filters:
     - danmanor
     - rgolangh
     - eliorerz
+    - rccrdpccl
+    - carbonin
     reviewers:
     - jhernand
     - adriengentil
@@ -24,3 +26,5 @@ filters:
     - danmanor
     - rgolangh
     - eliorerz
+    - rccrdpccl
+    - carbonin
