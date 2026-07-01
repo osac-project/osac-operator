@@ -86,11 +86,11 @@ var _ = Describe("migrateSubnetRefs", func() {
 			schema.GroupVersionKind{Group: "osac.openshift.io", Version: "v1alpha1", Kind: "ComputeInstanceList"},
 			&unstructured.UnstructuredList{},
 		)
-		os.Setenv(envComputeInstanceNamespace, "default")
+		os.Setenv(envComputeInstanceNamespace, "default") //nolint:errcheck
 	})
 
 	AfterEach(func() {
-		os.Unsetenv(envComputeInstanceNamespace)
+		os.Unsetenv(envComputeInstanceNamespace) //nolint:errcheck
 	})
 
 	It("should migrate a CR with subnetRef to networkAttachments", func() {
