@@ -221,19 +221,32 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		// (labeled tenant=Default) are not used as a substitute for
 		// AAP-provisioned storage. If no tenant-specific SC exists, trigger
 		// the AAP cluster storage job to create one.
-		result, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
+		result, duplicateMessages, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 
+		for _, msg := range duplicateMessages {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
+		}
+
 		if len(result) == 0 {
+			reason := v1alpha1.TenantReasonNotFound
+			condMsg := fmt.Sprintf("no tenant-specific StorageClass found for tenant %q", tenantName)
+			if len(duplicateMessages) > 0 {
+				reason = v1alpha1.TenantReasonMultipleFound
+				condMsg = strings.Join(duplicateMessages, "; ")
+			}
 			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 				metav1.ConditionFalse,
-				v1alpha1.TenantReasonNotFound,
-				fmt.Sprintf("no tenant-specific StorageClass found for tenant %q", tenantName))
+				reason,
+				condMsg)
 			instance.Status.StorageClasses = nil
 			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
+				{ClusterName: clusterName, Ready: false, Reason: reason},
+			}
+			if reason == v1alpha1.TenantReasonMultipleFound {
+				return ctrl.Result{}, nil
 			}
 			return r.handleClusterStorageProvisioning(ctx, instance)
 		}
@@ -833,24 +846,33 @@ func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []re
 // resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
 // given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
 // AAP is configured and the controller should not fall back to shared defaults.
+// Returns resolved classes and any duplicate messages for tiers with multiple SCs.
 func (r *StorageReconciler) resolveTenantSpecificStorageClasses(
 	ctx context.Context, targetClient client.Client, tenantName string,
-) ([]v1alpha1.ResolvedStorageClass, error) {
+) ([]v1alpha1.ResolvedStorageClass, []string, error) {
+	log := ctrllog.FromContext(ctx)
 	scList := &storagev1.StorageClassList{}
 	if err := targetClient.List(ctx, scList, client.MatchingLabels{osacTenantKey: tenantName}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byTier := groupByTier(scList.Items)
 	var resolved []v1alpha1.ResolvedStorageClass
+	var duplicateMessages []string
 	for tier, scs := range byTier {
-		if len(scs) == 1 {
+		switch len(scs) {
+		case 1:
 			resolved = append(resolved, v1alpha1.ResolvedStorageClass{
 				Name: scs[0].GetName(),
 				Tier: tier,
 			})
+		default:
+			joined, names := joinStorageClassNames(scs)
+			msg := fmt.Sprintf("tier %q: multiple tenant StorageClasses [%s]", tier, joined)
+			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
+			duplicateMessages = append(duplicateMessages, msg)
 		}
 	}
-	return resolved, nil
+	return resolved, duplicateMessages, nil
 }
 
 // formatResolvedStorageClasses builds a human-readable condition message
