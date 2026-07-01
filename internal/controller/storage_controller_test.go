@@ -751,12 +751,17 @@ var _ = Describe("Storage Controller", func() {
 	})
 
 	Context("CaaS: getClusterKubeconfig", func() {
-		const hcpNamespace = "clusters-caas-test"
+		// HyperShift convention: HCP namespace = {HC-namespace}-{HC-name}
+		const hcNamespace = "clusters-caas-test"
+		const hcName = "test-hcp"
+		const hcpNamespace = hcNamespace + "-" + hcName
 
 		BeforeEach(func() {
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: hcpNamespace}}
-			if err := k8sClient.Create(ctx, ns); err != nil {
-				Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+			for _, nsName := range []string{hcNamespace, hcpNamespace} {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+				if err := k8sClient.Create(ctx, ns); err != nil {
+					Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+				}
 			}
 		})
 
@@ -777,7 +782,7 @@ var _ = Describe("Storage Controller", func() {
 
 			hcp := &hypershiftv1beta1.HostedControlPlane{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-hcp",
+					Name:      hcName,
 					Namespace: hcpNamespace,
 				},
 			}
@@ -794,8 +799,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
-				Namespace:         hcpNamespace,
-				HostedClusterName: "test-hcp",
+				Namespace:         hcNamespace,
+				HostedClusterName: hcName,
 			}
 			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
 
@@ -829,7 +834,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
-				Namespace:         hcpNamespace,
+				Namespace:         hcNamespace,
 				HostedClusterName: "nonexistent-hcp",
 			}
 			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
@@ -845,10 +850,16 @@ var _ = Describe("Storage Controller", func() {
 		})
 
 		It("should return nil when kubeconfig Secret does not exist", func() {
+			hcpNsNoSecret := hcNamespace + "-test-hcp-no-secret"
+			nsNoSecret := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: hcpNsNoSecret}}
+			if err := k8sClient.Create(ctx, nsNoSecret); err != nil {
+				Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+			}
+
 			hcp := &hypershiftv1beta1.HostedControlPlane{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hcp-no-secret",
-					Namespace: hcpNamespace,
+					Namespace: hcpNsNoSecret,
 				},
 			}
 			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
@@ -864,7 +875,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Create(ctx, co)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
 			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
-				Namespace:         hcpNamespace,
+				Namespace:         hcNamespace,
 				HostedClusterName: "test-hcp-no-secret",
 			}
 			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
