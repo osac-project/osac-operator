@@ -79,3 +79,22 @@ jobs:
       run: |
         helm push osac-operator-${{ steps.version.outputs.version }}.tgz \
           oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish-operator-crds-chart, publish-operator-chart]
+    permissions:
+      contents: write
+    steps:
+    - name: Create GitHub Release
+      run: |
+        gh release create "${GITHUB_REF_NAME}" \
+          --repo "${{ github.repository }}" \
+          --title "osac-operator ${GITHUB_REF_NAME}" \
+          --generate-notes \
+        || gh release edit "${GITHUB_REF_NAME}" \
+          --repo "${{ github.repository }}" \
+          --title "osac-operator ${GITHUB_REF_NAME}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
