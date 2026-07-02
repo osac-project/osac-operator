@@ -342,7 +342,6 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 		if hostedClusterIsReady(hc) {
 			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
 			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-			instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
 		}
 	}
 
@@ -530,6 +529,13 @@ func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder)
 	}
 }
 
+func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.ClusterOrder) *provisioning.PollCallbacks {
+	return &provisioning.PollCallbacks{
+		OnFailed:  func(_ string) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed },
+		OnSuccess: func(_ provisioning.ProvisionStatus) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady },
+	}
+}
+
 func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -542,11 +548,7 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
 		r.provisionState(instance),
 		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(_ string) {
-				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
-			},
-		},
+		r.provisioningCallbacks(instance),
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus {
 				return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
