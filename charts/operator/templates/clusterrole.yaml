@@ -1,0 +1,125 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-manager
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
+  - hostedclusters
+  - nodepools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - k8s.ovn.org
+  resources:
+  - userdefinednetworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachines
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  - computeinstances
+  - publicippools
+  - publicips
+  - securitygroups
+  - subnets
+  - tenants
+  - virtualnetworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/finalizers
+  - computeinstances/finalizers
+  - publicippools/finalizers
+  - publicips/finalizers
+  - securitygroups/finalizers
+  - subnets/finalizers
+  - tenants/finalizers
+  - virtualnetworks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/status
+  - computeinstances/status
+  - publicippools/status
+  - publicips/status
+  - securitygroups/status
+  - subnets/status
+  - tenants/status
+  - virtualnetworks/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
