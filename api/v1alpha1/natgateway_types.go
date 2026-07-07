@@ -39,7 +39,6 @@ type NATGatewaySpec struct {
 }
 
 // NATGatewayPhaseType is a valid value for .status.phase
-// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
 type NATGatewayPhaseType string
 
 const (

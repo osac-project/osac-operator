@@ -139,19 +139,13 @@ spec:
                   spec changes and control retry behavior.
                 type: string
               phase:
-                allOf:
-                - enum:
-                  - Progressing
-                  - Ready
-                  - Failed
-                  - Deleting
-                - enum:
-                  - Progressing
-                  - Ready
-                  - Failed
-                  - Deleting
                 description: Phase provides a single-value overview of the state of
                   the NATGateway
+                enum:
+                - Progressing
+                - Ready
+                - Failed
+                - Deleting
                 type: string
               provisioningJobs:
                 description: ProvisioningJobs holds an array of JobStatus tracking
