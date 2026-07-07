@@ -397,10 +397,10 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Spec.NodeRequests = append(instance.Spec.NodeRequests, v1alpha1.NodeRequest{
+		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequest{
 			ResourceClass: resourceClass,
 		})
-		nodeRequestStatus = &instance.Spec.NodeRequests[len(instance.Spec.NodeRequests)-1]
+		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
 	// Update the selected `nodeRequests` item:
