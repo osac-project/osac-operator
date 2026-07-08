@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -138,7 +139,7 @@ func (r *PublicIPReconciler) Reconcile(ctx context.Context, req mcreconcile.Requ
 
 	if !equality.Semantic.DeepEqual(publicIP.Status, *oldstatus) {
 		log.Info("status requires update", "phase", publicIP.Status.Phase)
-		if updateErr := r.Status().Update(ctx, publicIP); updateErr != nil {
+		if updateErr := r.updateStatusWithRetry(ctx, req.NamespacedName, publicIP.Status); updateErr != nil {
 			log.Error(updateErr, "failed to update status")
 			return res, updateErr
 		}
@@ -146,6 +147,17 @@ func (r *PublicIPReconciler) Reconcile(ctx context.Context, req mcreconcile.Requ
 
 	log.Info("end reconcile", "phase", publicIP.Status.Phase)
 	return res, err
+}
+
+func (r *PublicIPReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.PublicIPStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.PublicIP{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // handleUpdate processes a non-deleted PublicIP: adds finalizer, resolves the parent
@@ -350,7 +362,7 @@ func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
 				ctx, r.APIReader, client.ObjectKeyFromObject(publicIP), &v1alpha1.PublicIP{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.PublicIP).Status.ProvisioningJobs })
 		},
-		func() error { return r.Status().Update(ctx, publicIP) },
+		func() error { return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(publicIP), publicIP.Status) },
 	)
 }
 
