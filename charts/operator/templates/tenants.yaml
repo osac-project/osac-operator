@@ -1,0 +1,11 @@
+{{- if .Values.tenants }}
+{{- range .Values.tenants }}
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: Tenant
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec: {}
+{{- end }}
+{{- end }}
