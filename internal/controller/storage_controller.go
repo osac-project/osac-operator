@@ -278,6 +278,10 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 				return ctrl.Result{}, err
 			}
 
+			for _, msg := range defaultFallback.duplicateMessages {
+				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
+			}
+
 			if len(defaultFallback.resolved) > 0 {
 				instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 					metav1.ConditionTrue,
