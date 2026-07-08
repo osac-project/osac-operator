@@ -566,7 +566,9 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 				return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
 			})
 		},
-		func() error { return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
 	)
 }
 

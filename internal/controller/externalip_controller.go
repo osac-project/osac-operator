@@ -364,7 +364,9 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, publicIP 
 					return obj.(*v1alpha1.ExternalIP).Status.ProvisioningJobs
 				})
 		},
-		func() error { return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(publicIP), publicIP.Status) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(publicIP), publicIP.Status)
+		},
 	)
 }
 

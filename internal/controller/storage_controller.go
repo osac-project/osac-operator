@@ -468,7 +468,9 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, instance *v1al
 						return obj.(*v1alpha1.ClusterOrder).Status.ClusterStorageJobs
 					})
 			},
-			func() error { return r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status) },
+			func() error {
+				return r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status)
+			},
 		)
 		if provErr != nil {
 			co.SetStatusCondition(
@@ -645,7 +647,9 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 					return obj.(*v1alpha1.Tenant).Status.StorageBackendJobs
 				})
 		},
-		func() error { return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status) },
+		func() error {
+			return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
 	)
 }
 
@@ -669,7 +673,9 @@ func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context
 					return obj.(*v1alpha1.Tenant).Status.ClusterStorageJobs
 				})
 		},
-		func() error { return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status) },
+		func() error {
+			return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
 	)
 }
 
