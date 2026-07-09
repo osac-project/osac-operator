@@ -150,7 +150,7 @@ func (r *StorageReconciler) Reconcile(ctx context.Context, req mcreconcile.Reque
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("storage status requires update")
-		if updateErr := r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status); updateErr != nil {
+		if updateErr := r.patchTenantStorageStatus(ctx, client.ObjectKeyFromObject(instance), instance.Status); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 	}
@@ -159,14 +159,21 @@ func (r *StorageReconciler) Reconcile(ctx context.Context, req mcreconcile.Reque
 	return res, err
 }
 
-func (r *StorageReconciler) updateTenantStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.TenantStatus) error {
+func (r *StorageReconciler) patchTenantStorageStatus(ctx context.Context, key client.ObjectKey, computed v1alpha1.TenantStatus) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.Tenant{}
 		if err := r.APIReader.Get(ctx, key, latest); err != nil {
 			return err
 		}
-		latest.Status = newStatus
-		return r.Status().Update(ctx, latest)
+		base := latest.DeepCopy()
+		latest.Status.StorageClasses = computed.StorageClasses
+		latest.Status.ClusterStorage = computed.ClusterStorage
+		latest.Status.StorageBackendJobs = computed.StorageBackendJobs
+		latest.Status.ClusterStorageJobs = computed.ClusterStorageJobs
+		for _, c := range computed.Conditions {
+			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
+		}
+		return r.Status().Patch(ctx, latest, client.MergeFrom(base))
 	})
 }
 
@@ -648,7 +655,7 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 				})
 		},
 		func() error {
-			return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+			return r.patchTenantStorageStatus(ctx, client.ObjectKeyFromObject(instance), instance.Status)
 		},
 	)
 }
@@ -674,7 +681,7 @@ func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context
 				})
 		},
 		func() error {
-			return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+			return r.patchTenantStorageStatus(ctx, client.ObjectKeyFromObject(instance), instance.Status)
 		},
 	)
 }
@@ -909,9 +916,6 @@ func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []re
 	return requests
 }
 
-// mapClusterOrderToTenant maps ClusterOrder events to the owning Tenant so the
-// storage controller can evaluate CaaS cluster storage provisioning/teardown.
-
 // resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
 // given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
 // AAP is configured and the controller should not fall back to shared defaults.
@@ -961,6 +965,8 @@ func formatResolvedStorageClasses(classes []v1alpha1.ResolvedStorageClass) strin
 	return strings.Join(parts, "; ")
 }
 
+// mapClusterOrderToTenant maps ClusterOrder events to the owning Tenant so the
+// storage controller can evaluate CaaS cluster storage provisioning/teardown.
 func (r *StorageReconciler) mapClusterOrderToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 

@@ -270,6 +270,31 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.StorageClasses).To(BeNil())
 		})
 
+		It("should preserve tenant controller fields when patching storage status", func() {
+			name := "storage-test-patch-preserves-phase"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
+			Expect(tenant.Status.Namespace).To(Equal(name))
+
+			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
+			Expect(tenant.Status.StorageClasses[0].Name).To(Equal("default-sc-" + name))
+		})
+
 		It("should propagate trigger error without creating fake job", func() {
 			name := "storage-test-prov-fail"
 			createReadyTenantForStorage(ctx, name, testNamespace)
