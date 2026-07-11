@@ -1,8 +1,10 @@
-name: integration
+name: Integration Tests
 
 on:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
