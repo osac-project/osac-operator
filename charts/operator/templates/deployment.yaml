@@ -45,7 +45,7 @@ spec:
               secretKeyRef:
                 name: {{ .Values.aap.tokenSecret.name }}
                 key: {{ .Values.aap.tokenSecret.key | default "token" }}
-                optional: false
+                optional: true
           {{- else if .Values.aap.token }}
           - name: OSAC_AAP_TOKEN
             value: {{ .Values.aap.token | quote }}
