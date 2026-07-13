@@ -1,13 +1,5 @@
-{{- if .Values.tenants }}
+{{- if and .Values.tenants .Values.controllers.storage }}
 {{- range .Values.tenants }}
----
-apiVersion: osac.openshift.io/v1alpha1
-kind: Tenant
-metadata:
-  name: {{ .name }}
-  namespace: {{ $.Release.Namespace }}
-spec: {}
-{{- if $.Values.controllers.storage }}
 ---
 apiVersion: v1
 kind: Secret
@@ -18,6 +10,5 @@ metadata:
     osac.openshift.io/tenant: {{ .name | quote }}
 type: Opaque
 data: {}
-{{- end }}
 {{- end }}
 {{- end }}
