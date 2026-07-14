@@ -26,7 +26,9 @@ import (
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +38,32 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 )
+
+// mockStorageBackendsClient is a test double for StorageBackendsClient.
+// By default List returns an empty response (total=0, no backends registered).
+// Set listFunc to override the response for specific test scenarios.
+type mockStorageBackendsClient struct {
+	listFunc func(ctx context.Context, in *privatev1.StorageBackendsListRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error)
+}
+
+func (m *mockStorageBackendsClient) List(ctx context.Context, in *privatev1.StorageBackendsListRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+	if m.listFunc != nil {
+		return m.listFunc(ctx, in, opts...)
+	}
+	return &privatev1.StorageBackendsListResponse{}, nil
+}
+
+// registeredBackendsClient returns a mockStorageBackendsClient whose List response
+// reports the given total number of registered backends.
+func registeredBackendsClient(total int32) *mockStorageBackendsClient {
+	return &mockStorageBackendsClient{
+		listFunc: func(_ context.Context, _ *privatev1.StorageBackendsListRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+			resp := &privatev1.StorageBackendsListResponse{}
+			resp.SetTotal(total)
+			return resp, nil
+		},
+	}
+}
 
 func storageReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
 	return mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}}
@@ -169,6 +197,7 @@ var _ = Describe("Storage Controller", func() {
 				provider, nil, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
+			r.BackendsClient = registeredBackendsClient(1)
 
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
 			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
@@ -309,6 +338,7 @@ var _ = Describe("Storage Controller", func() {
 				provider, nil, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
+			r.BackendsClient = registeredBackendsClient(1)
 
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
@@ -695,6 +725,7 @@ var _ = Describe("Storage Controller", func() {
 				provider, nil, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
+			r.BackendsClient = registeredBackendsClient(1)
 
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
@@ -967,6 +998,175 @@ var _ = Describe("Storage Controller", func() {
 
 			requests := r.mapClusterOrderToTenant(ctx, co)
 			Expect(requests).To(BeNil())
+		})
+	})
+
+	Context("Backend API routing (OSAC-1957)", func() {
+		It("should fall through to SC resolution when BackendsClient is nil", func() {
+			name := "storage-test-nil-client"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
+
+			// BackendProvider set but BackendsClient nil: should behave as no backend registered
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				&mockProvisioningProvider{}, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+			// Falls through to Stage 2: default SC resolved, no AAP job triggered
+			Expect(tenant.Status.StorageClasses).NotTo(BeEmpty())
+			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
+		})
+
+		It("should fall through to SC resolution when BackendsClient reports no backends (total=0)", func() {
+			name := "storage-test-zero-backends"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				&mockProvisioningProvider{}, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.BackendsClient = &mockStorageBackendsClient{} // default: total=0
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+			Expect(tenant.Status.StorageClasses).NotTo(BeEmpty())
+			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
+		})
+
+		It("should set BackendConfiguredNoProvider when backend is registered but no AAP configured", func() {
+			name := "storage-test-backend-no-aap"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.BackendsClient = registeredBackendsClient(1)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(v1alpha1.TenantReasonBackendConfiguredNoProvider))
+			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
+		})
+
+		It("should requeue with StatusPollInterval when cluster storage job failed and hub Secret exists", func() {
+			name := "storage-test-cs-retry"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			// Mock returns an immediately-failed job so the second reconcile hits the retry path.
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					return &provisioning.ProvisionResult{
+						JobID:        "cs-job-retry",
+						InitialState: v1alpha1.JobStateFailed,
+						Message:      "cluster storage provisioning failed",
+					}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			// First reconcile: triggers provisioning; mock returns immediately-failed job.
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: failed job found, hub Secret exists → requeue with backoff.
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+		})
+
+		It("should propagate error when BackendsClient.List returns a gRPC error", func() {
+			name := "storage-test-backends-err"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				&mockProvisioningProvider{}, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: func(_ context.Context, _ *privatev1.StorageBackendsListRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return nil, fmt.Errorf("connection refused")
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("connection refused"))
+		})
+
+		It("should not requeue when cluster storage job failed and no hub Secret exists", func() {
+			name := "storage-test-cs-no-retry"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			// No hub secret: hubSecretReady=false → wait for external trigger on failure.
+
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					return &provisioning.ProvisionResult{
+						JobID:        "cs-job-no-retry",
+						InitialState: v1alpha1.JobStateFailed,
+						Message:      "cluster storage provisioning failed",
+					}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			// First reconcile: triggers provisioning; mock returns immediately-failed job.
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: failed job found, no hub Secret → no requeue (wait for external trigger).
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 		})
 	})
 
