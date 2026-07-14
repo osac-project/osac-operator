@@ -169,6 +169,16 @@ type ClusterOrderStatus struct {
 	// that require re-provisioning.
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+
+	// ApiEndpoint is the internal API server VIP allocated by MetalLB.
+	// Written by the CaaS template after VIP discovery.
+	// +kubebuilder:validation:Optional
+	ApiEndpoint string `json:"apiEndpoint,omitempty"`
+
+	// IngressEndpoint is the internal ingress VIP allocated by MetalLB.
+	// Written by the CaaS template after VIP discovery.
+	// +kubebuilder:validation:Optional
+	IngressEndpoint string `json:"ingressEndpoint,omitempty"`
 }
 
 // +kubebuilder:object:root=true
