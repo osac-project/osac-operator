@@ -7,11 +7,6 @@ permissions:
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'OWNERS'
-      - 'LICENSE'
-      - '*.md'
-      - 'docs/**'
   schedule:
     - cron: "0 */12 * * *"
   workflow_dispatch:
@@ -34,7 +29,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!OWNERS'
+              - '!LICENSE'
+              - '!*.md'
+              - '!docs/**'
+              - '!.github/workflows/**'
+
   e2e-vmaas-full-install:
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
@@ -50,3 +68,13 @@ jobs:
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+
+  e2e:
+    if: always()
+    needs: [changes, e2e-vmaas-full-install]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [[ "${{ needs.e2e-vmaas-full-install.result }}" == "failure" ]]; then
+            exit 1
+          fi
