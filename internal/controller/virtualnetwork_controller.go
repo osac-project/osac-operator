@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -35,7 +35,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -101,6 +101,12 @@ func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req mcreconcil
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	val, exists := vnet.Annotations[osacManagementStateAnnotation]
+	if vnet.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
+		log.Info("ignoring VirtualNetwork due to management-state annotation", "management-state", val)
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("start reconcile")
 
 	oldstatus := vnet.Status.DeepCopy()
@@ -115,7 +121,7 @@ func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req mcreconcil
 
 	if !equality.Semantic.DeepEqual(vnet.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, vnet); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status); err != nil {
 			return res, err
 		}
 	}
@@ -173,7 +179,7 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 	// Set phase to Progressing only on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if vnet.Status.Phase == "" || (vnet.Status.Phase == v1alpha1.VirtualNetworkPhaseReady &&
-		!provisioning.IsConfigApplied(&vnet.Status.Jobs, vnet.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&vnet.Status.ProvisioningJobs, vnet.Status.DesiredConfigVersion)) {
 		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
 	}
 
@@ -190,16 +196,20 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&provisioning.State{Jobs: &vnet.Status.Jobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed },
 			OnSuccess: func(_ provisioning.ProvisionStatus) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady },
 		},
 		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{})
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.VirtualNetwork).Status.ProvisioningJobs
+			})
 		},
-		func() error { return r.Status().Update(ctx, vnet) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status)
+		},
 	)
 }
 
@@ -239,91 +249,28 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 // handleDeprovisioning manages the deprovisioning job lifecycle for a VirtualNetwork.
 // It triggers deprovisioning if needed and polls job status until completion.
 func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Check if we already have a deprovision job
-	latestDeprovisionJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	// Trigger deprovisioning - provider decides internally if ready
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
-		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-
-		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, vnet)
-		if err != nil {
-			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-
-		// Handle provider action
-		switch result.Action {
-		case provisioning.DeprovisionWaiting:
-			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-		case provisioning.DeprovisionSkipped:
-			log.Info("provider skipped deprovisioning")
-			return ctrl.Result{}, nil
-
-		case provisioning.DeprovisionTriggered:
-			newJob := v1alpha1.JobStatus{
-				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.NewTime(time.Now().UTC()),
-				State:                  v1alpha1.JobStatePending,
-				Message:                "Deprovisioning job triggered",
-				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
-			}
-			vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, r.MaxJobHistory)
-			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-	}
-
-	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, vnet, latestDeprovisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
-		updatedJob := *latestDeprovisionJob
-		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update job status
-	updatedJob := *latestDeprovisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(vnet.Status.Jobs, updatedJob)
-
-	// If job is still running, requeue
-	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Job reached terminal state (Succeeded, Failed, or Canceled)
-	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-
-	// Job failed or was canceled
-	// Check policy stored in job status
-	if latestDeprovisionJob.BlockDeletionOnFailure {
-		// Block deletion to prevent orphaned resources
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	} else {
-		// Allow process to continue
-		log.Info("deprovision job did not succeed, allowing process to continue",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{}, nil
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
+		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
 	}
+	return ctrl.Result{}, nil
+}
+
+// updateStatusWithRetry updates the virtual network status with retry on conflict.
+func (r *VirtualNetworkReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.VirtualNetworkStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.VirtualNetwork{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // NetworkingNamespacePredicate filters events by namespace for networking resources.

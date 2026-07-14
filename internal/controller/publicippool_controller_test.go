@@ -32,7 +32,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 // Tests for the PublicIPPool provisioning controller.
@@ -140,6 +140,41 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPoolPhaseProgressing))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			// Set mock before any reconcile because PublicIPPool triggers
+			// provisioning in the same pass as adding the finalizer.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.PublicIPPool{}
+				Expect(fakeClient.Get(ctx, key, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/publicippool-feedback")
+				Expect(fakeClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Reconcile adds finalizer and triggers provisioning in one pass.
+			// The concurrent modification must not prevent the job from
+			// being recorded in status.
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted
+			updated := &osacv1alpha1.PublicIPPool{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updated.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should set ConfigurationApplied condition to True", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
@@ -242,7 +277,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 
 			deprovisionCalled := false
 			mockProvider.triggerDeprovisionFunc = func(
-				ctx context.Context, resource client.Object,
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
 			) (*provisioning.DeprovisionResult, error) {
 				deprovisionCalled = true
 				return &provisioning.DeprovisionResult{
@@ -267,7 +302,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 
 			Expect(deprovisionCalled).To(BeTrue())
 
-			latestJob := provisioning.FindLatestJobByType(toDelete.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(toDelete.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
 		})
@@ -276,7 +311,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
 			mockProvider.triggerDeprovisionFunc = func(
-				ctx context.Context, resource client.Object,
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
 			) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
 					Action:                 provisioning.DeprovisionTriggered,
@@ -343,7 +378,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 
 			deprovisionCalled := false
 			mockProvider.triggerDeprovisionFunc = func(
-				ctx context.Context, resource client.Object,
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
 			) (*provisioning.DeprovisionResult, error) {
 				deprovisionCalled = true
 				return &provisioning.DeprovisionResult{
@@ -417,7 +452,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			pool.Status.DesiredConfigVersion = testConfigVersion
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -445,7 +480,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			pool.Status.DesiredConfigVersion = testConfigVersionUpdated
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -460,7 +495,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(pool.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(pool.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("retry-job"))
 		})

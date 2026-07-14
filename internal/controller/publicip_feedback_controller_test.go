@@ -100,55 +100,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 	})
 
 	Context("when reconciling a PublicIP CR", func() {
-		It("should sync Phase=Ready to database state=ALLOCATED", func() {
-			publicIP := &privatev1.PublicIP{
-				Id: publicIPID,
-				Metadata: &privatev1.Metadata{
-					Name: publicIPName,
-				},
-				Spec: &privatev1.PublicIPSpec{
-					Pool: testPool,
-				},
-				Status: &privatev1.PublicIPStatus{
-					State: privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING,
-				},
-			}
-			mockServer.addPublicIP(publicIP)
-
-			cr := &v1alpha1.PublicIP{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      publicIPName,
-					Namespace: publicIPNamespace,
-					Labels: map[string]string{
-						osacPublicIPIDLabel: publicIPID,
-					},
-				},
-				Spec: v1alpha1.PublicIPSpec{
-					Pool: testPool,
-				},
-				Status: v1alpha1.PublicIPStatus{
-					Phase: v1alpha1.PublicIPPhaseReady,
-				},
-			}
-			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
-
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      publicIPName,
-					Namespace: publicIPNamespace,
-				},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED))
-
-			updated := &v1alpha1.PublicIP{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
-		})
-
-		It("should sync Phase=Progressing to database state=PENDING", func() {
+		It("should sync State=Pending to database state=PENDING", func() {
 			publicIP := &privatev1.PublicIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -176,6 +128,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 				},
 				Status: v1alpha1.PublicIPStatus{
 					Phase: v1alpha1.PublicIPPhaseProgressing,
+					State: v1alpha1.PublicIPStatePending,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -190,9 +143,111 @@ var _ = Describe("PublicIPFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING))
+
+			updated := &v1alpha1.PublicIP{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
 		})
 
-		It("should sync Phase=Failed to database state=FAILED", func() {
+		It("should sync State=Allocated to database state=ALLOCATED", func() {
+			publicIP := &privatev1.PublicIP{
+				Id: publicIPID,
+				Metadata: &privatev1.Metadata{
+					Name: publicIPName,
+				},
+				Spec: &privatev1.PublicIPSpec{
+					Pool: testPool,
+				},
+				Status: &privatev1.PublicIPStatus{
+					State: privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING,
+				},
+			}
+			mockServer.addPublicIP(publicIP)
+
+			cr := &v1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+					Labels: map[string]string{
+						osacPublicIPIDLabel: publicIPID,
+					},
+				},
+				Spec: v1alpha1.PublicIPSpec{
+					Pool: testPool,
+				},
+				Status: v1alpha1.PublicIPStatus{
+					Phase: v1alpha1.PublicIPPhaseReady,
+					State: v1alpha1.PublicIPStateAllocated,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED))
+
+			updated := &v1alpha1.PublicIP{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should sync State=Failed to database state=FAILED from Allocated", func() {
+			publicIP := &privatev1.PublicIP{
+				Id: publicIPID,
+				Metadata: &privatev1.Metadata{
+					Name: publicIPName,
+				},
+				Spec: &privatev1.PublicIPSpec{
+					Pool: testPool,
+				},
+				Status: &privatev1.PublicIPStatus{
+					State: privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED,
+				},
+			}
+			mockServer.addPublicIP(publicIP)
+
+			cr := &v1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+					Labels: map[string]string{
+						osacPublicIPIDLabel: publicIPID,
+					},
+				},
+				Spec: v1alpha1.PublicIPSpec{
+					Pool: testPool,
+				},
+				Status: v1alpha1.PublicIPStatus{
+					Phase: v1alpha1.PublicIPPhaseFailed,
+					State: v1alpha1.PublicIPStateFailed,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED))
+
+			updated := &v1alpha1.PublicIP{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should sync State=Failed to database state=FAILED from Pending", func() {
 			publicIP := &privatev1.PublicIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -220,6 +275,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 				},
 				Status: v1alpha1.PublicIPStatus{
 					Phase: v1alpha1.PublicIPPhaseFailed,
+					State: v1alpha1.PublicIPStateFailed,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -234,6 +290,10 @@ var _ = Describe("PublicIPFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED))
+
+			updated := &v1alpha1.PublicIP{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should sync address to database address field", func() {
@@ -308,7 +368,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 
-		It("should sync Phase=Deleting to database state=RELEASING during deletion", func() {
+		It("should sync State=Allocated during deletion to database state=RELEASING", func() {
 			publicIP := &privatev1.PublicIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -337,6 +397,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 				},
 				Status: v1alpha1.PublicIPStatus{
 					Phase: v1alpha1.PublicIPPhaseDeleting,
+					State: v1alpha1.PublicIPStateAllocated,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -352,14 +413,14 @@ var _ = Describe("PublicIPFeedbackController", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING))
 
 			updated := &v1alpha1.PublicIP{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
 			Expect(controllerutil.ContainsFinalizer(updated, osacPublicIPFeedbackFinalizer)).To(BeTrue())
 		})
 
-		It("should sync Phase=Failed during deletion to database state=FAILED", func() {
+		It("should sync State=Failed during deletion to database state=FAILED", func() {
 			publicIP := &privatev1.PublicIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -388,6 +449,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 				},
 				Status: v1alpha1.PublicIPStatus{
 					Phase: v1alpha1.PublicIPPhaseFailed,
+					State: v1alpha1.PublicIPStateFailed,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -450,7 +512,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING))
 
 			Expect(mockServer.signals).To(HaveLen(1))
 			Expect(mockServer.signals[0]).To(Equal(publicIPID))

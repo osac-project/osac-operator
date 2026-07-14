@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
@@ -37,11 +36,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/webhook"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -100,6 +101,12 @@ var _ = BeforeSuite(func() {
 	err = kubevirtv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = bmfov1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = hypershiftv1beta1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
@@ -128,13 +135,30 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 })
 
-// noopWebhookClientForTest is a no-op webhook client for tests that need a provider
+// noopProvisioningProvider is a no-op provisioning provider for tests that need a provider
 // but don't test provisioning behavior.
-type noopWebhookClientForTest struct{}
+type noopProvisioningProvider struct{}
 
-func (c *noopWebhookClientForTest) TriggerWebhook(_ context.Context, _ string, _ webhook.Resource) (time.Duration, error) {
-	return 0, nil
+func (noopProvisioningProvider) TriggerProvision(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+	return &provisioning.ProvisionResult{
+		JobID:        "noop-job",
+		InitialState: osacv1alpha1.JobStatePending,
+	}, nil
 }
+
+func (noopProvisioningProvider) GetProvisionStatus(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+	return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateUnknown}, nil
+}
+
+func (noopProvisioningProvider) TriggerDeprovision(_ context.Context, _ client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+	return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionSkipped}, nil
+}
+
+func (noopProvisioningProvider) GetDeprovisionStatus(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+	return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateUnknown}, nil
+}
+
+func (noopProvisioningProvider) Name() string { return "noop" }
 
 // newTestComputeInstanceSpec creates a valid ComputeInstanceSpec for testing
 func newTestComputeInstanceSpec(templateID string) osacv1alpha1.ComputeInstanceSpec {

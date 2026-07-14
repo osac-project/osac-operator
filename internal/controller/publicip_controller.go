@@ -21,9 +21,13 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -34,7 +38,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -46,13 +50,16 @@ const (
 // Each PublicIP belongs to a parent PublicIPPool (referenced by UUID in spec.pool).
 // The controller adds a finalizer, inherits the implementation strategy from the
 // parent pool, then delegates to the shared provisioning lifecycle to trigger AAP
-// jobs for provisioning and deprovisioning.
+// jobs for allocation and deallocation.
+//
+// Attach/detach is handled by the PublicIPAttachment controller.
 //
 // Phase transitions: "" -> Progressing -> Ready/Failed; on delete: Deleting.
 type PublicIPReconciler struct {
 	client.Client
 	APIReader            client.Reader
 	Scheme               *runtime.Scheme
+	Recorder             events.EventRecorder
 	mgr                  mcmanager.Manager
 	NetworkingNamespace  string
 	ProvisioningProvider provisioning.ProvisioningProvider
@@ -83,6 +90,7 @@ func NewPublicIPReconciler(
 		Client:               mgr.GetLocalManager().GetClient(),
 		APIReader:            mgr.GetLocalManager().GetAPIReader(),
 		Scheme:               mgr.GetLocalManager().GetScheme(),
+		Recorder:             mgr.GetLocalManager().GetEventRecorder(publicipControllerName),
 		mgr:                  mgr,
 		NetworkingNamespace:  networkingNamespace,
 		ProvisioningProvider: provisioningProvider,
@@ -96,6 +104,8 @@ func NewPublicIPReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get
 
 // Reconcile handles create/update/delete for a PublicIP CR.
 // On create/update it ensures a finalizer, resolves the parent pool, and runs provisioning.
@@ -129,7 +139,7 @@ func (r *PublicIPReconciler) Reconcile(ctx context.Context, req mcreconcile.Requ
 
 	if !equality.Semantic.DeepEqual(publicIP.Status, *oldstatus) {
 		log.Info("status requires update", "phase", publicIP.Status.Phase)
-		if updateErr := r.Status().Update(ctx, publicIP); updateErr != nil {
+		if updateErr := r.updateStatusWithRetry(ctx, req.NamespacedName, publicIP.Status); updateErr != nil {
 			log.Error(updateErr, "failed to update status")
 			return res, updateErr
 		}
@@ -137,6 +147,17 @@ func (r *PublicIPReconciler) Reconcile(ctx context.Context, req mcreconcile.Requ
 
 	log.Info("end reconcile", "phase", publicIP.Status.Phase)
 	return res, err
+}
+
+func (r *PublicIPReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.PublicIPStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.PublicIP{}
+		if err := r.APIReader.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // handleUpdate processes a non-deleted PublicIP: adds finalizer, resolves the parent
@@ -158,6 +179,7 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 
 	if publicIP.Status.Phase == "" {
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		publicIP.Status.State = v1alpha1.PublicIPStatePending
 	}
 
 	// Resolve the parent PublicIPPool by the fulfillment-service UUID stored in spec.pool.
@@ -185,11 +207,12 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		implementationStrategy = defaultPublicIPPoolImplementationStrategy
 	}
 
-	// Annotate the CR so AAP playbooks can select the appropriate role without
-	// having to look up the parent pool themselves.
 	if publicIP.Annotations == nil {
 		publicIP.Annotations = make(map[string]string)
 	}
+
+	// Annotate the CR so AAP playbooks can select the appropriate role without
+	// having to look up the parent pool themselves.
 	needsUpdate := false
 	if publicIP.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		publicIP.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
@@ -205,10 +228,7 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		if err := r.Update(ctx, publicIP); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Re-fetch to get the latest resourceVersion after the metadata update
-		if err := r.Get(ctx, client.ObjectKeyFromObject(publicIP), publicIP); err != nil {
-			return ctrl.Result{}, err
-		}
+		return ctrl.Result{}, nil
 	}
 
 	// Compute desired config version from spec and inherited implementation strategy.
@@ -225,19 +245,58 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 	v1alpha1.SetPublicIPStatusCondition(publicIP, metav1.Condition{
 		Type:               string(v1alpha1.PublicIPConditionConfigurationApplied),
 		Status:             metav1.ConditionTrue,
-		Reason:             "ConfigurationApplied",
-		Message:            "Controller has processed the current spec",
+		Reason:             conditionReasonConfigurationApplied,
+		Message:            conditionMessageConfigurationApplied,
 		LastTransitionTime: metav1.Now(),
 	})
 
 	// Transition to Progressing on first provision or when spec changed after a previous
 	// success. Don't override Failed during backoff (the provisioning lifecycle handles retry).
 	if publicIP.Status.Phase == "" || (publicIP.Status.Phase == v1alpha1.PublicIPPhaseReady &&
-		!provisioning.IsConfigApplied(&publicIP.Status.Jobs, publicIP.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&publicIP.Status.ProvisioningJobs, publicIP.Status.DesiredConfigVersion)) {
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		if publicIP.Status.State == "" {
+			publicIP.Status.State = v1alpha1.PublicIPStatePending
+		}
 	}
 
-	return r.handleProvisioning(ctx, publicIP)
+	r.maybePopulateAddress(ctx, publicIP)
+
+	result, err := r.handleProvisioning(ctx, publicIP)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
+	if publicIP.Status.State == v1alpha1.PublicIPStateAllocated && publicIP.Status.Address == "" {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	return result, nil
+}
+
+// maybePopulateAddress sets status.address from the MetalLB LoadBalancer Service
+// after initial provisioning succeeds, and transitions to Ready once the address
+// is known.
+//
+// State == Allocated is set exclusively by OnSuccess after the AAP provisioning
+// job reports success, so this guard ensures address population happens strictly
+// after provisioning completes.
+func (r *PublicIPReconciler) maybePopulateAddress(ctx context.Context, publicIP *v1alpha1.PublicIP) {
+	if publicIP.Status.State != v1alpha1.PublicIPStateAllocated || publicIP.Status.Address != "" {
+		return
+	}
+	log := ctrllog.FromContext(ctx)
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		log.Error(err, "failed to get target cluster client for address lookup")
+		return
+	}
+	ipAddress := r.getPublicIPAddress(ctx, targetClient, publicIP.Name)
+	if ipAddress != "" {
+		publicIP.Status.Address = ipAddress
+		publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady
+		log.Info("populated PublicIP address from LoadBalancer Service", "address", ipAddress)
+	}
 }
 
 // handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
@@ -270,23 +329,42 @@ func (r *PublicIPReconciler) handleDelete(ctx context.Context, publicIP *v1alpha
 // handleProvisioning delegates to the shared provisioning lifecycle, which triggers
 // an AAP job (e.g., osac-create-public-ip) and polls its status until completion.
 func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v1alpha1.PublicIP) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
 	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
+		log.Info("no provisioning provider configured, skipping provisioning")
 		return ctrl.Result{}, nil
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, publicIP,
-		&provisioning.State{Jobs: &publicIP.Status.Jobs, DesiredConfigVersion: publicIP.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &publicIP.Status.ProvisioningJobs, DesiredConfigVersion: publicIP.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { publicIP.Status.Phase = v1alpha1.PublicIPPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady },
+			OnFailed: func(_ string) {
+				publicIP.Status.Phase = v1alpha1.PublicIPPhaseFailed
+				publicIP.Status.State = v1alpha1.PublicIPStateFailed
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				publicIP.Status.State = v1alpha1.PublicIPStateAllocated
+				if publicIP.Status.Address == "" {
+					if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err != nil {
+						log.Error(err, "failed to get target cluster client for address lookup on allocation")
+					} else if ip := r.getPublicIPAddress(ctx, targetClient, publicIP.Name); ip != "" {
+						publicIP.Status.Address = ip
+					}
+				}
+				if publicIP.Status.Address != "" {
+					publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady
+				}
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.APIReader, client.ObjectKeyFromObject(publicIP), &v1alpha1.PublicIP{})
+				ctx, r.APIReader, client.ObjectKeyFromObject(publicIP), &v1alpha1.PublicIP{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.PublicIP).Status.ProvisioningJobs })
 		},
-		func() error { return r.Status().Update(ctx, publicIP) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(publicIP), publicIP.Status)
+		},
 	)
 }
 
@@ -294,87 +372,43 @@ func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v
 // and polls its status. On failure, it either blocks deletion (to prevent orphaned
 // resources) or allows the process to continue, depending on provider policy.
 func (r *PublicIPReconciler) handleDeprovisioning(ctx context.Context, publicIP *v1alpha1.PublicIP) (ctrl.Result, error) {
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, publicIP,
+		&publicIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// getPublicIPAddress fetches the LoadBalancer Service created by the AAP create_public_ip
+// playbook and returns the assigned IP from status.loadBalancer.ingress[0].ip.
+// Returns "" on any error or if no IP is assigned yet (best-effort).
+func (r *PublicIPReconciler) getPublicIPAddress(ctx context.Context, targetClient client.Client, publicIPName string) string {
 	log := ctrllog.FromContext(ctx)
 
-	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping deprovisioning")
-		return ctrl.Result{}, nil
+	svc := &corev1.Service{}
+	serviceName := publicIPServiceNamePrefix + publicIPName
+	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: defaultMetalLBNamespace, Name: serviceName}, svc); err != nil {
+		log.Error(err, "failed to get LoadBalancer Service", "namespace", defaultMetalLBNamespace, "name", serviceName)
+		return ""
 	}
 
-	latestDeprovisionJob := provisioning.FindLatestJobByType(publicIP.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	// Trigger a new deprovisioning job if none exists yet
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
-		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-
-		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, publicIP)
-		if err != nil {
-			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-
-		switch result.Action {
-		case provisioning.DeprovisionWaiting:
-			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-		case provisioning.DeprovisionSkipped:
-			log.Info("provider skipped deprovisioning")
-			return ctrl.Result{}, nil
-
-		case provisioning.DeprovisionTriggered:
-			newJob := v1alpha1.JobStatus{
-				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.NewTime(time.Now().UTC()),
-				State:                  v1alpha1.JobStatePending,
-				Message:                "Deprovisioning job triggered",
-				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
-			}
-			publicIP.Status.Jobs = provisioning.AppendJob(publicIP.Status.Jobs, newJob, r.MaxJobHistory)
-			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
+		log.Info("LoadBalancer Service has no ingress IP yet", "name", serviceName)
+		return ""
 	}
 
-	// Poll the existing deprovisioning job
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, publicIP, latestDeprovisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
-		updatedJob := *latestDeprovisionJob
-		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(publicIP.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	ip := svc.Status.LoadBalancer.Ingress[0].IP
+	if ip == "" {
+		log.Info("LoadBalancer Service ingress IP is empty", "name", serviceName)
+		return ""
 	}
 
-	updatedJob := *latestDeprovisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(publicIP.Status.Jobs, updatedJob)
-
-	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
-		return ctrl.Result{}, nil
-	}
-
-	if latestDeprovisionJob.BlockDeletionOnFailure {
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	log.Info("deprovision job did not succeed, allowing process to continue",
-		"jobID", latestDeprovisionJob.JobID,
-		"state", status.State,
-		"message", updatedJob.Message)
-	return ctrl.Result{}, nil
+	return ip
 }
 
 // SetupWithManager registers this controller with the multicluster manager.

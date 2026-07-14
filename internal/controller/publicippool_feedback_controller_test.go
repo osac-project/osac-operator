@@ -98,7 +98,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 	})
 
 	Context("when reconciling a PublicIPPool CR", func() {
-		It("should sync Phase=Ready to database state=READY with capacity fields", func() {
+		It("should sync Phase=Ready to database state=READY", func() {
 			pool := &privatev1.PublicIPPool{
 				Id: poolID,
 				Metadata: &privatev1.Metadata{
@@ -124,10 +124,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 					IPFamily: "IPv4",
 				},
 				Status: v1alpha1.PublicIPPoolStatus{
-					Phase:     v1alpha1.PublicIPPoolPhaseReady,
-					Total:     254,
-					Allocated: 10,
-					Available: 244,
+					Phase: v1alpha1.PublicIPPoolPhaseReady,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -140,18 +137,65 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert gRPC Update called with state=READY and capacity fields
+			// Assert gRPC Update called with state=READY
+			Expect(mockServer.updates).To(HaveLen(1))
+			updated := mockServer.updates[0]
+			Expect(updated.GetStatus().GetState()).To(Equal(privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY))
+
+			// Assert finalizer was added
+			fetched := &v1alpha1.PublicIPPool{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: poolName, Namespace: poolNamespace}, fetched)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(fetched, osacPublicIPPoolFeedbackFinalizer)).To(BeTrue())
+		})
+
+		It("should preserve existing capacity when syncing phase", func() {
+			pool := &privatev1.PublicIPPool{
+				Id: poolID,
+				Metadata: &privatev1.Metadata{
+					Name: poolName,
+				},
+				Spec: &privatev1.PublicIPPoolSpec{},
+				Status: &privatev1.PublicIPPoolStatus{
+					State:     privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_PENDING,
+					Total:     254,
+					Allocated: 10,
+					Available: 244,
+				},
+			}
+			mockServer.addPublicIPPool(pool)
+
+			cr := &v1alpha1.PublicIPPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      poolName,
+					Namespace: poolNamespace,
+					Labels: map[string]string{
+						osacPublicIPPoolIDLabel: poolID,
+					},
+				},
+				Spec: v1alpha1.PublicIPPoolSpec{
+					CIDRs:    []string{"10.0.0.0/24"},
+					IPFamily: "IPv4",
+				},
+				Status: v1alpha1.PublicIPPoolStatus{
+					Phase: v1alpha1.PublicIPPoolPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      poolName,
+					Namespace: poolNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
 			Expect(mockServer.updates).To(HaveLen(1))
 			updated := mockServer.updates[0]
 			Expect(updated.GetStatus().GetState()).To(Equal(privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_READY))
 			Expect(updated.GetStatus().GetTotal()).To(Equal(int64(254)))
 			Expect(updated.GetStatus().GetAllocated()).To(Equal(int64(10)))
 			Expect(updated.GetStatus().GetAvailable()).To(Equal(int64(244)))
-
-			// Assert finalizer was added
-			fetched := &v1alpha1.PublicIPPool{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: poolName, Namespace: poolNamespace}, fetched)).To(Succeed())
-			Expect(controllerutil.ContainsFinalizer(fetched, osacPublicIPPoolFeedbackFinalizer)).To(BeTrue())
 		})
 
 		It("should sync Phase=Progressing to database state=PENDING", func() {
@@ -532,10 +576,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 					IPFamily: "IPv4",
 				},
 				Status: v1alpha1.PublicIPPoolStatus{
-					Phase:     v1alpha1.PublicIPPoolPhaseReady,
-					Total:     254,
-					Allocated: 10,
-					Available: 244,
+					Phase: v1alpha1.PublicIPPoolPhaseReady,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -548,7 +589,7 @@ var _ = Describe("PublicIPPoolFeedbackController", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Assert no Update RPC was called (state already READY with matching capacity, finalizer pre-seeded)
+			// Assert no Update RPC was called (state already READY, finalizer pre-seeded)
 			Expect(mockServer.updates).To(BeEmpty())
 		})
 	})

@@ -149,7 +149,7 @@ func (x SubnetState) Number() protoreflect.EnumNumber {
 // - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
 // - Dual-stack: Set both ipv4_cidr and ipv6_cidr
 //
-// The parent VirtualNetwork relationship should be specified via metadata.annotations using the 'osac.io/owner-reference'
+// The parent VirtualNetwork relationship should be specified via metadata.annotations using the 'osac.openshift.io/owner-reference'
 // key with the VirtualNetwork ID as the value. This establishes resource hierarchy for garbage collection, ensuring
 // that Subnets are automatically cleaned up when their parent VirtualNetwork is deleted.
 //
@@ -272,10 +272,10 @@ type Subnet_builder struct {
 
 	// Unique identifier of the subnet.
 	Id string
-	// Metadata of the subnet, including name, labels, tenants, and timestamps.
+	// Metadata of the subnet, including name, labels, tenant, and timestamps.
 	//
 	// The parent VirtualNetwork relationship should be specified via metadata.annotations using the
-	// 'osac.io/owner-reference' key with the VirtualNetwork ID as the value. This establishes resource
+	// 'osac.openshift.io/owner-reference' key with the VirtualNetwork ID as the value. This establishes resource
 	// hierarchy for garbage collection.
 	Metadata *Metadata
 	// Desired configuration of the subnet (user-modifiable).

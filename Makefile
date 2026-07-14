@@ -58,6 +58,11 @@ CONTAINERFILE ?= Containerfile
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
 
+# Go version for local make targets. Keep in sync with go.mod.
+GO_VERSION ?= 1.26.3
+GOTOOLCHAIN ?= go$(GO_VERSION)
+GOTOOLCHAIN_AUTO ?= $(GOTOOLCHAIN)+auto
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -120,7 +125,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	GOTOOLCHAIN=go1.25.0+auto KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/integration$$') -coverprofile cover.out
 
 .PHONY: test-integration
 test-integration: test test-kustomize test-smoke ## Run all tests including integration (kustomize + smoke).
@@ -132,6 +137,9 @@ test-kustomize: kustomize ## Validate kustomize configurations (catches missing 
 	$(KUSTOMIZE) build config/rbac > /dev/null
 	$(KUSTOMIZE) build config/samples > /dev/null
 	$(KUSTOMIZE) build config/default > /dev/null
+	$(KUSTOMIZE) build config/console-proxy > /dev/null
+	$(KUSTOMIZE) build config/testing/default > /dev/null
+	$(KUSTOMIZE) build config/testing/console-proxy > /dev/null
 	@echo "All kustomize configurations are valid"
 
 .PHONY: test-smoke
@@ -149,10 +157,10 @@ test-smoke: kustomize ## Run smoke test in kind cluster (creates/deletes test cl
 	$(KIND) delete cluster --name osac-test
 	@echo "Smoke test passed!"
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+# Run integration tests against a Kind cluster that is spun up.
+.PHONY: test-integration-kind
+test-integration-kind:
+	go test ./test/integration/ -v -ginkgo.v
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -162,11 +170,53 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: helm-crds
+helm-crds: manifests ## Copy generated CRDs into the operator-crds Helm chart.
+	@echo "Syncing CRDs to charts/operator-crds/templates/..."
+	@python3 hack/sync-helm-crds.py
+
+.PHONY: check-helm-crds
+check-helm-crds: helm-crds ## Verify Helm CRD templates match config/crd/bases.
+	@if ! git diff --quiet -- charts/operator-crds/templates/; then \
+		echo "Helm CRD templates are out of sync with config/crd/bases. Run 'make helm-crds' and commit."; \
+		git diff -- charts/operator-crds/templates/; \
+		exit 1; \
+	fi
+	@if [ -n "$$(git ls-files --others --exclude-standard -- charts/operator-crds/templates/)" ]; then \
+		echo "Missing Helm CRD templates (run 'make helm-crds' and commit):"; \
+		git ls-files --others --exclude-standard -- charts/operator-crds/templates/; \
+		exit 1; \
+	fi
+
+##@ API Module
+
+API_VERSION ?= $(error API_VERSION is required (e.g. make tag-api API_VERSION=v0.0.2))
+
+.PHONY: tag-api
+tag-api: ## Tag a new release of the api/ Go module (e.g. make tag-api API_VERSION=v0.0.2).
+	@echo "$(API_VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || \
+		{ echo "Error: API_VERSION must match vX.Y.Z (got '$(API_VERSION)')"; exit 1; }
+	@REMOTE=$$(git remote -v | grep 'osac-project/osac-operator' | grep '(push)' | awk '{print $$1}' | head -1); \
+	if [ -z "$$REMOTE" ]; then \
+		echo "Error: no remote found pointing to osac-project/osac-operator"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$(git status --porcelain)" ]; then \
+		echo "Tagging api/$(API_VERSION) and pushing to $$REMOTE..." ; \
+		git tag "api/$(API_VERSION)" ; \
+		git push "$$REMOTE" "api/$(API_VERSION)" ; \
+		echo "Tagged and pushed api/$(API_VERSION) to $$REMOTE" ; \
+	else \
+		echo "Error: working tree is dirty — commit or stash changes first" ; \
+		exit 1 ; \
+	fi
+
 ##@ Build
 
 .PHONY: build
-build: test ## Build manager binary (runs all tests first).
+build: test ## Build manager and console-proxy binaries (runs all tests first).
 	go build -o bin/manager cmd/main.go
+	go build -o bin/console-proxy cmd/console-proxy/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -176,11 +226,11 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: image-build
-image-build: ## Build container image with the manager.
+image-build: ## Build container image with manager and console-proxy.
 	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} .
 
 .PHONY: image-push
-image-push: ## Push container image with the manager.
+image-push: ## Push container image.
 	$(CONTAINER_TOOL) push ${IMG}
 
 .PHONY: image-run
@@ -204,14 +254,13 @@ kind-load: image-build
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
 PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 .PHONY: docker-buildx
-docker-buildx: ## Build and push container image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+docker-buildx: ## Build and push container image for cross-platform support
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' $(CONTAINERFILE) > $(CONTAINERFILE).cross
 	- $(CONTAINER_TOOL) buildx create --name osac-operator-builder
 	$(CONTAINER_TOOL) buildx use osac-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f $(CONTAINERFILE).cross .
 	- $(CONTAINER_TOOL) buildx rm osac-operator-builder
-	rm Dockerfile.cross
+	rm $(CONTAINERFILE).cross
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
@@ -233,14 +282,16 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -k config/crd
 
+DEPLOY_OVERLAY ?= config/default
+
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUBECTL) apply -k config/default
+	$(KUBECTL) apply -k $(DEPLOY_OVERLAY)
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -k config/default
+	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -k $(DEPLOY_OVERLAY)
 
 ##@ Dependencies
 
@@ -260,7 +311,7 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.20.0
 ENVTEST_VERSION ?= release-0.19
-GOLANGCI_LINT_VERSION ?= v2.7.2
+GOLANGCI_LINT_VERSION ?= v2.12.1
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -292,7 +343,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
-GOTOOLCHAIN=go1.25.0 GOBIN=$(LOCALBIN) go install $${package} ;\
+GOTOOLCHAIN=$(GOTOOLCHAIN) GOBIN=$(LOCALBIN) go install $${package} ;\
 mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)

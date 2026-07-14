@@ -30,7 +30,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 // controllableProvider is a mock provider that allows test control over job progression
@@ -86,7 +86,7 @@ func (p *controllableProvider) GetProvisionStatus(ctx context.Context, resource 
 	}, nil
 }
 
-func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -94,9 +94,7 @@ func (p *controllableProvider) TriggerDeprovision(ctx context.Context, resource 
 		return nil, p.deprovisionTriggerErr
 	}
 
-	// Check if provision job needs to be terminated first (AAP behavior)
-	jobs := provisioning.GetJobsFromResource(resource)
-	latestProvisionJob := provisioning.FindLatestJobByType(jobs, osacv1alpha1.JobTypeProvision)
+	latestProvisionJob := provisioning.FindLatestJobByType(provisionJobs, osacv1alpha1.JobTypeProvision)
 	if latestProvisionJob != nil {
 		if !p.provisionJobState.IsTerminal() {
 			// Cancel the provision job
@@ -132,7 +130,7 @@ func (p *controllableProvider) GetDeprovisionStatus(ctx context.Context, resourc
 }
 
 func (p *controllableProvider) Name() string {
-	return string(provisioning.ProviderTypeAAP)
+	return "aap"
 }
 
 // setProvisionJobState updates the provision job state (thread-safe)
@@ -166,7 +164,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 	BeforeEach(func() {
 		provider = newControllableProvider()
-		reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, provider, 100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
+		reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, "", provider, 100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
 	})
 
 	Context("Provisioning workflow", func() {
@@ -177,7 +175,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -197,7 +195,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Re-fetch: RunProvisioningLifecycle flushes status after trigger
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.JobID).To(HavePrefix("prov-job-" + instanceName))
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -214,7 +212,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status updated to running
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 
@@ -230,7 +228,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify final status
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
@@ -242,7 +240,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -271,7 +269,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Verify status shows failure
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
-			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateFailed))
 			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
@@ -288,7 +286,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					// AAP Direct uses base finalizer, not AAP-specific finalizer
 					Finalizers: []string{osacComputeInstanceFinalizer},
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -302,7 +300,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
 			// Verify deprovision job was triggered (in-memory state)
-			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestDeprovisionJob).NotTo(BeNil())
 			Expect(latestDeprovisionJob.JobID).To(Equal("deprov-job-" + instanceName))
 			Expect(latestDeprovisionJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -317,7 +315,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			// For AAP Direct: handleDeprovisioning() doesn't remove finalizers
 			// Finalizer removal is handled by handleDelete()
 			// Verify job succeeded
-			latestDeprovisionJob = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestDeprovisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestDeprovisionJob).NotTo(BeNil())
 			Expect(latestDeprovisionJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
@@ -329,7 +327,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -354,7 +352,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			// Verify deletion is blocked - status shows failed deprovision
-			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestDeprovisionJob).NotTo(BeNil())
 			Expect(latestDeprovisionJob.State).To(Equal(osacv1alpha1.JobStateFailed))
 		})
@@ -368,7 +366,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -386,18 +384,18 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify job is pending (in-memory)
-			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStatePending))
 
 			// Set to running and poll multiple times
 			provider.setProvisionJobState(osacv1alpha1.JobStateRunning, "Job running - step 1")
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				result, err := reconciler.handleProvisioning(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
 
-				latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+				latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 				Expect(latestProvisionJob).NotTo(BeNil())
 				Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 			}
@@ -408,7 +406,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
 
-			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})

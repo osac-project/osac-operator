@@ -23,6 +23,10 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.conditions[?(@.type=="ClusterStorageReady")].status
+      name: Cluster Storage
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -110,6 +114,9 @@ spec:
                   to use when creating this cluster
                 pattern: ^[a-zA-Z_][a-zA-Z0-9._]*$
                 type: string
+                x-kubernetes-validations:
+                - message: templateID is immutable
+                  rule: self == oldSelf
               templateParameters:
                 description: |-
                   TemplateParameters is a JSON-encoded map of the parameter values for the
@@ -140,6 +147,61 @@ spec:
                 - roleBindingName
                 - serviceAccountName
                 type: object
+              clusterStorageJobs:
+                description: ClusterStorageJobs holds the history of cluster storage
+                  provisioning/deprovisioning jobs
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the ClusterOrder
@@ -203,9 +265,36 @@ spec:
                   DesiredConfigVersion is a hash of the current spec, used to detect spec changes
                   that require re-provisioning.
                 type: string
-              jobs:
+              nodeRequests:
+                description: NodeRequests reflects how many nodes are currently associated
+                  with the ClusterOrder
+                items:
+                  properties:
+                    numberOfNodes:
+                      description: NumberOfNodes describes the number of nodes you
+                        want of the given resource class
+                      type: integer
+                    resourceClass:
+                      description: ResourceClass describes the type of node you are
+                        requesting
+                      type: string
+                  required:
+                  - numberOfNodes
+                  - resourceClass
+                  type: object
+                type: array
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the ClusterOrder
+                enum:
+                - Progressing
+                - Failed
+                - Ready
+                - Deleting
+                type: string
+              provisioningJobs:
                 description: |-
-                  Jobs tracks the history of provision and deprovision operations
+                  ProvisioningJobs tracks the history of provision and deprovision operations
                   Ordered chronologically, with latest operations at the end
                   Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
                 items:
@@ -214,9 +303,8 @@ spec:
                   properties:
                     blockDeletionOnFailure:
                       description: |-
-                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails
-                        AAP Direct sets this to true to prevent orphaned cloud resources
-                        EDA sets this to false as webhook handles cleanup
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
                       type: boolean
                     configVersion:
                       description: |-
@@ -226,10 +314,8 @@ spec:
                         If they match, the controller retries with exponential backoff.
                       type: string
                     jobID:
-                      description: |-
-                        JobID is the job identifier from the provisioning provider
-                        For AAP Direct: job ID from AAP API response
-                        For EDA: auto-incremented "eda-webhook-N"
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
                       type: string
                     message:
                       description: Message provides human-readable status or error
@@ -263,33 +349,6 @@ spec:
                   - type
                   type: object
                 type: array
-              nodeRequests:
-                description: NodeRequests reflects how many nodes are currently associated
-                  with the ClusterOrder
-                items:
-                  properties:
-                    numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes you
-                        want of the given resource class
-                      type: integer
-                    resourceClass:
-                      description: ResourceClass describes the type of node you are
-                        requesting
-                      type: string
-                  required:
-                  - numberOfNodes
-                  - resourceClass
-                  type: object
-                type: array
-              phase:
-                description: Phase provides a single-value overview of the state of
-                  the ClusterOrder
-                enum:
-                - Progressing
-                - Failed
-                - Ready
-                - Deleting
-                type: string
             type: object
         type: object
     served: true

@@ -64,9 +64,7 @@ func (s JobState) IsSuccessful() bool {
 
 // JobStatus represents the status of a provisioning or deprovisioning job
 type JobStatus struct {
-	// JobID is the job identifier from the provisioning provider
-	// For AAP Direct: job ID from AAP API response
-	// For EDA: auto-incremented "eda-webhook-N"
+	// JobID is the AAP job identifier from the provisioning provider API response.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	JobID string `json:"jobID"`
@@ -90,9 +88,8 @@ type JobStatus struct {
 	// +kubebuilder:validation:Type=string
 	Message string `json:"message,omitempty"`
 
-	// BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails
-	// AAP Direct sets this to true to prevent orphaned cloud resources
-	// EDA sets this to false as webhook handles cleanup
+	// BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+	// AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
 	// +kubebuilder:validation:Optional
 	BlockDeletionOnFailure bool `json:"blockDeletionOnFailure,omitempty"`
 

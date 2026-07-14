@@ -40,6 +40,25 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Console proxy labels
+*/}}
+{{- define "osac-operator.consoleProxy.labels" -}}
+helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+{{ include "osac-operator.consoleProxy.selectorLabels" . }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Console proxy selector labels
+*/}}
+{{- define "osac-operator.consoleProxy.selectorLabels" -}}
+app: {{ printf "%s-console-proxy" (include "osac-operator.fullname" .) | trunc 63 | trimSuffix "-" }}
+app.kubernetes.io/name: {{ include "osac-operator.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: console-proxy
+{{- end }}
+
+{{/*
 Service account name
 */}}
 {{- define "osac-operator.serviceAccountName" -}}

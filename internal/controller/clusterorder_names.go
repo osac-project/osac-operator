@@ -7,10 +7,14 @@ import (
 )
 
 const (
+	subjectKindServiceAccount    string = "ServiceAccount"
 	defaultServiceAccountName    string = "osac"
 	defaultHostedClusterName     string = "cluster"
 	defaultRoleBindingName       string = "osac"
 	defaultClusterOrderNamespace string = "osac-orders"
+	hubAccessServiceAccountName  string = "hub-access"
+	hubAccessRoleBindingName     string = "hub-access"
+	hubAccessClusterRoleBaseName string = "hub-access-hosted-clusters"
 )
 
 var (
@@ -22,4 +26,11 @@ var (
 
 func generateNamespaceName(instance *v1alpha1.ClusterOrder) string {
 	return fmt.Sprintf("%s-%s", instance.GetNamespace(), instance.GetName())
+}
+
+// hubAccessClusterRoleName returns the ClusterRole name, accounting for the
+// kustomize prefix transformer that prepends "{namespace}-" to cluster-scoped
+// resources in CI/production overlays.
+func (r *ClusterOrderReconciler) hubAccessClusterRoleName() string {
+	return fmt.Sprintf("%s-%s", r.ClusterOrderNamespace, hubAccessClusterRoleBaseName)
 }

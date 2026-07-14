@@ -97,7 +97,7 @@ func (r *ClusterOrderReconciler) newAdminRoleBinding(ctx context.Context, instan
 
 	subjects := []rbacv1.Subject{
 		{
-			Kind:      "ServiceAccount",
+			Kind:      subjectKindServiceAccount,
 			Name:      serviceAccountName,
 			Namespace: namespaceName,
 		},
@@ -122,6 +122,43 @@ func (r *ClusterOrderReconciler) newAdminRoleBinding(ctx context.Context, instan
 		ensureCommonLabels(instance, roleBinding)
 		roleBinding.Subjects = subjects
 		roleBinding.RoleRef = roleref
+		return nil
+	}
+
+	return &appResource{
+		roleBinding,
+		mutateFn,
+	}, nil
+}
+
+func (r *ClusterOrderReconciler) newHubAccessRoleBinding(ctx context.Context, instance *v1alpha1.ClusterOrder) (*appResource, error) {
+	namespaceName := instance.GetClusterReferenceNamespace()
+	if namespaceName == "" {
+		return nil, fmt.Errorf("unable to retrieve required information from spec.clusterReference")
+	}
+
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      hubAccessRoleBindingName,
+			Namespace: namespaceName,
+			Labels:    commonLabelsFromOrder(instance),
+		},
+	}
+
+	mutateFn := func() error {
+		ensureCommonLabels(instance, roleBinding)
+		roleBinding.Subjects = []rbacv1.Subject{
+			{
+				Kind:      subjectKindServiceAccount,
+				Name:      hubAccessServiceAccountName,
+				Namespace: r.ClusterOrderNamespace,
+			},
+		}
+		roleBinding.RoleRef = rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     r.hubAccessClusterRoleName(),
+		}
 		return nil
 	}
 

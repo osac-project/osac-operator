@@ -74,7 +74,15 @@ type SecurityGroupSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
 	VirtualNetwork string `json:"virtualNetwork"`
+
+	// ImplementationStrategy determines the backend used to enforce security rules.
+	// Set by the fulfillment-service; defaults to network_policy when empty.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="implementationStrategy is immutable"
+	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 
 	// IngressRules defines the ingress security rules
 	// +kubebuilder:validation:Optional
@@ -115,9 +123,9 @@ type SecurityGroupStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// BackendSecurityGroupID stores provider-specific security group identifier
 	// +kubebuilder:validation:Optional
@@ -166,4 +174,3 @@ type SecurityGroupList struct {
 func (s *SecurityGroup) GetName() string {
 	return s.ObjectMeta.Name
 }
-

@@ -54,6 +54,16 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&PublicIPPoolList{},
 		&PublicIP{},
 		&PublicIPList{},
+		&PublicIPAttachment{},
+		&PublicIPAttachmentList{},
+		&ExternalIPPool{},
+		&ExternalIPPoolList{},
+		&ExternalIP{},
+		&ExternalIPList{},
+		&ExternalIPAttachment{},
+		&ExternalIPAttachmentList{},
+		&NATGateway{},
+		&NATGatewayList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil

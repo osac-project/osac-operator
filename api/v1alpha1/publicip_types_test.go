@@ -25,23 +25,12 @@ import (
 )
 
 var _ = Describe("PublicIPSpec", func() {
-	It("should accept a valid spec with all fields", func() {
-		spec := v1alpha1.PublicIPSpec{
-			Pool:            "my-pool",
-			ComputeInstance: "my-instance",
-		}
-
-		Expect(spec.Pool).To(Equal("my-pool"))
-		Expect(spec.ComputeInstance).To(Equal("my-instance"))
-	})
-
-	It("should accept a minimal spec without optional fields", func() {
+	It("should accept a valid spec with pool", func() {
 		spec := v1alpha1.PublicIPSpec{
 			Pool: "my-pool",
 		}
 
 		Expect(spec.Pool).To(Equal("my-pool"))
-		Expect(spec.ComputeInstance).To(BeEmpty())
 	})
 })
 
@@ -64,8 +53,6 @@ var _ = Describe("PublicIPStateType", func() {
 		},
 		Entry("Pending state", v1alpha1.PublicIPStatePending, "Pending"),
 		Entry("Allocated state", v1alpha1.PublicIPStateAllocated, "Allocated"),
-		Entry("Attached state", v1alpha1.PublicIPStateAttached, "Attached"),
-		Entry("Releasing state", v1alpha1.PublicIPStateReleasing, "Releasing"),
 		Entry("Failed state", v1alpha1.PublicIPStateFailed, "Failed"),
 	)
 })

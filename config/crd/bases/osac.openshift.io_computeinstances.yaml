@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.memoryGiB
       name: Memory
       type: integer
+    - jsonPath: .spec.guestOSFamily
+      name: OS
+      type: string
     - jsonPath: .spec.runStrategy
       name: RunStrategy
       type: string
@@ -34,6 +37,10 @@ spec:
       type: string
     - jsonPath: .status.ipAddress
       name: IP
+      type: string
+    - jsonPath: .status.publicIPAddress
+      name: PublicIP
+      priority: 1
       type: string
     name: v1alpha1
     schema:
@@ -100,6 +107,16 @@ spec:
                 x-kubernetes-validations:
                 - message: cores is immutable
                   rule: self == oldSelf
+              guestOSFamily:
+                description: |-
+                  GuestOSFamily specifies the guest operating system family for the VM.
+                  To support future OS families, this field is a freeform string.
+                  Currently, any value other than "windows" will be treated as "linux".
+                  This field is immutable after creation.
+                type: string
+                x-kubernetes-validations:
+                - message: guestOSFamily is immutable
+                  rule: self == oldSelf
               image:
                 description: Image defines the VM image configuration
                 properties:
@@ -130,6 +147,61 @@ spec:
                 x-kubernetes-validations:
                 - message: memoryGiB is immutable
                   rule: self == oldSelf
+              networkAttachments:
+                description: |-
+                  NetworkAttachments defines multiple NICs when more than one subnet (and optional security groups per NIC) is required.
+                  The first entry is the primary subnet for VM placement (subnet-namespace annotation).
+                  Subnet references (per NetworkAttachment) are immutable but security groups can be changed.
+
+                  Why immutability is required:
+                  Currently, ComputeInstances are created with a single NIC. The VM instance must be created in the namespace
+                  of the subnet it uses (the subnet-namespace annotation determines VM placement). This architectural constraint
+                  means that changing the subnet would require recreating the VM in a different namespace, which is not supported.
+                  Similarly, the array size cannot change because adding/removing NICs would require changing the primary subnet
+                  or the VM's namespace, both of which are immutable after VM creation.
+
+                  Immutability enforcement:
+                  - The +listType=map with +listMapKey=subnetRef markers correlate entries by subnetRef for updates
+                  - The size check below prevents adding or removing entries
+                  - The per-item subnetRef validation (self == oldSelf) prevents changing keys of existing entries
+                  Combined, these ensure only securityGroupRefs can be modified.
+
+                  MaxItems is required for CEL cost budget calculation: NetworkAttachment.SubnetRef has a CEL validation
+                  rule (self == oldSelf for immutability). Without maxItems, Kubernetes cannot bound the cost of iterating
+                  over array items to validate this rule, causing CRD installation to fail with "estimated rule cost exceeds budget".
+                items:
+                  description: 'NetworkAttachment defines one NIC: a Subnet CR on
+                    the hub plus optional SecurityGroup CR names.'
+                  properties:
+                    securityGroupRefs:
+                      description: |-
+                        SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
+                        Mutable - can be changed to add/remove security groups without recreating the VM.
+                      items:
+                        type: string
+                      type: array
+                    subnetRef:
+                      description: SubnetRef is the name of the Subnet CR in the same
+                        namespace as the ComputeInstance.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: subnetRef is immutable
+                        rule: self == oldSelf
+                  required:
+                  - subnetRef
+                  type: object
+                maxItems: 8
+                type: array
+                x-kubernetes-list-map-keys:
+                - subnetRef
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: cannot change or add/remove network attachments after initial
+                    assignment
+                  rule: size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na,
+                    oldSelf.exists(old, old.subnetRef == na.subnetRef)))
               restartRequestedAt:
                 description: |-
                   RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
@@ -158,11 +230,6 @@ spec:
                 x-kubernetes-validations:
                 - message: sshKey is immutable
                   rule: self == oldSelf
-              subnetRef:
-                description: |-
-                  SubnetRef is the name of the Subnet CR in the hub cluster
-                  This references the Kubernetes CR name (not the fulfillment ID)
-                type: string
               templateID:
                 description: TemplateID is the unique identifier of the compute instance
                   template to use when creating this compute instance
@@ -270,9 +337,29 @@ spec:
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
                   Populated when the instance is ready (phase Running).
                 type: string
-              jobs:
+              lastRestartedAt:
                 description: |-
-                  Jobs tracks the history of provision and deprovision operations
+                  LastRestartedAt records when the last restart was initiated by the controller.
+
+                  This is set to spec.restartRequestedAt when the controller processes a restart request.
+                  It will be empty if no restart has been performed yet.
+                format: date-time
+                type: string
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the ComputeInstance
+                enum:
+                - Starting
+                - Running
+                - Failed
+                - Deleting
+                - Stopping
+                - Stopped
+                - Paused
+                type: string
+              provisioningJobs:
+                description: |-
+                  ProvisioningJobs tracks the history of provision and deprovision operations
                   Ordered chronologically, with latest operations at the end
                   Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
                 items:
@@ -281,9 +368,8 @@ spec:
                   properties:
                     blockDeletionOnFailure:
                       description: |-
-                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails
-                        AAP Direct sets this to true to prevent orphaned cloud resources
-                        EDA sets this to false as webhook handles cleanup
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
                       type: boolean
                     configVersion:
                       description: |-
@@ -293,10 +379,8 @@ spec:
                         If they match, the controller retries with exponential backoff.
                       type: string
                     jobID:
-                      description: |-
-                        JobID is the job identifier from the provisioning provider
-                        For AAP Direct: job ID from AAP API response
-                        For EDA: auto-incremented "eda-webhook-N"
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
                       type: string
                     message:
                       description: Message provides human-readable status or error
@@ -330,25 +414,10 @@ spec:
                   - type
                   type: object
                 type: array
-              lastRestartedAt:
+              publicIPAddress:
                 description: |-
-                  LastRestartedAt records when the last restart was initiated by the controller.
-
-                  This is set to spec.restartRequestedAt when the controller processes a restart request.
-                  It will be empty if no restart has been performed yet.
-                format: date-time
-                type: string
-              phase:
-                description: Phase provides a single-value overview of the state of
-                  the ComputeInstance
-                enum:
-                - Starting
-                - Running
-                - Failed
-                - Deleting
-                - Stopping
-                - Stopped
-                - Paused
+                  PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.
+                  Populated when a PublicIP CR in state "Attached" references this ComputeInstance.
                 type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance

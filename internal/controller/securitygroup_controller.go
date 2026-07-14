@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -34,7 +34,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -102,6 +102,12 @@ func (r *SecurityGroupReconciler) Reconcile(ctx context.Context, req mcreconcile
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	val, exists := sg.Annotations[osacManagementStateAnnotation]
+	if sg.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
+		log.Info("ignoring SecurityGroup due to management-state annotation", "management-state", val)
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("start reconcile")
 
 	oldstatus := sg.Status.DeepCopy()
@@ -115,9 +121,8 @@ func (r *SecurityGroupReconciler) Reconcile(ctx context.Context, req mcreconcile
 
 	if !equality.Semantic.DeepEqual(sg.Status, *oldstatus) {
 		log.Info("status requires update")
-		if updateErr := r.Status().Update(ctx, sg); updateErr != nil {
-			log.Error(updateErr, "failed to update status")
-			return res, updateErr
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(sg), sg.Status); err != nil {
+			return res, err
 		}
 	}
 
@@ -144,26 +149,10 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 		sg.Status.Phase = v1alpha1.SecurityGroupPhaseProgressing
 	}
 
-	// Lookup parent VirtualNetwork by UUID label to get implementation strategy
-	vnetList := &v1alpha1.VirtualNetworkList{}
-	err := r.List(ctx, vnetList,
-		client.InNamespace(sg.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
-	)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to list VirtualNetworks: %w", err)
-	}
-	if len(vnetList.Items) == 0 {
-		log.Info("parent VirtualNetwork not found, requeueing", "uuid", sg.Spec.VirtualNetwork)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	vnet := &vnetList.Items[0]
-
-	// Read implementation strategy from parent VirtualNetwork spec
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// Read implementation strategy from spec (set by fulfillment-service), fall back to default
+	implementationStrategy := sg.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
-		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		implementationStrategy = defaultSecurityGroupImplementationStrategy
 	}
 
 	// Add implementation-strategy annotation if not present or different
@@ -193,7 +182,7 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 	// Set phase to Progressing only on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if sg.Status.Phase == "" || (sg.Status.Phase == v1alpha1.SecurityGroupPhaseReady &&
-		!provisioning.IsConfigApplied(&sg.Status.Jobs, sg.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&sg.Status.ProvisioningJobs, sg.Status.DesiredConfigVersion)) {
 		sg.Status.Phase = v1alpha1.SecurityGroupPhaseProgressing
 	}
 
@@ -236,110 +225,48 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, sg,
-		&provisioning.State{Jobs: &sg.Status.Jobs, DesiredConfigVersion: sg.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &sg.Status.ProvisioningJobs, DesiredConfigVersion: sg.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed },
 			OnSuccess: func(_ provisioning.ProvisionStatus) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady },
 		},
 		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{})
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.SecurityGroup).Status.ProvisioningJobs
+			})
 		},
-		func() error { return r.Status().Update(ctx, sg) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(sg), sg.Status)
+		},
 	)
 }
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for a SecurityGroup.
 // It triggers deprovisioning if needed and polls job status until completion.
 func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *v1alpha1.SecurityGroup) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// If no provider configured, skip deprovisioning
 	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping deprovisioning")
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-
-	// Check if we already have a deprovision job
-	latestDeprovisionJob := provisioning.FindLatestJobByType(sg.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	// Trigger deprovisioning
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
-		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-
-		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, sg)
-		if err != nil {
-			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-
-		// Handle provider action
-		switch result.Action {
-		case provisioning.DeprovisionWaiting:
-			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-		case provisioning.DeprovisionSkipped:
-			log.Info("provider skipped deprovisioning")
-			return ctrl.Result{}, nil
-
-		case provisioning.DeprovisionTriggered:
-			newJob := v1alpha1.JobStatus{
-				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.NewTime(time.Now().UTC()),
-				State:                  v1alpha1.JobStatePending,
-				Message:                "Deprovisioning job triggered",
-				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
-			}
-			sg.Status.Jobs = provisioning.AppendJob(sg.Status.Jobs, newJob, r.MaxJobHistory)
-			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, sg,
+		&sg.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
 	}
-
-	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, sg, latestDeprovisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
-		updatedJob := *latestDeprovisionJob
-		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update job status
-	updatedJob := *latestDeprovisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(sg.Status.Jobs, updatedJob)
-
-	// If job is still running, requeue
-	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Job reached terminal state
-	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
-		return ctrl.Result{}, nil
-	}
-
-	// Job failed or was canceled - check policy
-	if latestDeprovisionJob.BlockDeletionOnFailure {
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	log.Info("deprovision job did not succeed, allowing process to continue",
-		"jobID", latestDeprovisionJob.JobID,
-		"state", status.State,
-		"message", updatedJob.Message)
 	return ctrl.Result{}, nil
+}
+
+// updateStatusWithRetry updates the security group status with retry on conflict.
+func (r *SecurityGroupReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.SecurityGroupStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.SecurityGroup{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

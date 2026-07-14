@@ -33,7 +33,7 @@ var ErrTenantBeingDeleted = errors.New("tenant is being deleted")
 // If the tenant is not found, returns nil and error.
 // If the tenant has DeletionTimestamp, returns an error so the controller requeues (does not clear the instance's tenant reference).
 func (r *ComputeInstanceReconciler) getTenant(ctx context.Context, instance *v1alpha1.ComputeInstance) (*v1alpha1.Tenant, error) {
-	tenantName, exists := instance.GetAnnotations()[osacTenantAnnotation]
+	tenantName, exists := instance.GetAnnotations()[osacTenantKey]
 	if !exists || tenantName == "" {
 		return nil, fmt.Errorf("tenant information for compute instance %s not found", instance.GetName())
 	}

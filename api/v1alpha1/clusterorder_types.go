@@ -30,6 +30,7 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Pattern=^[a-zA-Z_][a-zA-Z0-9._]*$
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="templateID is immutable"
 	TemplateID string `json:"templateID,omitempty"`
 	// TemplateParameters is a JSON-encoded map of the parameter values for the
 	// selected cluster template.
@@ -119,6 +120,11 @@ const (
 
 	// ClusterOrderConditionAvailable means the cluster is available
 	ClusterOrderConditionAvailable ClusterOrderConditionType = "Available"
+
+	// ClusterOrderConditionClusterStorageReady indicates whether StorageClasses
+	// and CSI drivers are installed on the CaaS cluster for this tenant.
+	// Owned by the OSAC Storage Controller. Does not gate Phase=Ready.
+	ClusterOrderConditionClusterStorageReady ClusterOrderConditionType = "ClusterStorageReady"
 )
 
 // ClusterOrderClusterReferenceType contains a reference to the namespace created by this ClusterOrder
@@ -149,11 +155,15 @@ type ClusterOrderStatus struct {
 	// NodeRequests reflects how many nodes are currently associated with the ClusterOrder
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
 
-	// Jobs tracks the history of provision and deprovision operations
+	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
+
+	// ClusterStorageJobs holds the history of cluster storage provisioning/deprovisioning jobs
+	// +kubebuilder:validation:Optional
+	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`
 
 	// DesiredConfigVersion is a hash of the current spec, used to detect spec changes
 	// that require re-provisioning.
@@ -166,6 +176,7 @@ type ClusterOrderStatus struct {
 // +kubebuilder:resource:shortName=cord
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Cluster Storage",type=string,JSONPath=`.status.conditions[?(@.type=="ClusterStorageReady")].status`,priority=1
 
 // ClusterOrder is the Schema for the clusterorders API
 type ClusterOrder struct {
@@ -189,4 +200,3 @@ type ClusterOrderList struct {
 func (co *ClusterOrder) GetName() string {
 	return co.ObjectMeta.Name
 }
-

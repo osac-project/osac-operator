@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,7 +41,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 // NewComponentFn is the type of a function that creates a required component
@@ -61,6 +62,7 @@ func (r *ClusterOrderReconciler) components() []component {
 		{"Namespace", r.newNamespace},
 		{"ServiceAccount", r.newServiceAccount},
 		{"RoleBinding", r.newAdminRoleBinding},
+		{"HubAccessRoleBinding", r.newHubAccessRoleBinding},
 	}
 }
 
@@ -127,7 +129,7 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	val, exists := instance.Annotations[osacManagementStateAnnotation]
-	if exists && val == ManagementStateUnmanaged {
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring ClusterOrder due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}
@@ -146,7 +148,7 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err == nil {
 		if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 			log.Info("status requires update")
-			if err := r.Status().Update(ctx, instance); err != nil {
+			if err := r.patchStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
 				return res, err
 			}
 		}
@@ -154,6 +156,25 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.ClusterOrder{}
+		if err := r.apiReader.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		base := latest.DeepCopy()
+		latest.Status.Phase = computed.Phase
+		latest.Status.ClusterReference = computed.ClusterReference
+		latest.Status.NodeRequests = computed.NodeRequests
+		latest.Status.ProvisioningJobs = computed.ProvisioningJobs
+		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
+		for _, c := range computed.Conditions {
+			meta.SetStatusCondition(&latest.Status.Conditions, c)
+		}
+		return r.Status().Patch(ctx, latest, client.MergeFrom(base))
+	})
 }
 
 func NamespacePredicate(namespace string) predicate.Predicate {
@@ -341,7 +362,6 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 		if hostedClusterIsReady(hc) {
 			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
 			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-			instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
 		}
 	}
 
@@ -524,8 +544,15 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {
 	return &provisioning.State{
-		Jobs:                 &instance.Status.Jobs,
+		Jobs:                 &instance.Status.ProvisioningJobs,
 		DesiredConfigVersion: instance.Status.DesiredConfigVersion,
+	}
+}
+
+func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.ClusterOrder) *provisioning.PollCallbacks {
+	return &provisioning.PollCallbacks{
+		OnFailed:  func(_ string) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed },
+		OnSuccess: func(_ provisioning.ProvisionStatus) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady },
 	}
 }
 
@@ -541,15 +568,15 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
 		r.provisionState(instance),
 		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(_ string) {
-				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
-			},
-		},
+		r.provisioningCallbacks(instance),
 		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{})
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
+			})
 		},
-		func() error { return r.Status().Update(ctx, instance) },
+		func() error {
+			return r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
 	)
 }
 
@@ -565,29 +592,19 @@ func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.C
 // handleDeprovisioning manages the deprovisioning job lifecycle for ClusterOrder.
 // Waits for provision job termination if needed, then triggers deprovision job.
 func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Check for ManagementStateManual annotation
 	val, exists := instance.Annotations[osacManagementStateAnnotation]
 	if exists && val == ManagementStateManual {
-		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
+		ctrllog.FromContext(ctx).Info("skipping deprovisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}
-
-	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	if !provisioning.HasJobID(latestDeprovisionJob) {
-		return provisioning.TriggerDeprovisionJob(ctx, r.ProvisioningProvider, instance,
-			&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
+		return ctrl.Result{}, nil
 	}
-
-	result, done, err := provisioning.PollDeprovisionJob(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.Jobs, latestDeprovisionJob, r.StatusPollInterval)
-	if err != nil {
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
+		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
 		return result, err
-	}
-	if !done {
-		return result, nil
 	}
 	return ctrl.Result{}, nil
 }

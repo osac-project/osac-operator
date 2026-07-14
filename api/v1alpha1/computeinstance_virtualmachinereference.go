@@ -67,3 +67,11 @@ func (ci *ComputeInstance) SetIPAddress(ip string) {
 func (ci *ComputeInstance) GetIPAddress() string {
 	return ci.Status.IPAddress
 }
+
+func (ci *ComputeInstance) SetPublicIPAddress(ip string) {
+	ci.Status.PublicIPAddress = ip
+}
+
+func (ci *ComputeInstance) GetPublicIPAddress() string {
+	return ci.Status.PublicIPAddress
+}

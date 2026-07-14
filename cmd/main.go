@@ -46,6 +46,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	cluster "sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -57,11 +58,13 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	"sigs.k8s.io/multicluster-runtime/providers/single"
 
+	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/helpers"
-	"github.com/osac-project/osac-operator/internal/aap"
 	"github.com/osac-project/osac-operator/internal/controller"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/internal/migrations"
+	"github.com/osac-project/osac-operator/pkg/aap"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -71,18 +74,10 @@ var (
 
 const (
 	// Namespace environment variables
-	envComputeInstanceNamespace          = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
-	envNetworkingNamespace               = "OSAC_NETWORKING_NAMESPACE"
-	envClusterOrderNamespace             = "OSAC_CLUSTER_ORDER_NAMESPACE"
-	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
-	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
-
-	// Cluster (ClusterOrder) EDA webhook environment variables
-	envClusterCreateWebhook = "OSAC_CLUSTER_CREATE_WEBHOOK"
-	envClusterDeleteWebhook = "OSAC_CLUSTER_DELETE_WEBHOOK"
-
-	// Provider selection
-	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
+	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
+	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
+	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 
 	// AAP configuration
 	envAAPURL                 = "OSAC_AAP_URL"
@@ -97,6 +92,12 @@ const (
 	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
+	// Storage controller AAP template overrides
+	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
+	envStorageBackendDeprovisionTemplate = "OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE"
+	envClusterStorageProvisionTemplate   = "OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE"
+	envClusterStorageDeprovisionTemplate = "OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE"
+
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
@@ -107,20 +108,24 @@ const (
 	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
 	// Controller enable flags (defaults when flag is not set)
-	envEnableTenantController          = "OSAC_ENABLE_TENANT_CONTROLLER"
-	envEnableComputeInstanceController = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
-	envEnableClusterController         = "OSAC_ENABLE_CLUSTER_CONTROLLER"
-	envEnableNetworkingController      = "OSAC_ENABLE_NETWORKING_CONTROLLER"
+	envEnableTenantController            = "OSAC_ENABLE_TENANT_CONTROLLER"
+	envEnableStorageController           = "OSAC_ENABLE_STORAGE_CONTROLLER"
+	envEnableComputeInstanceController   = "OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER"
+	envEnableClusterController           = "OSAC_ENABLE_CLUSTER_CONTROLLER"
+	envEnableNetworkingController        = "OSAC_ENABLE_NETWORKING_CONTROLLER"
+	envEnableBareMetalInstanceController = "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER"
 
 	remoteClusterName = "remote"
 )
 
 // controllerFlags holds the enable flags for all controllers.
 type controllerFlags struct {
-	Tenant          bool
-	ComputeInstance bool
-	Cluster         bool
-	Networking      bool
+	Tenant            bool
+	Storage           bool
+	ComputeInstance   bool
+	Cluster           bool
+	Networking        bool
+	BareMetalInstance bool
 }
 
 // registerControllerFlags registers controller enable flags with the flag package
@@ -130,6 +135,9 @@ func registerControllerFlags() *controllerFlags {
 	flag.BoolVar(&flags.Tenant, "enable-tenant-controller",
 		helpers.GetEnvWithDefault(envEnableTenantController, false),
 		"Enable the tenant controller.")
+	flag.BoolVar(&flags.Storage, "enable-storage-controller",
+		helpers.GetEnvWithDefault(envEnableStorageController, false),
+		"Enable the storage controller.")
 	flag.BoolVar(&flags.ComputeInstance, "enable-compute-instance-controller",
 		helpers.GetEnvWithDefault(envEnableComputeInstanceController, false),
 		"Enable the compute-instance controller.")
@@ -139,16 +147,21 @@ func registerControllerFlags() *controllerFlags {
 	flag.BoolVar(&flags.Networking, "enable-networking-controller",
 		helpers.GetEnvWithDefault(envEnableNetworkingController, false),
 		"Enable the networking controllers (VirtualNetwork, Subnet, SecurityGroup).")
+	flag.BoolVar(&flags.BareMetalInstance, "enable-baremetal-instance-controller",
+		helpers.GetEnvWithDefault(envEnableBareMetalInstanceController, false),
+		"Enable the bare metal instance controller.")
 	return flags
 }
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
 func (f *controllerFlags) enableAllIfNoneSet() {
-	if !f.Tenant && !f.ComputeInstance && !f.Cluster && !f.Networking {
+	if !f.Tenant && !f.Storage && !f.ComputeInstance && !f.Cluster && !f.Networking && !f.BareMetalInstance {
 		f.Tenant = true
+		f.Storage = true
 		f.ComputeInstance = true
 		f.Cluster = true
 		f.Networking = true
+		f.BareMetalInstance = true
 		setupLog.Info("no controller flags set, enabling all controllers")
 	}
 }
@@ -157,7 +170,7 @@ func (f *controllerFlags) enableAllIfNoneSet() {
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
 	localScheme *runtime.Scheme,
-	enableCluster, enableComputeInstance, enableTenant, enableNetworking bool,
+	enableCluster, enableComputeInstance, enableTenant, enableNetworking, enableBareMetalInstance bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
@@ -169,6 +182,9 @@ func addSchemesForLocalControllers(
 	}
 	if enableTenant {
 		utilruntime.Must(ovnv1.AddToScheme(localScheme))
+	}
+	if enableBareMetalInstance {
+		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
 	}
 	// +kubebuilder:scaffold:scheme
 }
@@ -210,25 +226,6 @@ func newClusterFromKubeconfig(kubeconfigPath string, scheme *runtime.Scheme) (cl
 	return cl, nil
 }
 
-// createEDAProvider creates and validates EDA webhook provider configuration.
-func createEDAProvider(
-	provisionWebhook, deprovisionWebhook string,
-	minimumRequestInterval time.Duration,
-) (provisioning.ProvisioningProvider, time.Duration, error) {
-	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
-
-	provider := provisioning.NewEDAProvider(
-		webhookClient,
-		provisionWebhook, deprovisionWebhook,
-	)
-
-	setupLog.Info("using EDA webhook provider",
-		"provisionWebhook", provisionWebhook,
-		"deprovisionWebhook", deprovisionWebhook)
-
-	return provider, provisioning.DefaultStatusPollInterval, nil
-}
-
 // createAAPProvider creates and validates AAP direct provider configuration.
 func createAAPProvider(
 	aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix string,
@@ -238,7 +235,6 @@ func createAAPProvider(
 
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	config := provisioning.ProviderConfig{
-		ProviderType:        provisioning.ProviderTypeAAP,
 		AAPClient:           aapClient,
 		ProvisionTemplate:   provisionTemplate,
 		DeprovisionTemplate: deprovisionTemplate,
@@ -261,72 +257,34 @@ func createAAPProvider(
 	return provider, statusPollInterval, nil
 }
 
-// createProvider creates a provisioning provider based on type.
-func createProvider(
-	providerType provisioning.ProviderType,
-	provisionWebhook, deprovisionWebhook string,
-	aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix string,
-	aapInsecureSkipVerify bool,
-	minimumRequestInterval time.Duration,
-) (provisioning.ProvisioningProvider, time.Duration, error) {
-	switch providerType {
-	case provisioning.ProviderTypeEDA:
-		return createEDAProvider(provisionWebhook, deprovisionWebhook, minimumRequestInterval)
-
-	case provisioning.ProviderTypeAAP:
-		return createAAPProvider(
-			aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-			templatePrefix, aapInsecureSkipVerify,
-		)
-
-	default:
-		return nil, 0, fmt.Errorf("unknown provider type: %s", providerType)
-	}
-}
-
-// createProviderFromEnv creates a provisioning provider by reading shared env vars
-// and optional per-resource-type template overrides. Defaults to AAP direct when no
-// provider type is configured.
-func createProviderFromEnv(
-	provisionWebhookEnv, deprovisionWebhookEnv string,
+// createAAPProviderFromEnv creates an AAP provider by reading shared env vars
+// and optional per-resource-type template overrides.
+func createAAPProviderFromEnv(
 	templateOverrideProvisionEnv, templateOverrideDeprovisionEnv string,
-	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
-	providerType := provisioning.ProviderType(os.Getenv(envProvisioningProvider))
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeAAP
-	}
-	provisionWebhook := os.Getenv(provisionWebhookEnv)
-	deprovisionWebhook := os.Getenv(deprovisionWebhookEnv)
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
 	provisionTemplate := helpers.GetEnvWithDefault(templateOverrideProvisionEnv, os.Getenv(envAAPProvisionTemplate))
 	deprovisionTemplate := helpers.GetEnvWithDefault(templateOverrideDeprovisionEnv, os.Getenv(envAAPDeprovisionTemplate))
 	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
 	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-	return createProvider(
-		providerType,
-		provisionWebhook, deprovisionWebhook,
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix,
-		aapInsecureSkipVerify,
-		minimumRequestInterval,
+	return createAAPProvider(
+		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+		templatePrefix, aapInsecureSkipVerify,
 	)
 }
 
-// setupWebhookController handles the shared flow: feedback setup, provider creation, reconciler setup.
-func setupWebhookController(
-	minimumRequestInterval time.Duration,
-	provisionWebhookEnv, deprovisionWebhookEnv, aapProvisionTemplateEnv, aapDeprovisionTemplateEnv string,
+// setupProvisioningController handles the shared flow: feedback setup, provider creation, reconciler setup.
+func setupProvisioningController(
+	aapProvisionTemplateEnv, aapDeprovisionTemplateEnv string,
 	setupFeedback func() error,
 	setupReconciler func(provisioning.ProvisioningProvider, time.Duration) error,
 ) error {
 	if err := setupFeedback(); err != nil {
 		return err
 	}
-	provider, statusPollInterval, err := createProviderFromEnv(
-		provisionWebhookEnv, deprovisionWebhookEnv,
+	provider, statusPollInterval, err := createAAPProviderFromEnv(
 		aapProvisionTemplateEnv, aapDeprovisionTemplateEnv,
-		minimumRequestInterval,
 	)
 	if err != nil {
 		return err
@@ -344,13 +302,11 @@ func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
-	mgr mcmanager.Manager, grpcConn *grpc.ClientConn, minimumRequestInterval time.Duration,
+	mgr mcmanager.Manager, grpcConn *grpc.ClientConn,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
-	return setupWebhookController(
-		minimumRequestInterval,
-		envClusterCreateWebhook, envClusterDeleteWebhook,
+	return setupProvisioningController(
 		envClusterAAPProvisionTemplate, envClusterAAPDeprovisionTemplate,
 		func() error {
 			if grpcConn == nil {
@@ -377,18 +333,14 @@ func setupClusterControllers(
 func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn *grpc.ClientConn,
-	minimumRequestInterval time.Duration,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	tenantNamespace := os.Getenv(envTenantNamespace)
+	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	targetCluster := targetClusterFromManager(mgr)
-	computeInstanceProvider, statusPollInterval, err := createProviderFromEnv(
-		envComputeInstanceProvisionWebhook, envComputeInstanceDeprovisionWebhook,
-		"", "", // ComputeInstance uses shared AAP templates (no per-resource overrides)
-		minimumRequestInterval,
-	)
+	computeInstanceProvider, statusPollInterval, err := createAAPProviderFromEnv("", "")
 	if err != nil {
 		return fmt.Errorf("create provisioning provider: %w", err)
 	}
@@ -405,6 +357,7 @@ func setupComputeInstanceControllers(
 		mgr,
 		computeInstanceNamespace,
 		tenantNamespace,
+		networkingNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
 		maxJobHistory,
@@ -415,16 +368,79 @@ func setupComputeInstanceControllers(
 	return nil
 }
 
-// setupTenantController registers the Tenant controller.
+// setupTenantController registers the Tenant controller (namespace + UDN only).
 func setupTenantController(mgr mcmanager.Manager) error {
 	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
+
 	if err := (controller.NewTenantReconciler(
 		mgr,
 		tenantNamespace,
 		targetCluster,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
+	}
+	return nil
+}
+
+// setupStorageController registers the OSAC Storage Controller with two AAP
+// provider instances (backend and cluster-storage).
+func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
+	targetCluster := targetClusterFromManager(mgr)
+	tenantNamespace := os.Getenv(envTenantNamespace)
+
+	var backendProvider provisioning.ProvisioningProvider
+	var clusterStorageProvider provisioning.ProvisioningProvider
+	var pollInterval time.Duration
+
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+	if aapURL != "" && aapToken != "" {
+		aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
+
+		backendProvisionTemplate := helpers.GetEnvWithDefault(
+			envStorageBackendProvisionTemplate, "osac-create-tenant-storage-backend")
+		backendDeprovisionTemplate := helpers.GetEnvWithDefault(
+			envStorageBackendDeprovisionTemplate, "osac-delete-tenant-storage-backend")
+		clusterStorageProvisionTemplate := helpers.GetEnvWithDefault(
+			envClusterStorageProvisionTemplate, "osac-create-tenant-cluster-storage")
+		clusterStorageDeprovisionTemplate := helpers.GetEnvWithDefault(
+			envClusterStorageDeprovisionTemplate, "osac-delete-tenant-cluster-storage")
+
+		var err error
+		backendProvider, pollInterval, err = createAAPProvider(
+			aapURL, aapToken, backendProvisionTemplate, backendDeprovisionTemplate,
+			"", aapInsecureSkipVerify,
+		)
+		if err != nil {
+			return fmt.Errorf("storage backend provider: %w", err)
+		}
+
+		clusterStorageProvider, _, err = createAAPProvider(
+			aapURL, aapToken, clusterStorageProvisionTemplate, clusterStorageDeprovisionTemplate,
+			"", aapInsecureSkipVerify,
+		)
+		if err != nil {
+			return fmt.Errorf("cluster storage provider: %w", err)
+		}
+
+		setupLog.Info("storage provisioning configured",
+			"backendProvision", backendProvisionTemplate,
+			"backendDeprovision", backendDeprovisionTemplate,
+			"clusterStorageProvision", clusterStorageProvisionTemplate,
+			"clusterStorageDeprovision", clusterStorageDeprovisionTemplate)
+	}
+
+	if err := (controller.NewStorageReconciler(
+		mgr,
+		tenantNamespace,
+		targetCluster,
+		backendProvider,
+		clusterStorageProvider,
+		pollInterval,
+		maxJobHistory,
+	)).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("storage controller: %w", err)
 	}
 	return nil
 }
@@ -442,6 +458,7 @@ func setupNetworkingControllers(
 
 	// Get namespace from environment (single namespace for all networking resources)
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
+	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 
 	// Get provider configuration
 	aapURL := os.Getenv(envAAPURL)
@@ -455,6 +472,24 @@ func setupNetworkingControllers(
 	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	networkingProvider := provisioning.NewAAPProviderWithPrefix(aapClient, templatePrefix)
+
+	// Create a dedicated provider for PublicIP attach/detach operations.
+	// Uses explicit template names because TriggerProvision hardcodes action="create"
+	// and TriggerDeprovision hardcodes action="delete" in resolveTemplateName. Explicit
+	// names bypass the action resolution so TriggerProvision maps to
+	// {prefix}-attach-public-ip and TriggerDeprovision maps to {prefix}-detach-public-ip.
+	// This provider is shared between the PublicIP controller (inline attach/detach, to be
+	// removed in OSAC-836) and the PublicIPAttachment controller.
+	// Poll interval is discarded (_) because we reuse statusPollInterval from the
+	// shared networking setup above.
+	publicIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
+		AAPClient:           aapClient,
+		ProvisionTemplate:   fmt.Sprintf("%s-attach-public-ip", templatePrefix),
+		DeprovisionTemplate: fmt.Sprintf("%s-detach-public-ip", templatePrefix),
+	})
+	if err != nil {
+		return fmt.Errorf("publicip attachment provider: %w", err)
+	}
 
 	// Setup VirtualNetwork controller and feedback
 	if grpcConn != nil {
@@ -524,11 +559,20 @@ func setupNetworkingControllers(
 		return fmt.Errorf("publicippool controller: %w", err)
 	}
 
-	// Setup PublicIP controller
-	if err := controller.NewPublicIPReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
-		maxJobHistory, targetCluster,
+	// Setup PublicIP controller (allocation/deallocation only; attach/detach is in PublicIPAttachment)
+	if err := controller.NewPublicIPReconciler(
+		mgr, networkingNamespace,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
+	}
+
+	// Setup PublicIPAttachment controller (uses the same attach/detach provider as PublicIP)
+	if err := controller.NewPublicIPAttachmentReconciler(
+		mgr, networkingNamespace, computeInstanceNamespace,
+		publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("publicipattachment controller: %w", err)
 	}
 
 	// Setup PublicIP feedback controller
@@ -542,6 +586,106 @@ func setupNetworkingControllers(
 		}
 	}
 
+	// Setup PublicIPAttachment feedback controller
+	if grpcConn != nil {
+		if err := controller.NewPublicIPAttachmentFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("publicipattachment feedback controller: %w", err)
+		}
+	}
+
+	// Create a dedicated provider for ExternalIP attach/detach operations.
+	externalIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
+		AAPClient:           aapClient,
+		ProvisionTemplate:   fmt.Sprintf("%s-attach-external-ip", templatePrefix),
+		DeprovisionTemplate: fmt.Sprintf("%s-detach-external-ip", templatePrefix),
+	})
+	if err != nil {
+		return fmt.Errorf("externalip attachment provider: %w", err)
+	}
+
+	// Setup ExternalIPPool controller and feedback
+	if grpcConn != nil {
+		if err := controller.NewExternalIPPoolFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("externalippool feedback controller: %w", err)
+		}
+	}
+
+	if err := controller.NewExternalIPPoolReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("externalippool controller: %w", err)
+	}
+
+	// Setup ExternalIP controller
+	if err := controller.NewExternalIPReconciler(
+		mgr, networkingNamespace,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("externalip controller: %w", err)
+	}
+
+	// Setup ExternalIPAttachment controller
+	if err := controller.NewExternalIPAttachmentReconciler(
+		mgr, networkingNamespace, computeInstanceNamespace,
+		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("externalipattachment controller: %w", err)
+	}
+
+	// Setup ExternalIP feedback controller
+	if grpcConn != nil {
+		if err := controller.NewExternalIPFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("externalip feedback controller: %w", err)
+		}
+	}
+
+	// Setup ExternalIPAttachment feedback controller
+	if grpcConn != nil {
+		if err := controller.NewExternalIPAttachmentFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("externalipattachment feedback controller: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// setupBareMetalInstanceControllers registers the BareMetalInstance feedback controller
+// when a gRPC connection to the fulfillment service is available.
+func setupBareMetalInstanceControllers(
+	mgr mcmanager.Manager,
+	grpcConn *grpc.ClientConn,
+) error {
+	localMgr := mgr.GetLocalManager()
+	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
+	if bareMetalInstanceNamespace == "" {
+		bareMetalInstanceNamespace = controller.DefaultBareMetalInstanceNamespace
+	}
+
+	if grpcConn != nil {
+		if err := (controller.NewBareMetalInstanceFeedbackReconciler(
+			localMgr.GetClient(),
+			grpcConn,
+			bareMetalInstanceNamespace,
+		)).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("baremetalinstance feedback controller: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -558,7 +702,6 @@ func main() {
 	var grpcTokenFile string
 	var fulfillmentServerAddress string
 	var remoteClusterKubeconfig string
-	var minimumRequestInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -593,12 +736,6 @@ func main() {
 		os.Getenv("OSAC_FULFILLMENT_SERVER_ADDRESS"),
 		"Address of the fulfillment server.",
 	)
-	flag.DurationVar(
-		&minimumRequestInterval,
-		"minimum-request-interval",
-		helpers.GetEnvWithDefault("OSAC_MINIMUM_REQUEST_INTERVAL", time.Duration(0)),
-		"Minimum amount of time between calls to the same webook url",
-	)
 	flag.StringVar(
 		&remoteClusterKubeconfig,
 		"remote-cluster-kubeconfig",
@@ -619,6 +756,10 @@ func main() {
 
 	if remoteClusterKubeconfig != "" && ctrlFlags.Cluster {
 		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with cluster controller")
+		os.Exit(1)
+	}
+	if remoteClusterKubeconfig != "" && ctrlFlags.BareMetalInstance {
+		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with bare metal instance controller")
 		os.Exit(1)
 	}
 
@@ -677,6 +818,7 @@ func main() {
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
 			ctrlFlags.Networking,
+			ctrlFlags.BareMetalInstance,
 		)
 	} else {
 		remoteScheme = runtime.NewScheme()
@@ -692,7 +834,9 @@ func main() {
 		remoteProvider = single.New(remoteClusterName, remoteCluster)
 	}
 
-	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), remoteProvider, manager.Options{
+	cfg := ctrl.GetConfigOrDie()
+
+	mgr, err := mcmanager.New(cfg, remoteProvider, manager.Options{
 		Scheme:                 localScheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -736,13 +880,13 @@ func main() {
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if ctrlFlags.Cluster {
-		if err := setupClusterControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
+		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup cluster controllers")
 			os.Exit(1)
 		}
 	}
 	if ctrlFlags.ComputeInstance {
-		if err := setupComputeInstanceControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
+		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup computeinstance controllers")
 			os.Exit(1)
 		}
@@ -753,14 +897,38 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if ctrlFlags.Storage {
+		if err := setupStorageController(mgr, maxJobHistory); err != nil {
+			setupLog.Error(err, "unable to setup storage controller")
+			os.Exit(1)
+		}
+	}
 	if ctrlFlags.Networking {
 		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup networking controllers")
 			os.Exit(1)
 		}
 	}
+	if ctrlFlags.BareMetalInstance {
+		if err := setupBareMetalInstanceControllers(mgr, grpcConn); err != nil {
+			setupLog.Error(err, "unable to setup baremetalinstance controllers")
+			os.Exit(1)
+		}
+	}
 
 	// +kubebuilder:scaffold:builder
+
+	// Register data migrations as a leader-election runnable.
+	// Migrations run once after this instance becomes leader.
+	migrationClient, err := client.New(cfg, client.Options{})
+	if err != nil {
+		setupLog.Error(err, "unable to create client for migrations")
+		os.Exit(1)
+	}
+	if err := mgr.GetLocalManager().Add(migrations.NewRunnable(migrationClient)); err != nil {
+		setupLog.Error(err, "unable to register migrations")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

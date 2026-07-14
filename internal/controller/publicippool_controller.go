@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -34,7 +35,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -129,9 +130,8 @@ func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.
 
 	if !equality.Semantic.DeepEqual(pool.Status, *oldstatus) {
 		log.Info("status requires update")
-		if updateErr := r.Status().Update(ctx, pool); updateErr != nil {
-			log.Error(updateErr, "failed to update status")
-			return res, updateErr
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status); err != nil {
+			return res, err
 		}
 	}
 
@@ -178,15 +178,15 @@ func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha
 	v1alpha1.SetPublicIPPoolStatusCondition(pool, metav1.Condition{
 		Type:               string(v1alpha1.PublicIPPoolConditionConfigurationApplied),
 		Status:             metav1.ConditionTrue,
-		Reason:             "ConfigurationApplied",
-		Message:            "Controller has processed the current spec",
+		Reason:             conditionReasonConfigurationApplied,
+		Message:            conditionMessageConfigurationApplied,
 		LastTransitionTime: metav1.Now(),
 	})
 
 	// Set phase to Progressing on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if pool.Status.Phase == "" || (pool.Status.Phase == v1alpha1.PublicIPPoolPhaseReady &&
-		!provisioning.IsConfigApplied(&pool.Status.Jobs, pool.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&pool.Status.ProvisioningJobs, pool.Status.DesiredConfigVersion)) {
 		pool.Status.Phase = v1alpha1.PublicIPPoolPhaseProgressing
 	}
 
@@ -231,7 +231,7 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&provisioning.State{Jobs: &pool.Status.Jobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &pool.Status.ProvisioningJobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { pool.Status.Phase = v1alpha1.PublicIPPoolPhaseFailed },
@@ -239,9 +239,13 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.PublicIPPool{})
+				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.PublicIPPool{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.PublicIPPool).Status.ProvisioningJobs
+				})
 		},
-		func() error { return r.Status().Update(ctx, pool) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status)
+		},
 	)
 }
 
@@ -249,94 +253,28 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 // and polls its status. On failure, it either blocks deletion (to prevent orphaned
 // resources) or allows the process to continue, depending on provider policy.
 func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// If no provider configured, skip deprovisioning
 	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping deprovisioning")
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-
-	// Check if we already have a deprovision job
-	latestDeprovisionJob := provisioning.FindLatestJobByType(pool.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	// Trigger deprovisioning
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
-		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-
-		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, pool)
-		if err != nil {
-			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-
-		// Handle provider action
-		switch result.Action {
-		case provisioning.DeprovisionWaiting:
-			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-		case provisioning.DeprovisionSkipped:
-			log.Info("provider skipped deprovisioning")
-			return ctrl.Result{}, nil
-
-		case provisioning.DeprovisionTriggered:
-			newJob := v1alpha1.JobStatus{
-				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.NewTime(time.Now().UTC()),
-				State:                  v1alpha1.JobStatePending,
-				Message:                "Deprovisioning job triggered",
-				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
-			}
-			pool.Status.Jobs = provisioning.AppendJob(pool.Status.Jobs, newJob, r.MaxJobHistory)
-			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, pool,
+		&pool.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
 	}
-
-	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, pool, latestDeprovisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
-		updatedJob := *latestDeprovisionJob
-		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(pool.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update job status
-	updatedJob := *latestDeprovisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(pool.Status.Jobs, updatedJob)
-
-	// If job is still running, requeue
-	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Job reached terminal state
-	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
-		return ctrl.Result{}, nil
-	}
-
-	// Job failed or was canceled, check policy
-	if latestDeprovisionJob.BlockDeletionOnFailure {
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	log.Info("deprovision job did not succeed, allowing process to continue",
-		"jobID", latestDeprovisionJob.JobID,
-		"state", status.State,
-		"message", updatedJob.Message)
 	return ctrl.Result{}, nil
+}
+
+// updateStatusWithRetry updates the public IP pool status with retry on conflict.
+func (r *PublicIPPoolReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.PublicIPPoolStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.PublicIPPool{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager registers this controller with the multicluster manager.

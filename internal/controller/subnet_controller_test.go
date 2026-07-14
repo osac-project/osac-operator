@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,7 +30,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 var _ = Describe("SubnetReconciler", func() {
@@ -148,6 +149,49 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(updatedSubnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseProgressing))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}}
+
+			// First reconcile: adds finalizer + sets annotation, returns early
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.Subnet{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/subnet-feedback")
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Second reconcile: triggers job — the concurrent modification
+			// must not prevent the job from being recorded in status.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted to the API server
+			updatedSubnet := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, updatedSubnet)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updatedSubnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should requeue when parent VirtualNetwork not found", func() {
 			// Create subnet with non-existent parent
 			subnetNoParent := &osacv1alpha1.Subnet{
@@ -252,6 +296,45 @@ var _ = Describe("SubnetReconciler", func() {
 			// Cleanup
 			_ = k8sClient.Delete(ctx, unmanagedSubnet)
 		})
+
+		It("should still handle delete for unmanaged subnet with finalizer", func() {
+			managedThenUnmanaged := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-then-unmanaged",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+					Finalizers: []string{osacSubnetFinalizer},
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "test-vnet-uuid",
+					IPv4CIDR:       "10.0.5.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
+
+			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: managedThenUnmanaged.Namespace}
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			Expect(k8sClient.Delete(ctx, managedThenUnmanaged)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.Subnet{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
 	})
 
 	Context("handleProvisioning", func() {
@@ -272,7 +355,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("test-job-123"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -280,7 +363,7 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("should trigger new job when previous job failed", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersionNew
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "old-failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -303,14 +386,14 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("new-job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
 		})
 
 		It("should poll job status when job exists", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "existing-job-789",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -332,12 +415,12 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
 		It("should set phase to Ready when job succeeds", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-101",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -362,7 +445,7 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should set phase to Failed when job fails", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-202",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -390,7 +473,7 @@ var _ = Describe("SubnetReconciler", func() {
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -409,7 +492,7 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("should skip when config already applied", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "succeeded-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -438,20 +521,20 @@ var _ = Describe("SubnetReconciler", func() {
 					State:     osacv1alpha1.JobStatePending,
 					Message:   "Job triggered",
 				}
-				subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
+				subnet.Status.ProvisioningJobs = provisioning.AppendJob(subnet.Status.ProvisioningJobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only have last 3 jobs
-			Expect(subnet.Status.Jobs).To(HaveLen(3))
-			Expect(subnet.Status.Jobs[0].JobID).To(Equal("job-3"))
-			Expect(subnet.Status.Jobs[1].JobID).To(Equal("job-4"))
-			Expect(subnet.Status.Jobs[2].JobID).To(Equal("job-5"))
+			Expect(subnet.Status.ProvisioningJobs).To(HaveLen(3))
+			Expect(subnet.Status.ProvisioningJobs[0].JobID).To(Equal("job-3"))
+			Expect(subnet.Status.ProvisioningJobs[1].JobID).To(Equal("job-4"))
+			Expect(subnet.Status.ProvisioningJobs[2].JobID).To(Equal("job-5"))
 		})
 	})
 
 	Context("handleDeprovisioning", func() {
 		It("should trigger deprovisioning when no deprovision job exists", func() {
-			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
 					Action:                 provisioning.DeprovisionTriggered,
 					JobID:                  "deprovision-job-303",
@@ -463,14 +546,14 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())
 		})
 
 		It("should skip deprovisioning when provider returns DeprovisionSkipped", func() {
-			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
 					Action: provisioning.DeprovisionSkipped,
 				}, nil
@@ -482,7 +565,7 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should poll deprovision job status", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "deprovision-running-404",
 					Type:      osacv1alpha1.JobTypeDeprovision,
@@ -505,8 +588,8 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 		})
 
-		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+		It("should wait for backoff when deprovision fails with BlockDeletionOnFailure", func() {
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:                  "deprovision-failed-505",
 					Type:                   osacv1alpha1.JobTypeDeprovision,
@@ -527,7 +610,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 			result, err := reconciler.handleDeprovisioning(ctx, subnet)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay))
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		})
 	})
 })
@@ -536,7 +620,7 @@ var _ = Describe("SubnetReconciler", func() {
 type mockSubnetProvider struct {
 	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
 	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error)
+	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
 }
 
@@ -562,9 +646,9 @@ func (m *mockSubnetProvider) GetProvisionStatus(ctx context.Context, resource cl
 	}, nil
 }
 
-func (m *mockSubnetProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+func (m *mockSubnetProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 	if m.triggerDeprovisionFunc != nil {
-		return m.triggerDeprovisionFunc(ctx, resource)
+		return m.triggerDeprovisionFunc(ctx, resource, provisionJobs)
 	}
 	return &provisioning.DeprovisionResult{
 		Action:                 provisioning.DeprovisionTriggered,

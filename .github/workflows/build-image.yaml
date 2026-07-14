@@ -6,10 +6,12 @@ on:
   push:
     branches:
     - main
+    tags:
+    - 'v*'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Use docker.io for Docker Hub if empty
@@ -22,9 +24,11 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -36,8 +40,15 @@ jobs:
         with:
           install_only: true
 
-      - name: Run all tests
+      - name: Run unit tests
         run: make test
+
+      - name: Validate kustomize configurations
+        run: make test-kustomize
+
+      - name: Run smoke test
+        timeout-minutes: 15
+        run: make test-smoke
 
   build:
     needs: test
@@ -48,7 +59,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Login against a Docker registry except on PR
       # https://github.com/docker/login-action

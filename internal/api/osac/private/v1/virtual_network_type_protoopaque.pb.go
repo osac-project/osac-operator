@@ -128,7 +128,7 @@ func (x VirtualNetworkState) Number() protoreflect.EnumNumber {
 //
 // The selected NetworkClass must support the requested IP addressing mode via its capabilities.
 //
-// Tenant isolation is enforced via the standard Metadata tenants field. VirtualNetworks are scoped to
+// Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
 // a single region and cannot span multiple regions.
 type VirtualNetwork struct {
 	state               protoimpl.MessageState `protogen:"opaque.v1"`
@@ -247,7 +247,7 @@ type VirtualNetwork_builder struct {
 
 	// Unique identifier of the virtual network.
 	Id string
-	// Metadata of the virtual network, including name, labels, tenants, and timestamps.
+	// Metadata of the virtual network, including name, labels, tenant, and timestamps.
 	Metadata *Metadata
 	// Desired configuration of the virtual network (user-modifiable).
 	Spec *VirtualNetworkSpec

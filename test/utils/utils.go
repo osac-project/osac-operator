@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -51,12 +52,6 @@ func InstallPrometheusOperator() error {
 func Run(cmd *exec.Cmd) ([]byte, error) {
 	dir, _ := GetProjectDir()
 	cmd.Dir = dir
-
-	if err := os.Chdir(cmd.Dir); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %s\n", err)
-	}
-
-	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	command := strings.Join(cmd.Args, " ")
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %s\n", command)
 	output, err := cmd.CombinedOutput()
@@ -104,15 +99,50 @@ func InstallCertManager() error {
 	return err
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local container image to the kind cluster.
+// When podman is the container tool, it uses `podman save | kind load image-archive`
+// because `kind load docker-image` does not work with podman-built images.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := "kind"
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
-	cmd := exec.Command("kind", kindOptions...)
+
+	containerTool := detectContainerTool()
+	if containerTool == "podman" {
+		return loadImageViaArchive(name, cluster, containerTool)
+	}
+
+	cmd := exec.Command("kind", "load", "docker-image", name, "--name", cluster)
 	_, err := Run(cmd)
+	return err
+}
+
+func detectContainerTool() string {
+	if v, ok := os.LookupEnv("CONTAINER_TOOL"); ok {
+		return v
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		return "podman"
+	}
+	return "docker"
+}
+
+func loadImageViaArchive(name, cluster, tool string) error {
+	f, err := os.CreateTemp("", "kind-image-*.tar")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	_ = f.Close()
+
+	cmd := exec.Command(tool, "save", name, "-o", f.Name())
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+
+	cmd = exec.Command("kind", "load", "image-archive", f.Name(), "--name", cluster)
+	_, err = Run(cmd)
 	return err
 }
 
@@ -120,8 +150,8 @@ func LoadImageToKindClusterWithName(name string) error {
 // according to line breakers, and ignores the empty elements in it.
 func GetNonEmptyLines(output string) []string {
 	var res []string
-	elements := strings.Split(output, "\n")
-	for _, element := range elements {
+	elements := strings.SplitSeq(output, "\n")
+	for element := range elements {
 		if element != "" {
 			res = append(res, element)
 		}
@@ -132,10 +162,18 @@ func GetNonEmptyLines(output string) []string {
 
 // GetProjectDir will return the directory where the project is
 func GetProjectDir() (string, error) {
-	wd, err := os.Getwd()
+	dir, err := os.Getwd()
 	if err != nil {
-		return wd, err
+		return "", err
 	}
-	wd = strings.ReplaceAll(wd, "/test/e2e", "")
-	return wd, nil
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("could not find project root (no go.mod)")
+		}
+		dir = parent
+	}
 }

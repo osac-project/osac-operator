@@ -239,12 +239,12 @@ func (t *computeInstanceFeedbackReconcilerTask) handleDelete(ctx context.Context
 	t.syncState(ctx)
 }
 
-// syncState synchronizes the CR's conditions, phase, IP address, and last
+// syncState synchronizes the CR's conditions, phase, IP addresses, and last
 // restarted time to the fulfillment service's compute instance record.
 func (t *computeInstanceFeedbackReconcilerTask) syncState(ctx context.Context) {
 	t.syncConditions(ctx)
 	t.syncPhase(ctx)
-	t.syncIPAddress()
+	t.syncIPAddresses()
 	t.syncLastRestartedAt()
 }
 
@@ -407,17 +407,9 @@ func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kin
 	return condition
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncIPAddress() {
-	// Prefer floating IP from annotation (set by external networking component)
-	ipAddress, ok := t.object.Annotations[osacVirualMachineFloatingIPAddressAnnotation]
-	if ok && ipAddress != "" {
-		t.ci.GetStatus().SetIpAddress(ipAddress)
-		return
-	}
-	// Fall back to the VM's internal IP from CR status
-	if t.object.Status.IPAddress != "" {
-		t.ci.GetStatus().SetIpAddress(t.object.Status.IPAddress)
-	}
+func (t *computeInstanceFeedbackReconcilerTask) syncIPAddresses() {
+	t.ci.GetStatus().SetPublicIpAddress(t.object.Status.PublicIPAddress)
+	t.ci.GetStatus().SetInternalIpAddress(t.object.Status.IPAddress)
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncLastRestartedAt() {

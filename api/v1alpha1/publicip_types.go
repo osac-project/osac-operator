@@ -28,12 +28,6 @@ type PublicIPSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="pool is immutable"
 	Pool string `json:"pool"`
-
-	// ComputeInstance is the optional name of the ComputeInstance this IP is attached to.
-	// Setting this field triggers attachment of the IP to the referenced instance.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MinLength=1
-	ComputeInstance string `json:"computeInstance,omitempty"`
 }
 
 // PublicIPPhaseType is a valid value for .status.phase
@@ -63,16 +57,7 @@ const (
 	// PublicIPStateAllocated means the IP has been allocated from the pool
 	PublicIPStateAllocated PublicIPStateType = "Allocated"
 
-	// PublicIPStateAttaching means the IP is being attached to a ComputeInstance
-	PublicIPStateAttaching PublicIPStateType = "Attaching"
-
-	// PublicIPStateAttached means the IP is attached to a ComputeInstance
-	PublicIPStateAttached PublicIPStateType = "Attached"
-
-	// PublicIPStateReleasing means the IP is being released back to the pool
-	PublicIPStateReleasing PublicIPStateType = "Releasing"
-
-	// PublicIPStateFailed means provisioning or release failed
+	// PublicIPStateFailed means provisioning failed
 	PublicIPStateFailed PublicIPStateType = "Failed"
 )
 
@@ -88,9 +73,9 @@ type PublicIPStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the PublicIP
 	// +kubebuilder:validation:Optional
@@ -103,8 +88,12 @@ type PublicIPStatus struct {
 	// State tracks the attachment lifecycle of the PublicIP
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Pending;Allocated;Attaching;Attached;Releasing;Failed
+	// +kubebuilder:validation:Enum=Pending;Allocated;Failed
 	State PublicIPStateType `json:"state,omitempty"`
+
+	// Attached indicates whether a PublicIPAttachment has successfully attached this IP to a target.
+	// +kubebuilder:validation:Optional
+	Attached bool `json:"attached,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -146,4 +135,3 @@ type PublicIPList struct {
 func (p *PublicIP) GetName() string {
 	return p.ObjectMeta.Name
 }
-

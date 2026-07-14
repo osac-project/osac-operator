@@ -17,3 +17,16 @@ spec:
   memoryGiB: 4
   runStrategy: Always
   templateID: osac.templates.ocp_virt_vm
+  # Network configuration using networkAttachments (recommended for multi-NIC VMs).
+  # The first attachment determines VM placement (subnet namespace).
+  #
+  # Immutability rules enforced by CRD validation:
+  # - subnetRef: IMMUTABLE - cannot change subnet after creation
+  # - securityGroupRefs: MUTABLE - can add/remove security groups
+  # - Cannot add or remove network attachments (array size is immutable)
+  # - Maximum 8 network attachments per instance
+  networkAttachments:
+    - subnetRef: my-subnet
+      securityGroupRefs:
+        - web-sg
+        - monitoring-sg

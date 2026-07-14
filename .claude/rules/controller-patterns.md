@@ -6,7 +6,7 @@ Each resource has two controllers:
 
 ```text
 Resource Controller                    Feedback Controller
-- Provisions via AAP/EDA               - Syncs CR state → fulfillment-service
+- Provisions via AAP                   - Syncs CR state → fulfillment-service
 - Manages finalizers and deletion       - Converts K8s Phase → proto State
 - Updates Phase, Conditions, etc.       - Sends Signal RPC on deletion
 ```

@@ -1,0 +1,697 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
+
+	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
+)
+
+var _ = Describe("PublicIPAttachmentReconciler", func() {
+	const (
+		testNetworkingNamespace      = "test-networking"
+		testComputeInstanceNamespace = "test-ci"
+		testPoolUUID                 = "pool-uuid-123"
+		testPublicIPUUID             = "pip-uuid-789"
+		testCIUUID                   = "ci-uuid-456"
+		testCIName                   = "test-ci-1"
+		testPublicIPName             = "test-pip"
+		testAttachmentName           = "test-attachment"
+		testVMNamespace              = "subnet-abc123"
+	)
+
+	var (
+		reconciler   *PublicIPAttachmentReconciler
+		mockProvider *mockProvisioningProvider
+		fakeClient   client.Client
+		testCtx      context.Context
+		testScheme   *runtime.Scheme
+		attachment   *osacv1alpha1.PublicIPAttachment
+		publicIP     *osacv1alpha1.PublicIP
+		pool         *osacv1alpha1.PublicIPPool
+		ci           *osacv1alpha1.ComputeInstance
+		key          types.NamespacedName
+	)
+
+	buildClient := func(objs ...client.Object) client.Client {
+		return fake.NewClientBuilder().
+			WithScheme(testScheme).
+			WithObjects(objs...).
+			WithStatusSubresource(
+				&osacv1alpha1.PublicIPAttachment{},
+				&osacv1alpha1.PublicIP{},
+				&osacv1alpha1.ComputeInstance{},
+			).
+			Build()
+	}
+
+	BeforeEach(func() {
+		testCtx = context.TODO()
+		testScheme = runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+		Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+		pool = &osacv1alpha1.PublicIPPool{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pool",
+				Namespace: testNetworkingNamespace,
+				Labels: map[string]string{
+					osacPublicIPPoolIDLabel: testPoolUUID,
+				},
+			},
+			Spec: osacv1alpha1.PublicIPPoolSpec{
+				CIDRs:                  []string{"192.168.1.0/24"},
+				IPFamily:               "IPv4",
+				ImplementationStrategy: "metallb-l2",
+			},
+		}
+
+		publicIP = &osacv1alpha1.PublicIP{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testPublicIPName,
+				Namespace: testNetworkingNamespace,
+				Labels: map[string]string{
+					osacPublicIPIDLabel: testPublicIPUUID,
+				},
+			},
+			Spec: osacv1alpha1.PublicIPSpec{
+				Pool: testPoolUUID,
+			},
+		}
+
+		ci = &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testCIName,
+				Namespace: testComputeInstanceNamespace,
+				Labels: map[string]string{
+					osacComputeInstanceIDLabel: testCIUUID,
+				},
+			},
+			Status: osacv1alpha1.ComputeInstanceStatus{
+				VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
+					Namespace:                  testVMNamespace,
+					KubeVirtVirtualMachineName: "test-vm",
+				},
+			},
+		}
+
+		attachment = &osacv1alpha1.PublicIPAttachment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testAttachmentName,
+				Namespace: testNetworkingNamespace,
+			},
+			Spec: osacv1alpha1.PublicIPAttachmentSpec{
+				PublicIP:        testPublicIPUUID,
+				ComputeInstance: ptr.To(testCIUUID),
+			},
+		}
+
+		key = types.NamespacedName{Name: testAttachmentName, Namespace: testNetworkingNamespace}
+
+		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
+	})
+
+	setupReconciler := func(c client.Client) {
+		reconciler = &PublicIPAttachmentReconciler{
+			Client:                   c,
+			APIReader:                c,
+			Scheme:                   testScheme,
+			NetworkingNamespace:      testNetworkingNamespace,
+			ComputeInstanceNamespace: testComputeInstanceNamespace,
+			ProvisioningProvider:     mockProvider,
+			StatusPollInterval:       1 * time.Second,
+			MaxJobHistory:            10,
+		}
+	}
+
+	reconcileOnce := func() (ctrl.Result, error) {
+		return reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+	}
+
+	Context("Reconcile basics", func() {
+		It("should add finalizer on first reconcile", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			_, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Finalizers).To(ContainElement(osacPublicIPAttachmentFinalizer))
+		})
+
+		It("should set phase to Progressing initially", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseProgressing))
+		})
+
+		It("should ignore resource with management-state unmanaged", func() {
+			attachment.Annotations = map[string]string{
+				osacManagementStateAnnotation: ManagementStateUnmanaged,
+			}
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			_, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Finalizers).To(BeEmpty())
+			Expect(updated.Status.Phase).To(BeEmpty())
+		})
+	})
+
+	Context("Parent resolution", func() {
+		It("should requeue when parent PublicIP not found", func() {
+			fakeClient = buildClient(attachment, pool, ci) // no publicIP
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when parent PublicIPPool not found", func() {
+			poolless := publicIP.DeepCopy()
+			poolless.Spec.Pool = "nonexistent-uuid"
+			fakeClient = buildClient(attachment, poolless, ci) // pool UUID won't match
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when ComputeInstance not found", func() {
+			fakeClient = buildClient(attachment, publicIP, pool) // no CI
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when CI has no VirtualMachineReference", func() {
+			ciNoVM := ci.DeepCopy()
+			ciNoVM.Status.VirtualMachineReference = nil
+			fakeClient = buildClient(attachment, publicIP, pool, ciNoVM)
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+	})
+
+	Context("Annotation sync", func() {
+		It("should set implementation-strategy, pool-name, and target-namespace annotations", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = reconcileOnce() // finalizer
+			_, _ = reconcileOnce() // annotations + provisioning
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			Expect(updated.Annotations[osacPublicIPPoolNameAnnotation]).To(Equal("test-pool"))
+			Expect(updated.Annotations[osacPublicIPNameAnnotation]).To(Equal(testPublicIPName))
+			Expect(updated.Annotations[osacPublicIPTargetNamespaceAnnotation]).To(Equal(testVMNamespace))
+		})
+
+		It("should use default implementation strategy when pool has none", func() {
+			pool.Spec.ImplementationStrategy = ""
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultPublicIPPoolImplementationStrategy))
+		})
+	})
+
+	Context("Provisioning lifecycle", func() {
+		It("should set phase to Ready on successful provision", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			// Set address on PublicIP so onProvisionSuccess can propagate it
+			pip := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Address = "192.168.1.10"
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			// Pass 1: finalizer, Pass 2: annotations + trigger, Pass 3: poll -> Ready
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseReady))
+		})
+
+		It("should set PublicIP.status.attached on provision success", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			pip := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Address = "192.168.1.10"
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updatedPIP := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
+			Expect(updatedPIP.Status.Attached).To(BeTrue())
+		})
+
+		It("should set ComputeInstance.status.publicIPAddress on provision success", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			pip := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Address = "192.168.1.10"
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.GetPublicIPAddress()).To(Equal("192.168.1.10"))
+		})
+
+		It("should set phase to Failed on provision failure", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateFailed, Message: "MetalLB unreachable",
+				}, nil
+			}
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseFailed))
+		})
+
+		It("should set ConfigurationApplied condition", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce()
+			_, _ = reconcileOnce()
+
+			updated := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			condition := osacv1alpha1.GetPublicIPAttachmentStatusCondition(
+				updated, osacv1alpha1.PublicIPAttachmentConditionConfigurationApplied,
+			)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
+
+	Context("Deprovisioning (delete)", func() {
+		It("should set phase Deleting and trigger deprovision", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			deprovisionCalled := false
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalled = true
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionTriggered,
+					JobID:  "detach-job-1",
+				}, nil
+			}
+
+			// Add finalizer
+			_, _ = reconcileOnce()
+
+			toDelete := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			_, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalled).To(BeTrue())
+			Expect(toDelete.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseDeleting))
+		})
+
+		It("should remove finalizer after successful deprovision", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionTriggered,
+					JobID:  "detach-success",
+				}, nil
+			}
+			mockProvider.getDeprovisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			_, _ = reconcileOnce() // finalizer
+
+			toDelete := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			// First: trigger deprovision job
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+			// Second: poll status -> success -> remove finalizer
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+
+			Expect(toDelete.Finalizers).NotTo(ContainElement(osacPublicIPAttachmentFinalizer))
+		})
+
+		It("should clear PublicIP.status.attached on deprovision", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			// Set attached=true on PublicIP
+			pip := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Attached = true
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			_, _ = reconcileOnce() // finalizer
+
+			toDelete := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+
+			updatedPIP := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
+			Expect(updatedPIP.Status.Attached).To(BeFalse())
+		})
+
+		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  "detach-fail",
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+			mockProvider.getDeprovisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateFailed, Message: "failed",
+				}, nil
+			}
+
+			_, _ = reconcileOnce() // finalizer
+
+			toDelete := &osacv1alpha1.PublicIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			_, _ = reconciler.handleDelete(testCtx, toDelete)       // trigger
+			result, _ := reconciler.handleDelete(testCtx, toDelete) // poll -> failed -> block
+
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(toDelete.Finalizers).To(ContainElement(osacPublicIPAttachmentFinalizer))
+		})
+	})
+
+	Context("CI detach finalizer management", func() {
+		It("should add detach finalizer to CI during handleUpdate", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = reconcileOnce() // finalizer
+			_, _ = reconcileOnce() // parent resolve + CI finalizer
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
+		})
+
+		It("should remove detach finalizer when no other attachments reference the CI", func() {
+			ci.Finalizers = []string{osacPublicIPDetachFinalizer}
+			fakeClient = buildClient(ci)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).NotTo(ContainElement(osacPublicIPDetachFinalizer))
+		})
+
+		It("should keep detach finalizer when other attachments reference the CI", func() {
+			otherAttachment := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "other-pip",
+					ComputeInstance: ptr.To(testCIUUID),
+				},
+			}
+			ci.Finalizers = []string{osacPublicIPDetachFinalizer}
+			fakeClient = buildClient(ci, otherAttachment)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, testAttachmentName)
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
+		})
+
+		It("should keep detach finalizer when other PublicIPAttachments still reference the CI", func() {
+			excludedAttachment := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "excluded-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "excluded-pip",
+					ComputeInstance: ptr.To(testCIUUID),
+				},
+			}
+			remainingAttachment := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "remaining-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "remaining-pip",
+					ComputeInstance: ptr.To(testCIUUID),
+				},
+			}
+			ci.Finalizers = []string{osacPublicIPDetachFinalizer}
+			fakeClient = buildClient(ci, excludedAttachment, remainingAttachment)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "excluded-attachment")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
+		})
+	})
+
+	Context("Auto-detach (CI deletion)", func() {
+		It("should delete PublicIPAttachment when CI is being deleted", func() {
+			// The fake client does not support setting DeletionTimestamp via Create,
+			// so we test resolveComputeInstance directly with an in-memory CI that
+			// has DeletionTimestamp set.
+			deletingCI := ci.DeepCopy()
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+			deletingCI.Finalizers = []string{osacPublicIPDetachFinalizer}
+
+			attachment.Finalizers = []string{osacPublicIPAttachmentFinalizer}
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			// Patch the CI in the fake client to add the finalizer (so it can be
+			// "deleted" with DeletionTimestamp), then call resolveComputeInstance
+			// with an in-memory CI that has DeletionTimestamp set.
+			fetchedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), fetchedCI)).To(Succeed())
+			fetchedCI.Finalizers = []string{osacPublicIPDetachFinalizer}
+			Expect(fakeClient.Update(testCtx, fetchedCI)).To(Succeed())
+
+			// Verify the map function returns the attachment for this CI
+			requests := reconciler.mapComputeInstanceToPublicIPAttachments(testCtx, ci)
+			Expect(requests).To(HaveLen(1))
+		})
+	})
+
+	Context("CI watch mapping", func() {
+		It("should map CI changes to attachment reconcile requests", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapComputeInstanceToPublicIPAttachments(testCtx, ci)
+			Expect(requests).To(HaveLen(1))
+			Expect(requests[0].NamespacedName).To(Equal(reconcile.Request{
+				NamespacedName: key,
+			}.NamespacedName))
+		})
+
+		It("should not map CI changes to unrelated attachments", func() {
+			unrelatedAttachment := attachment.DeepCopy()
+			unrelatedAttachment.Spec.ComputeInstance = new("other-ci")
+			fakeClient = buildClient(unrelatedAttachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapComputeInstanceToPublicIPAttachments(testCtx, ci)
+			Expect(requests).To(BeEmpty())
+		})
+	})
+})

@@ -18,6 +18,10 @@ package controller
 
 import (
 	"fmt"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 const (
@@ -44,9 +48,41 @@ var (
 	// osacProjectRefLabel is the label used to reference the project in which the tenant obehct lives
 	osacProjectRefLabel string = fmt.Sprintf("%s/project", osacPrefix)
 
-	// osacTenantAnnotation is the annotation used to reference the tenant name
-	osacTenantAnnotation string = fmt.Sprintf("%s/tenant", osacPrefix)
+	// osacTenantKey is the key used to associate resources with a tenant.
+	// Used as a label on StorageClasses/Secrets and as an annotation on ComputeInstances.
+	osacTenantKey string = fmt.Sprintf("%s/tenant", osacPrefix)
 
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass
 	osacStorageTierLabel string = fmt.Sprintf("%s/storage-tier", osacPrefix)
 )
+
+func tenantNamespacePredicate(namespace string) predicate.Predicate {
+	return predicate.NewPredicateFuncs(
+		func(obj client.Object) bool {
+			return obj.GetNamespace() == namespace
+		},
+	)
+}
+
+func tenantLabelSelector(project string) metav1.LabelSelector {
+	return metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{
+				Key:      osacTenantRefLabel,
+				Operator: metav1.LabelSelectorOpExists,
+			},
+			{
+				Key:      osacProjectRefLabel,
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{project},
+			},
+		},
+	}
+}
+
+func storageClassTenantPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		_, exists := obj.GetLabels()[osacTenantKey]
+		return exists
+	})
+}

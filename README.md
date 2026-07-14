@@ -27,29 +27,15 @@ custom resources and reconciles them to their desired state:
 Configuration is supplied via environment variables (e.g. from a Secret mounted
 into the manager deployment). The following are supported:
 
-### Provisioning providers
+### AAP provisioning
 
-The operator supports two provisioning providers. The provider is selected
-**per-deployment** (not per-resource-type) and applies to all controllers that
-perform provisioning (ClusterOrder, ComputeInstance). Networking controllers
-(VirtualNetwork, Subnet, SecurityGroup) always use AAP.
+Controllers that perform infrastructure provisioning (ClusterOrder, ComputeInstance,
+and networking resources) integrate with Ansible Automation Platform over the REST
+API. The operator launches job/workflow templates and polls AAP for job status.
 
-- `OSAC_PROVISIONING_PROVIDER` — `"eda"` or `"aap"` (default: `"aap"`).
-  Ignored by networking controllers, which always use AAP.
-
-**EDA provider** — triggers external automation via webhooks. Job IDs are
-synthetic (`eda-webhook-N`). The EDA provider cannot poll for job status;
-completion is tracked via resource phase changes and finalizers.
-
-- `OSAC_CLUSTER_CREATE_WEBHOOK` — webhook URL for cluster provisioning.
-- `OSAC_CLUSTER_DELETE_WEBHOOK` — webhook URL for cluster deprovisioning.
-- `OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK` — webhook URL for compute instance
-  provisioning.
-- `OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK` — webhook URL for compute instance
-  deprovisioning.
-
-**AAP provider** — integrates directly with the Ansible Automation Platform REST
-API. Launches job/workflow templates and polls AAP for job status.
+Tenant storage provisioning is optional when AAP credentials or templates are not
+configured; the Tenant reconciler still manages namespace and UDN lifecycle. Feedback
+controllers sync state to the fulfillment service over gRPC only (no AAP integration).
 
 - `OSAC_AAP_URL` — AAP server URL (required).
 - `OSAC_AAP_TOKEN` — AAP authentication token (required).
@@ -101,8 +87,6 @@ Networking controllers derive template names from the prefix:
 - `OSAC_FULFILLMENT_SERVER_ADDRESS` — fulfillment service gRPC address
   (e.g. `fulfillment-service:50051`).
 - `OSAC_FULFILLMENT_TOKEN_FILE` — path to file containing the gRPC auth token.
-- `OSAC_MINIMUM_REQUEST_INTERVAL` — minimum duration between calls to the same
-  webhook URL (optional). Duration string, default: `0`.
 
 ### Controller enable flags
 
@@ -120,6 +104,103 @@ enabled.
 
 See `config/samples/osac-config-secret.yaml` for a complete configuration
 example.
+
+## Console Proxy
+
+The console proxy (`cmd/console-proxy/`) is an HTTPS/WebSocket server that
+gives clients access to KubeVirt VM subresources (serial console, VNC) through
+the OSAC API. It registers itself as a Kubernetes
+[aggregated API server](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/)
+under `console.osac.openshift.io/v1alpha1` and exposes ComputeInstance
+subresources:
+
+```text
+GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/console
+GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/vnc
+```
+
+### Request flow
+
+```text
+Client (CLI / UI)
+  |  gRPC bidirectional stream
+  v
+Fulfillment Service  (Console gRPC server, session manager)
+  |  WebSocket (binary)
+  v
+Console Proxy  (aggregated API on the hub cluster)
+  |  WebSocket (binary)
+  v
+KubeVirt  (VirtualMachineInstance console/VNC subresource)
+```
+
+On each request the proxy:
+
+1. Looks up the OSAC `ComputeInstance` CR to find the backing KubeVirt VM name
+   and namespace.
+2. Resolves the kubeconfig for the cluster where the VM runs (see modes below).
+3. Dials the upstream KubeVirt WebSocket at
+   `subresources.kubevirt.io/v1/namespaces/{vmNS}/virtualmachineinstances/{vmName}/{subresource}`.
+4. Accepts the client WebSocket upgrade and proxies binary data bidirectionally
+   with `io.Copy`.
+
+### VM cluster modes
+
+The `--vm-cluster-mode` flag (env: `OSAC_CONSOLE_PROXY_VM_CLUSTER_MODE`)
+controls how the proxy obtains the kubeconfig for the cluster that runs KubeVirt
+VMs:
+
+| Mode | Behavior |
+|------|----------|
+| `remote` | Reads a kubeconfig from a Secret labeled `osac.openshift.io/remote-cluster-kubeconfig` in the ComputeInstance's namespace. Use when VMs run on a dedicated cluster. |
+| `local` | Uses the proxy's own in-cluster credentials. Use when VMs run on the same cluster as the proxy. |
+| `auto` (default) | Tries `remote` first; falls back to `local` only when no matching Secret exists. Real config errors (parse failures, missing keys) are not masked. |
+
+### Authentication and authorization
+
+The proxy uses the standard Kubernetes aggregated-API auth delegation model:
+
+- **Authentication** -- request-header authentication. The kube-apiserver
+  front-proxy sets identity headers; the proxy validates them against the CA
+  from the `kube-system/extension-apiserver-authentication` ConfigMap. CA and
+  header configuration are watched dynamically and update without restart.
+- **Authorization** -- each request triggers a `SubjectAccessReview` against the
+  kube-apiserver. Allow decisions are cached for 5 minutes, deny decisions for
+  30 seconds.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OSAC_CONSOLE_PROXY_PORT` | `8443` | HTTPS API server port |
+| `OSAC_CONSOLE_PROXY_HEALTH_BIND_ADDRESS` | `:8081` | Health probe server address |
+| `OSAC_CONSOLE_PROXY_TLS_CERT_FILE` | — | Path to TLS certificate |
+| `OSAC_CONSOLE_PROXY_TLS_KEY_FILE` | — | Path to TLS private key |
+| `OSAC_CONSOLE_PROXY_VM_CLUSTER_MODE` | `auto` | VM cluster resolution mode (`remote`, `local`, `auto`) |
+
+### Deployment
+
+The console proxy binary is built alongside the operator manager in the same
+container image (`Containerfile`). It is deployed as a separate `Deployment` in
+the `osac` namespace with its own `ServiceAccount`, `Service`, and TLS
+`Certificate` (via cert-manager). An `APIService` resource registers it with the
+kube-apiserver. Deployment manifests live in `config/console-proxy/` and are
+consumed via `osac-installer`.
+
+### Source layout
+
+```text
+cmd/console-proxy/main.go          # Entry point, CLI flags
+internal/consoleproxy/
+  server.go                        # HTTPS + health probe servers, routing
+  auth.go                          # Delegated authn/authz
+  subresource.go                   # WebSocket proxy handlers (console, VNC)
+  config_resolver.go               # VM cluster kubeconfig resolution
+  discovery.go                     # Kubernetes API discovery endpoints
+  status.go                        # Error-to-Kubernetes-Status mapping
+config/console-proxy/              # Kustomize deployment manifests
+test/e2e/console_proxy_test.go     # E2E tests
+```
 
 ## Getting Started
 

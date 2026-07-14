@@ -6,7 +6,7 @@
 *.dylib
 bin/*
 main
-Dockerfile.cross
+Containerfile.cross
 Dockerfile.manifests
 dist/
 
@@ -31,3 +31,8 @@ go.work
 
 # Development memory/notes (local only)
 MEMORY.md
+.artifacts/
+
+# Helm dependency build artifacts
+charts/*/charts/
+charts/*/Chart.lock

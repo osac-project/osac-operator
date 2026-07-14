@@ -19,6 +19,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+- apiGroups:
   - events.k8s.io
   resources:
   - events
@@ -59,8 +65,13 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalinstances
   - clusterorders
   - computeinstances
+  - externalipattachments
+  - externalippools
+  - externalips
+  - publicipattachments
   - publicippools
   - publicips
   - securitygroups
@@ -78,8 +89,13 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalinstances/finalizers
   - clusterorders/finalizers
   - computeinstances/finalizers
+  - externalipattachments/finalizers
+  - externalippools/finalizers
+  - externalips/finalizers
+  - publicipattachments/finalizers
   - publicippools/finalizers
   - publicips/finalizers
   - securitygroups/finalizers
@@ -91,8 +107,13 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - baremetalinstances/status
   - clusterorders/status
   - computeinstances/status
+  - externalipattachments/status
+  - externalippools/status
+  - externalips/status
+  - publicipattachments/status
   - publicippools/status
   - publicips/status
   - securitygroups/status

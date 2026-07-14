@@ -19,6 +19,7 @@ cluster are managed by different personas.
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
 | AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
+| Console Proxy | -- | connects to KubeVirt VM subresources (console, VNC) via WebSocket |
 
 All OSAC custom resources remain on the management cluster. The
 `ComputeInstance` and `Tenant` controllers watch the downstream Kubernetes
@@ -114,7 +115,15 @@ kubeconfig:
 kubectl create secret generic <secret-name> \
   --from-file=kubeconfig=/path/to/remote-cluster.kubeconfig \
   -n <osac-namespace>
+kubectl label secret <secret-name> \
+  osac.openshift.io/remote-cluster-kubeconfig=true \
+  -n <osac-namespace>
 ```
+
+The label is required by the [console proxy](../../README.md#console-proxy),
+which discovers the remote kubeconfig by listing labeled Secrets in the
+ComputeInstance's namespace at request time. The operator and AAP use a
+mounted file path instead and do not need the label.
 
 ### 2. Configure the operator
 

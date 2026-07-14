@@ -25,7 +25,7 @@ spec:
       containers:
       - name: manager
         command:
-        - /manager
+        - /usr/local/bin/manager
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
@@ -37,10 +37,8 @@ spec:
               name: {{ .Values.configSecret.name }}
               optional: {{ .Values.configSecret.optional }}
         env:
-          {{- if .Values.aap.url }}
           - name: OSAC_AAP_URL
-            value: {{ .Values.aap.url | quote }}
-          {{- end }}
+            value: {{ .Values.aap.url | default "http://osac-aap/api/controller" | quote }}
           {{- if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name }}
           - name: OSAC_AAP_TOKEN
             valueFrom:
@@ -64,14 +62,10 @@ spec:
           - name: OSAC_AAP_TEMPLATE_PREFIX
             value: {{ .Values.aap.templatePrefix | quote }}
           {{- end }}
-          {{- if .Values.fulfillment.serverAddress }}
           - name: OSAC_FULFILLMENT_SERVER_ADDRESS
-            value: {{ .Values.fulfillment.serverAddress | quote }}
-          {{- end }}
-          {{- if .Values.fulfillment.tokenFile }}
+            value: {{ .Values.fulfillment.serverAddress | default "fulfillment-internal-api:8001" | quote }}
           - name: OSAC_FULFILLMENT_TOKEN_FILE
-            value: {{ .Values.fulfillment.tokenFile | quote }}
-          {{- end }}
+            value: {{ .Values.fulfillment.tokenFile | default "/var/run/secrets/kubernetes.io/serviceaccount/token" | quote }}
           - name: OSAC_CLUSTER_ORDER_NAMESPACE
             valueFrom:
               fieldRef:
@@ -88,6 +82,14 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          - name: OSAC_BARE_METAL_INSTANCE_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_STORAGE_CONFIG_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
             value: {{ .Values.controllers.clusterOrder | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
@@ -96,6 +98,10 @@ spec:
             value: {{ .Values.controllers.tenant | quote }}
           - name: OSAC_ENABLE_NETWORKING_CONTROLLER
             value: {{ .Values.controllers.networking | quote }}
+          - name: OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER
+            value: {{ .Values.controllers.bareMetalInstance | quote }}
+          - name: OSAC_ENABLE_STORAGE_CONTROLLER
+            value: {{ .Values.controllers.storage | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

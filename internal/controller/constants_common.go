@@ -38,7 +38,23 @@ const (
 	// set on PublicIP CRs
 	osacPublicIPPoolNameAnnotation = osacPrefix + "/publicippool-name"
 
+	// osacExternalIPPoolNameAnnotation is the K8s resource name of the parent ExternalIPPool.
+	// set on ExternalIP CRs
+	osacExternalIPPoolNameAnnotation = osacPrefix + "/externalippool-name"
+
 	// defaultPublicIPPoolImplementationStrategy is the fallback strategy when none is specified.
 	// Used by PublicIPPool (from its own spec) and PublicIP (inherited from parent pool).
 	defaultPublicIPPoolImplementationStrategy = "metallb-l2"
+
+	// defaultExternalIPPoolImplementationStrategy is the fallback strategy when none is specified.
+	// Used by ExternalIPPool (from its own spec) and ExternalIP (inherited from parent pool).
+	defaultExternalIPPoolImplementationStrategy = "metallb-l2"
+
+	// defaultSecurityGroupImplementationStrategy is the implementation strategy for SecurityGroup.
+	// SecurityGroup enforcement uses standard Kubernetes NetworkPolicy, independent of the
+	// VirtualNetwork's NetworkClass.
+	defaultSecurityGroupImplementationStrategy = "network_policy"
+
+	conditionReasonConfigurationApplied  = "ConfigurationApplied"
+	conditionMessageConfigurationApplied = "Controller has processed the current spec"
 )

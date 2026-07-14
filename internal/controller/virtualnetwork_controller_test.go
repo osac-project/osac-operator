@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,7 +30,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 var _ = Describe("VirtualNetworkReconciler", func() {
@@ -159,9 +160,52 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(provisionCalled).To(BeTrue(), "provision should be triggered on the follow-up reconcile")
 
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updatedVnet)).To(Succeed())
-			latestJob := provisioning.FindLatestJobByType(updatedVnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(updatedVnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("test-job-123"))
+		})
+
+		It("should persist job status even when resource is concurrently modified", func() {
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnet.Name,
+					Namespace: vnet.Namespace,
+				},
+			}}
+
+			// First reconcile: adds finalizer + sets annotation, returns early
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.VirtualNetwork{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/virtualnetwork-feedback")
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Second reconcile: triggers job — the concurrent modification
+			// must not prevent the job from being recorded in status.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted to the API server
+			updatedVnet := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updatedVnet)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updatedVnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
 
 		It("should requeue if ImplementationStrategy not set", func() {
@@ -210,7 +254,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("new-job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -218,7 +262,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 		It("should poll job status when job exists", func() {
 			// Create initial job
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "existing-job-789",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -240,12 +284,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
 		It("should set phase to Ready when job succeeds", func() {
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-101",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -270,7 +314,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should set phase to Failed when job fails", func() {
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-202",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -298,7 +342,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -324,7 +368,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			}
 
 			vnet.Status.DesiredConfigVersion = testConfigVersionUpdated
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -339,14 +383,14 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("retry-job"))
 		})
 
 		It("should skip when config already applied", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "succeeded-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -375,14 +419,14 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					State:     osacv1alpha1.JobStatePending,
 					Message:   "Job triggered",
 				}
-				vnet.Status.Jobs = provisioning.AppendJob(vnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
+				vnet.Status.ProvisioningJobs = provisioning.AppendJob(vnet.Status.ProvisioningJobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only keep last 3 jobs
-			Expect(vnet.Status.Jobs).To(HaveLen(3))
-			Expect(vnet.Status.Jobs[0].JobID).To(Equal("job-3"))
-			Expect(vnet.Status.Jobs[1].JobID).To(Equal("job-4"))
-			Expect(vnet.Status.Jobs[2].JobID).To(Equal("job-5"))
+			Expect(vnet.Status.ProvisioningJobs).To(HaveLen(3))
+			Expect(vnet.Status.ProvisioningJobs[0].JobID).To(Equal("job-3"))
+			Expect(vnet.Status.ProvisioningJobs[1].JobID).To(Equal("job-4"))
+			Expect(vnet.Status.ProvisioningJobs[2].JobID).To(Equal("job-5"))
 		})
 	})
 
@@ -391,7 +435,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
 			vnet.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 
-			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
 					Action:                 provisioning.DeprovisionTriggered,
 					JobID:                  "deprovision-job-303",
@@ -403,7 +447,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(vnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())
@@ -424,7 +468,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
 			// Set up the status with a running deprovision job (status is a subresource)
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "deprovision-job-404",
 					Type:      osacv1alpha1.JobTypeDeprovision,
@@ -451,10 +495,85 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 	})
 
+	Context("management-state unmanaged", func() {
+		It("should ignore VirtualNetwork with unmanaged annotation", func() {
+			unmanagedVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "unmanaged-vnet",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.0.0.0/16",
+					NetworkClass:           "cudn-net",
+					ImplementationStrategy: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, unmanagedVnet)).To(Succeed())
+
+			key := types.NamespacedName{Name: unmanagedVnet.Name, Namespace: unmanagedVnet.Namespace}
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Finalizers).To(BeEmpty())
+			Expect(updated.Status.Phase).To(BeEmpty())
+
+			_ = k8sClient.Delete(ctx, unmanagedVnet)
+		})
+
+		It("should still handle delete for unmanaged VirtualNetwork with finalizer", func() {
+			managedThenUnmanaged := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-then-unmanaged",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+					Finalizers: []string{osacVirtualNetworkFinalizer},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.0.0.0/16",
+					NetworkClass:           "cudn-net",
+					ImplementationStrategy: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
+
+			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: managedThenUnmanaged.Namespace}
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			Expect(k8sClient.Delete(ctx, managedThenUnmanaged)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.VirtualNetwork{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+	})
+
 	Context("Phase transitions", func() {
 		It("should transition from Progressing to Ready on success", func() {
 			vnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseProgressing
-			vnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "transition-job-505",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -483,7 +602,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 type mockVirtualNetworkProvider struct {
 	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
 	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error)
+	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
 }
 
@@ -509,9 +628,9 @@ func (m *mockVirtualNetworkProvider) GetProvisionStatus(ctx context.Context, res
 	}, nil
 }
 
-func (m *mockVirtualNetworkProvider) TriggerDeprovision(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+func (m *mockVirtualNetworkProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 	if m.triggerDeprovisionFunc != nil {
-		return m.triggerDeprovisionFunc(ctx, resource)
+		return m.triggerDeprovisionFunc(ctx, resource, provisionJobs)
 	}
 	return &provisioning.DeprovisionResult{
 		Action:                 provisioning.DeprovisionTriggered,

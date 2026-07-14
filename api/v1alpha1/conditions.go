@@ -44,5 +44,7 @@ const (
 	ReasonTenantNotReady      = "TenantNotReady"
 	ReasonProvisioningStorage = "ProvisioningStorage"
 	ReasonWaitingForVM        = "WaitingForVM"
+	ReasonScheduling          = "Scheduling"
 	ReasonInfrastructureReady = "InfrastructureReady"
+	ReasonProvisioningFailed  = "ProvisioningFailed"
 )

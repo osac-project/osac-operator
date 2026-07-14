@@ -1,8 +1,10 @@
+{{- if .Values.install }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    "helm.sh/resource-policy": keep
     controller-gen.kubebuilder.io/version: v0.20.0
   name: tenants.osac.openshift.io
 spec:
@@ -18,14 +20,19 @@ spec:
     - jsonPath: .status.namespace
       name: Tenant Namespace
       type: string
-    - jsonPath: .status.storageClass
-      name: Storage Class
-      type: string
-    - jsonPath: .status.storageClasses[*].tier
-      name: Storage Tiers
+    - jsonPath: .status.storageClasses[*].name
+      name: Storage Classes
       type: string
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="StorageBackendReady")].status
+      name: Backend Ready
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="ClusterStorageReady")].status
+      name: Cluster Storage
+      priority: 1
       type: string
     name: v1alpha1
     schema:
@@ -55,6 +62,87 @@ spec:
           status:
             description: TenantStatus defines the observed state of Tenant.
             properties:
+              clusterStorage:
+                description: ClusterStorage tracks per-cluster StorageClass installation
+                  status.
+                items:
+                  description: ClusterStorageStatus tracks StorageClass installation
+                    status for a single cluster.
+                  properties:
+                    clusterName:
+                      description: ClusterName identifies the target cluster.
+                      type: string
+                    ready:
+                      description: Ready indicates whether StorageClasses are installed
+                        on this cluster.
+                      type: boolean
+                    reason:
+                      description: Reason provides a machine-readable reason for the
+                        current state.
+                      type: string
+                  required:
+                  - clusterName
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterName
+                x-kubernetes-list-type: map
+              clusterStorageJobs:
+                description: ClusterStorageJobs holds the history of cluster storage
+                  provisioning/deprovisioning jobs
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the Tenant
@@ -120,12 +208,145 @@ spec:
               phase:
                 description: Phase is the phase of the tenant
                 type: string
-              storageClass:
-                description: |-
-                  StorageClass is the StorageClass allocated to the tenant on the target cluster.
-                  Deprecated: use StorageClasses instead. Retained for backward compatibility
-                  until all consumers migrate. Will be removed by MGMT-24139.
-                type: string
+              provisioningJobs:
+                description: ProvisioningJobs holds the history of provisioning jobs
+                  triggered for this tenant
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
+              storageBackendJobs:
+                description: StorageBackendJobs holds the history of storage backend
+                  provisioning/deprovisioning jobs
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
+              storageBackends:
+                description: StorageBackends tracks per-backend provisioning status.
+                items:
+                  description: StorageBackendStatus tracks provisioning status for
+                    a single storage backend.
+                  properties:
+                    message:
+                      description: Message provides human-readable status or error
+                        information.
+                      type: string
+                    name:
+                      description: Name is the storage backend identifier (e.g., "vast-1").
+                      type: string
+                    provider:
+                      description: Provider is the storage provider type (e.g., "vast").
+                      type: string
+                    ready:
+                      description: Ready indicates whether this backend is provisioned
+                        for the tenant.
+                      type: boolean
+                  required:
+                  - name
+                  - provider
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               storageClasses:
                 description: |-
                   StorageClasses lists all resolved StorageClass mappings for the tenant,
@@ -133,7 +354,7 @@ spec:
                 items:
                   description: |-
                     ResolvedStorageClass captures a single resolved StorageClass for a specific
-                    storage tier. The Tenant controller populates one entry per tier.
+                    storage tier. The OSAC Storage Controller populates one entry per tier.
                   properties:
                     name:
                       description: Name is the name of the resolved Kubernetes StorageClass.
@@ -161,3 +382,4 @@ spec:
     storage: true
     subresources:
       status: {}
+{{- end }}

@@ -25,303 +25,124 @@ import (
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 )
 
-var _ = Describe("Tenant Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+func mcReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
+	return mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}}
+}
 
+var _ = Describe("Tenant Controller", func() {
+	Context("When namespace exists", func() {
 		ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default",
+		createTenantWithNamespace := func(name string) types.NamespacedName {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name,
+					Labels: map[string]string{
+						"osac.openshift.io/tenant-ref": name,
+						"osac.openshift.io/project":    "default",
+					},
+				},
+			}
+			if err := k8sClient.Create(ctx, ns); err != nil {
+				Expect(apierrors.IsAlreadyExists(err)).To(BeTrue())
+			}
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: "default",
+				},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			return types.NamespacedName{Name: name, Namespace: "default"}
 		}
-		tenant := &v1alpha1.Tenant{}
+
+		It("should set Phase=Ready and NamespaceReady=True", func() {
+			nn := createTenantWithNamespace("test-tenant-ns-phase")
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
+			Expect(tenant.Status.Namespace).To(Equal(nn.Name))
+
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should not modify storage fields", func() {
+			nn := createTenantWithNamespace("test-tenant-ns-storage")
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.StorageClasses).To(BeNil())
+			Expect(tenant.Status.ProvisioningJobs).To(BeNil())
+		})
+	})
+
+	Context("When namespace does not exist", func() {
+		const resourceName = "test-tenant-no-ns"
+
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind Tenant")
-			err := k8sClient.Get(ctx, typeNamespacedName, tenant)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &v1alpha1.Tenant{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					Spec: v1alpha1.TenantSpec{},
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			tenant := &v1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
 			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 		})
 
 		AfterEach(func() {
-			resource := &v1alpha1.Tenant{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance Tenant")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			tenant := &v1alpha1.Tenant{}
+			if err := k8sClient.Get(ctx, typeNamespacedName, tenant); err == nil {
+				Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+			}
 		})
 
-		It("should transition through all Ready/Progressing phases with conditions", func() {
-			fakeRecorder := events.NewFakeRecorder(100)
-			controllerReconciler := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
-			controllerReconciler.Recorder = fakeRecorder
+		It("should set NamespaceReady=False and stay Progressing", func() {
+			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
 
-			By("waiting for the Tenant to appear in the controller's cache")
 			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
+				return r.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
 			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 
-			doReconcile := func() error {
-				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				}})
-				return err
-			}
-			// reconcileAndAssertStatus re-reconciles on each retry so that
-			// the controller's informer cache has time to observe recent
-			// creates / deletes before the assertions are evaluated.
-			// The reconcile error is intentionally ignored because the
-			// reconciler may return transient errors (e.g. namespace not
-			// found) while still correctly setting status conditions.
-			reconcileAndAssertStatus := func(
-				expectedPhase v1alpha1.TenantPhaseType,
-				expectedSC string,
-				expectedNSStatus metav1.ConditionStatus,
-				expectedNSReason string,
-				expectedSCStatus metav1.ConditionStatus,
-				expectedSCReason string,
-			) {
-				Eventually(func(g Gomega) {
-					_ = doReconcile()
-					g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-					g.Expect(tenant.Status.Phase).To(Equal(expectedPhase))
-					g.Expect(tenant.Status.StorageClass).To(Equal(expectedSC))
-					if expectedSC == "" {
-						g.Expect(tenant.Status.StorageClasses).To(BeNil())
-					} else {
-						g.Expect(tenant.Status.StorageClasses).To(HaveLen(1))
-						g.Expect(tenant.Status.StorageClasses[0].Name).To(Equal(expectedSC))
-						g.Expect(tenant.Status.StorageClasses[0].Tier).To(Equal("default"))
-					}
+			_, err := r.Reconcile(ctx, mcReconcileRequest(typeNamespacedName))
+			Expect(err).To(HaveOccurred())
 
-					nsCond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
-					g.Expect(nsCond).NotTo(BeNil())
-					g.Expect(nsCond.Status).To(Equal(expectedNSStatus))
-					g.Expect(nsCond.Reason).To(Equal(expectedNSReason))
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
 
-					scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageClassReady)
-					g.Expect(scCond).NotTo(BeNil())
-					g.Expect(scCond.Status).To(Equal(expectedSCStatus))
-					g.Expect(scCond.Reason).To(Equal(expectedSCReason))
-				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-			}
-			assertSCConditionMessage := func(substrings ...string) {
-				Eventually(func(g Gomega) {
-					g.Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-					scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageClassReady)
-					g.Expect(scCond).NotTo(BeNil())
-					for _, s := range substrings {
-						g.Expect(scCond.Message).To(ContainSubstring(s))
-					}
-				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-			}
-
-			// ── Step 1: no namespace → Progressing, NamespaceReady=False ──────────
-			By("reconciling when namespace does not exist")
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseProgressing, "",
-				metav1.ConditionFalse, v1alpha1.TenantReasonNotFound,
-				metav1.ConditionFalse, v1alpha1.TenantReasonNotFound,
-			)
-
-			// ── Step 2: namespace exists, no SC → Progressing, SC NotFound ────────
-			By("creating the namespace")
-			namespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
-			}
-			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
-
-			By("reconciling with namespace but no StorageClass")
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseProgressing, "",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionFalse, v1alpha1.TenantReasonNotFound,
-			)
-
-			// ── Step 3: Default SC only → Ready via SharedDefault ─────────────────
-			By("creating a shared Default StorageClass")
-			defaultSC := &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "shared-default-sc",
-					Labels: map[string]string{osacTenantAnnotation: defaultStorageClassSentinel},
-				},
-				Provisioner: "kubernetes.io/no-provisioner",
-			}
-			Expect(k8sClient.Create(ctx, defaultSC)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, defaultSC) })
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseReady, "shared-default-sc",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionTrue, v1alpha1.TenantReasonSharedDefault,
-			)
-
-			// ── Step 4: tenant SC added → Ready via Found (priority over Default) ─
-			By("creating a tenant-specific StorageClass")
-			tenantSC := &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   resourceName + "-sc",
-					Labels: map[string]string{osacTenantAnnotation: resourceName},
-				},
-				Provisioner: "kubernetes.io/no-provisioner",
-			}
-			Expect(k8sClient.Create(ctx, tenantSC)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, tenantSC) })
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseReady, resourceName+"-sc",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-			)
-
-			// ── Step 5: multiple tenant SCs → Progressing, MultipleFound ──────────
-			By("creating a second tenant StorageClass (misconfiguration)")
-			extraSC := &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   resourceName + "-sc-extra",
-					Labels: map[string]string{osacTenantAnnotation: resourceName},
-				},
-				Provisioner: "kubernetes.io/no-provisioner",
-			}
-			Expect(k8sClient.Create(ctx, extraSC)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, extraSC) })
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseProgressing, "",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionFalse, v1alpha1.TenantReasonMultipleFound,
-			)
-			By("verifying condition message names the conflicting StorageClasses")
-			assertSCConditionMessage(resourceName+"-sc", resourceName+"-sc-extra")
-
-			By("verifying a DuplicateStorageClass warning event was emitted")
-			// The Eventually loop in reconcileAndAssertStatus may reconcile multiple times before the
-			// informer cache observes the new SC, and each reconcile that sees duplicates emits an
-			// event. Use Eventually here so the assertion tolerates extra queued events.
-			Eventually(fakeRecorder.Events).Should(Receive(And(
-				ContainSubstring("Warning"),
-				ContainSubstring(eventReasonDuplicateStorageClass),
-				ContainSubstring(resourceName+"-sc"),
-				ContainSubstring(resourceName+"-sc-extra"),
-			)))
-
-			// ── Step 6: remove extra SC → back to Ready (tenant SC) ───────────────
-			By("removing the extra tenant StorageClass")
-			Expect(k8sClient.Delete(ctx, extraSC)).To(Succeed())
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseReady, resourceName+"-sc",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-			)
-
-			// ── Step 7: remove tenant SC → falls back to Default SC ───────────────
-			By("removing the tenant-specific StorageClass")
-			Expect(k8sClient.Delete(ctx, tenantSC)).To(Succeed())
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseReady, "shared-default-sc",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionTrue, v1alpha1.TenantReasonSharedDefault,
-			)
-
-			// ── Step 8: remove Default SC → Progressing, NotFound ─────────────────
-			By("removing the shared Default StorageClass")
-			Expect(k8sClient.Delete(ctx, defaultSC)).To(Succeed())
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseProgressing, "",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionFalse, v1alpha1.TenantReasonNotFound,
-			)
-
-			// ── Step 9: multiple Default SCs → Progressing, MultipleDefaultsFound ─
-			By("creating two Default StorageClasses (ambiguous)")
-			defaultSC1 := &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "shared-default-sc-1",
-					Labels: map[string]string{osacTenantAnnotation: defaultStorageClassSentinel},
-				},
-				Provisioner: "kubernetes.io/no-provisioner",
-			}
-			defaultSC2 := &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "shared-default-sc-2",
-					Labels: map[string]string{osacTenantAnnotation: defaultStorageClassSentinel},
-				},
-				Provisioner: "kubernetes.io/no-provisioner",
-			}
-			Expect(k8sClient.Create(ctx, defaultSC1)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, defaultSC1) })
-			Expect(k8sClient.Create(ctx, defaultSC2)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, defaultSC2) })
-
-			reconcileAndAssertStatus(
-				v1alpha1.TenantPhaseProgressing, "",
-				metav1.ConditionTrue, v1alpha1.TenantReasonFound,
-				metav1.ConditionFalse, v1alpha1.TenantReasonMultipleDefaultsFound,
-			)
-			By("verifying condition message names the conflicting Default StorageClasses and affected tenant")
-			assertSCConditionMessage("shared-default-sc-1", "shared-default-sc-2", resourceName)
-
-			By("verifying a DuplicateStorageClass warning event was emitted for Default SCs")
-			Eventually(fakeRecorder.Events).Should(Receive(And(
-				ContainSubstring("Warning"),
-				ContainSubstring(eventReasonDuplicateStorageClass),
-				ContainSubstring("shared-default-sc-1"),
-				ContainSubstring("shared-default-sc-2"),
-				ContainSubstring(resourceName),
-			)))
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		})
-	})
-})
-
-var _ = Describe("joinStorageClassNames", func() {
-	It("returns empty joined string and empty slice for nil or empty input", func() {
-		joined, names := joinStorageClassNames(nil)
-		Expect(joined).To(BeEmpty())
-		Expect(names).To(BeEmpty())
-
-		joined, names = joinStorageClassNames([]storagev1.StorageClass{})
-		Expect(joined).To(BeEmpty())
-		Expect(names).To(BeEmpty())
-	})
-
-	It("returns a single name", func() {
-		joined, names := joinStorageClassNames([]storagev1.StorageClass{
-			{ObjectMeta: metav1.ObjectMeta{Name: "sc-a"}},
-		})
-		Expect(joined).To(Equal("sc-a"))
-		Expect(names).To(Equal([]string{"sc-a"}))
-	})
-
-	It("joins multiple names in list order", func() {
-		joined, names := joinStorageClassNames([]storagev1.StorageClass{
-			{ObjectMeta: metav1.ObjectMeta{Name: "sc-a"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "sc-b"}},
-		})
-		Expect(joined).To(Equal("sc-a, sc-b"))
-		Expect(names).To(Equal([]string{"sc-a", "sc-b"}))
 	})
 })

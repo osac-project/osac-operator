@@ -66,6 +66,21 @@ const (
 	RunStrategyHalted RunStrategyType = "Halted"
 )
 
+// NetworkAttachment defines one NIC: a Subnet CR on the hub plus optional SecurityGroup CR names.
+type NetworkAttachment struct {
+	// SubnetRef is the name of the Subnet CR in the same namespace as the ComputeInstance.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnetRef is immutable"
+	SubnetRef string `json:"subnetRef"`
+
+	// SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
+	// Mutable - can be changed to add/remove security groups without recreating the VM.
+	// +kubebuilder:validation:Optional
+	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
+}
+
 // ComputeInstanceSpec defines the desired state of ComputeInstance
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
@@ -84,6 +99,14 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image is immutable"
 	Image ImageSpec `json:"image"`
+
+	// GuestOSFamily specifies the guest operating system family for the VM.
+	// To support future OS families, this field is a freeform string.
+	// Currently, any value other than "windows" will be treated as "linux".
+	// This field is immutable after creation.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="guestOSFamily is immutable"
+	GuestOSFamily string `json:"guestOSFamily,omitempty"`
 
 	// Cores is the number of CPU cores
 	// +kubebuilder:validation:Required
@@ -122,10 +145,32 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sshKey is immutable"
 	SSHKey string `json:"sshKey,omitempty"`
 
-	// SubnetRef is the name of the Subnet CR in the hub cluster
-	// This references the Kubernetes CR name (not the fulfillment ID)
+	// NetworkAttachments defines multiple NICs when more than one subnet (and optional security groups per NIC) is required.
+	// The first entry is the primary subnet for VM placement (subnet-namespace annotation).
+	// Subnet references (per NetworkAttachment) are immutable but security groups can be changed.
+	//
+	// Why immutability is required:
+	// Currently, ComputeInstances are created with a single NIC. The VM instance must be created in the namespace
+	// of the subnet it uses (the subnet-namespace annotation determines VM placement). This architectural constraint
+	// means that changing the subnet would require recreating the VM in a different namespace, which is not supported.
+	// Similarly, the array size cannot change because adding/removing NICs would require changing the primary subnet
+	// or the VM's namespace, both of which are immutable after VM creation.
+	//
+	// Immutability enforcement:
+	// - The +listType=map with +listMapKey=subnetRef markers correlate entries by subnetRef for updates
+	// - The size check below prevents adding or removing entries
+	// - The per-item subnetRef validation (self == oldSelf) prevents changing keys of existing entries
+	// Combined, these ensure only securityGroupRefs can be modified.
+	//
+	// MaxItems is required for CEL cost budget calculation: NetworkAttachment.SubnetRef has a CEL validation
+	// rule (self == oldSelf for immutability). Without maxItems, Kubernetes cannot bound the cost of iterating
+	// over array items to validate this rule, causing CRD installation to fail with "estimated rule cost exceeds budget".
 	// +kubebuilder:validation:Optional
-	SubnetRef string `json:"subnetRef,omitempty"`
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na, oldSelf.exists(old, old.subnetRef == na.subnetRef)))",message="cannot change or add/remove network attachments after initial assignment"
+	// +listType=map
+	// +listMapKey=subnetRef
+	NetworkAttachments []NetworkAttachment `json:"networkAttachments,omitempty"`
 
 	// RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 	//
@@ -178,8 +223,7 @@ const (
 	// True when desiredConfigVersion == reconciledConfigVersion, False while configuration is being applied.
 	ComputeInstanceConditionConfigurationApplied ComputeInstanceConditionType = "ConfigurationApplied"
 
-	// ComputeInstanceConditionReady means the compute instance is ready and accessible.
-	// Mirrors KubeVirt VirtualMachine Ready condition (virt-launcher readiness probe).
+	// ComputeInstanceConditionReady means the compute instance is ready (KubeVirt VM readiness reflected on the CR).
 	ComputeInstanceConditionReady ComputeInstanceConditionType = "Ready"
 
 	// ComputeInstanceConditionRestartInProgress indicates a restart is in progress
@@ -246,16 +290,21 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Format=date-time
 	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
 
-	// Jobs tracks the history of provision and deprovision operations
+	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
 	// Populated when the instance is ready (phase Running).
 	// +kubebuilder:validation:Optional
 	IPAddress string `json:"ipAddress,omitempty"`
+
+	// PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.
+	// Populated when a PublicIP CR in state "Attached" references this ComputeInstance.
+	// +kubebuilder:validation:Optional
+	PublicIPAddress string `json:"publicIPAddress,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -264,9 +313,11 @@ type ComputeInstanceStatus struct {
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Cores",type=integer,JSONPath=`.spec.cores`
 // +kubebuilder:printcolumn:name="Memory",type=integer,JSONPath=`.spec.memoryGiB`
+// +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.guestOSFamily`
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
+// +kubebuilder:printcolumn:name="PublicIP",type=string,JSONPath=`.status.publicIPAddress`,priority=1
 
 // ComputeInstance is the Schema for the computeinstances API
 type ComputeInstance struct {
@@ -299,3 +350,11 @@ func (ci *ComputeInstance) GetName() string {
 	return ci.ObjectMeta.Name
 }
 
+// PrimarySubnetRef returns the Subnet CR name used for VM placement and the subnet-namespace annotation:
+// the first networkAttachments[].subnetRef when that list is non-empty, otherwise empty string.
+func (s ComputeInstanceSpec) PrimarySubnetRef() string {
+	if len(s.NetworkAttachments) > 0 {
+		return s.NetworkAttachments[0].SubnetRef
+	}
+	return ""
+}

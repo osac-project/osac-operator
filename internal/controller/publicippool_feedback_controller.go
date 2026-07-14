@@ -242,7 +242,6 @@ func (t *publicIPPoolFeedbackReconcilerTask) handleUpdate(ctx context.Context) e
 		}
 	}
 	t.syncPhase(ctx)
-	t.syncCapacity()
 	return nil
 }
 
@@ -293,14 +292,4 @@ func (t *publicIPPoolFeedbackReconcilerTask) syncPhaseReady() {
 
 func (t *publicIPPoolFeedbackReconcilerTask) syncPhaseDeleting() {
 	t.publicIPPool.GetStatus().SetState(privatev1.PublicIPPoolState_PUBLIC_IP_POOL_STATE_DELETING)
-}
-
-// syncCapacity copies the capacity fields (total, allocated, available) from the CR status to the proto status.
-// Unlike SecurityGroup/Subnet/VirtualNetwork, PublicIPPool tracks address space usage. The fulfillment service uses
-// these numbers to report pool utilization and enforce allocation limits.
-func (t *publicIPPoolFeedbackReconcilerTask) syncCapacity() {
-	poolStatus := t.publicIPPool.GetStatus()
-	poolStatus.SetTotal(t.object.Status.Total)
-	poolStatus.SetAllocated(t.object.Status.Allocated)
-	poolStatus.SetAvailable(t.object.Status.Available)
 }

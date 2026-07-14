@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -34,7 +34,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -104,7 +104,7 @@ func (r *SubnetReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 	}
 
 	val, exists := subnet.Annotations[osacManagementStateAnnotation]
-	if exists && val == ManagementStateUnmanaged {
+	if subnet.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring Subnet due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}
@@ -122,13 +122,25 @@ func (r *SubnetReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 
 	if !equality.Semantic.DeepEqual(subnet.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, subnet); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status); err != nil {
 			return res, err
 		}
 	}
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+// updateStatusWithRetry updates the subnet status with retry on conflict.
+func (r *SubnetReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.SubnetStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.Subnet{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -207,7 +219,7 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	// Set phase to Progressing only on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if subnet.Status.Phase == "" || (subnet.Status.Phase == v1alpha1.SubnetPhaseReady &&
-		!provisioning.IsConfigApplied(&subnet.Status.Jobs, subnet.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion)) {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
 	}
 
@@ -256,111 +268,32 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
-		&provisioning.State{Jobs: &subnet.Status.Jobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { subnet.Status.Phase = v1alpha1.SubnetPhaseFailed },
 			OnSuccess: func(_ provisioning.ProvisionStatus) { subnet.Status.Phase = v1alpha1.SubnetPhaseReady },
 		},
 		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{})
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.Subnet).Status.ProvisioningJobs })
 		},
-		func() error { return r.Status().Update(ctx, subnet) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
+		},
 	)
 }
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for a Subnet.
 // It triggers deprovisioning if needed and polls job status until completion.
 func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// If no provider configured, skip deprovisioning
 	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping deprovisioning")
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-
-	// Check if we already have a deprovision job
-	latestDeprovisionJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, v1alpha1.JobTypeDeprovision)
-
-	// Trigger deprovisioning - provider decides internally if ready
-	if latestDeprovisionJob == nil || latestDeprovisionJob.JobID == "" {
-		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
-
-		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, subnet)
-		if err != nil {
-			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-
-		// Handle provider action
-		switch result.Action {
-		case provisioning.DeprovisionWaiting:
-			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-
-		case provisioning.DeprovisionSkipped:
-			log.Info("provider skipped deprovisioning")
-			return ctrl.Result{}, nil
-
-		case provisioning.DeprovisionTriggered:
-			newJob := v1alpha1.JobStatus{
-				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.NewTime(time.Now().UTC()),
-				State:                  v1alpha1.JobStatePending,
-				Message:                "Deprovisioning job triggered",
-				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
-			}
-			subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, r.MaxJobHistory)
-			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
+		&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
 	}
-
-	// We have a job ID, check its status
-	status, err := r.ProvisioningProvider.GetDeprovisionStatus(ctx, subnet, latestDeprovisionJob.JobID)
-	if err != nil {
-		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
-		updatedJob := *latestDeprovisionJob
-		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Update job status
-	updatedJob := *latestDeprovisionJob
-	updatedJob.State = status.State
-	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(subnet.Status.Jobs, updatedJob)
-
-	// If job is still running, requeue
-	if !status.State.IsTerminal() {
-		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Job reached terminal state (Succeeded, Failed, or Canceled)
-	if status.State.IsSuccessful() {
-		log.Info("deprovision job succeeded", "jobID", latestDeprovisionJob.JobID)
-		return ctrl.Result{}, nil
-	}
-
-	// Job failed or was canceled
-	// Check policy stored in job status
-	if latestDeprovisionJob.BlockDeletionOnFailure {
-		// Block deletion to prevent orphaned resources
-		log.Info("deprovision job failed, blocking deletion to prevent orphaned resources",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	} else {
-		// Allow process to continue
-		log.Info("deprovision job did not succeed, allowing process to continue",
-			"jobID", latestDeprovisionJob.JobID,
-			"state", status.State,
-			"message", updatedJob.Message)
-		return ctrl.Result{}, nil
-	}
+	return ctrl.Result{}, nil
 }

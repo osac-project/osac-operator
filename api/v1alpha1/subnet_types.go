@@ -25,16 +25,19 @@ type SubnetSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
 	VirtualNetwork string `json:"virtualNetwork"`
 
 	// IPv4CIDR is the IPv4 CIDR block for this subnet
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 
 	// IPv6CIDR is the IPv6 CIDR block for this subnet
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 }
 
@@ -87,9 +90,9 @@ type SubnetStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the Subnet
 	// +kubebuilder:validation:Optional
@@ -138,4 +141,3 @@ type SubnetList struct {
 func (s *Subnet) GetName() string {
 	return s.ObjectMeta.Name
 }
-

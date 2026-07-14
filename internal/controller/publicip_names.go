@@ -17,7 +17,17 @@ import (
 	"fmt"
 )
 
+const (
+	publicipControllerName = "publicip-controller"
+
+	// Must match the AAP playbook Service naming convention in osac-aap.
+	publicIPServiceNamePrefix = "osac-pip-"
+	defaultMetalLBNamespace   = "metallb-system"
+)
+
 var (
-	osacPublicIPIDLabel           string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)
-	osacPublicIPFeedbackFinalizer string = fmt.Sprintf("%s/publicip-feedback", osacPrefix)
+	osacPublicIPIDLabel                   string = fmt.Sprintf("%s/publicip-uuid", osacPrefix)
+	osacPublicIPFeedbackFinalizer         string = fmt.Sprintf("%s/publicip-feedback", osacPrefix)
+	osacPublicIPTargetNamespaceAnnotation string = fmt.Sprintf("%s/publicip-target-namespace", osacPrefix)
+	osacPublicIPDetachFinalizer           string = fmt.Sprintf("%s/publicip-detach", osacPrefix)
 )

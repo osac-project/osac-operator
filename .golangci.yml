@@ -21,6 +21,8 @@ linters:
     # unparam
     - unused
   settings:
+    goconst:
+      ignore-tests: true
     revive:
       rules:
         - name: comment-spacings
@@ -31,6 +33,10 @@ linters:
   exclusions:
     generated: lax
     rules:
+      - linters:
+          - dupl
+          - lll
+        path: pkg/
       - linters:
           - lll
         path: api/

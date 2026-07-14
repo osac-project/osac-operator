@@ -29,6 +29,8 @@ controllers:
   computeInstance: true
   tenant: true
   networking: true
+  bareMetalInstance: true
+  storage: true
 
 configSecret:
   name: "osac-config"
@@ -38,3 +40,25 @@ serviceAccount:
   create: true
   name: ""
 
+consoleProxy:
+  vmClusterMode: auto
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+
+bootstrap:
+  cliImage: quay.io/openshift/origin-cli:4.20.0
+
+hubAccess:
+  enabled: false
+
+tenants: []

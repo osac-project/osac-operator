@@ -211,52 +211,31 @@ func (t *publicIPFeedbackReconcilerTask) handleUpdate(ctx context.Context) error
 			return err
 		}
 	}
-	t.syncPhase(ctx)
+	t.syncState(ctx)
 	t.syncAddress()
 	return nil
 }
 
 func (t *publicIPFeedbackReconcilerTask) handleDelete() {
-	if t.object.Status.Phase == v1alpha1.PublicIPPhaseFailed {
+	if t.object.Status.State == v1alpha1.PublicIPStateFailed {
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
 		return
 	}
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
+	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING)
 }
 
-func (t *publicIPFeedbackReconcilerTask) syncPhase(ctx context.Context) {
-	switch t.object.Status.Phase {
-	case v1alpha1.PublicIPPhaseProgressing:
-		t.syncPhaseProgressing()
-	case v1alpha1.PublicIPPhaseFailed:
-		t.syncPhaseFailed()
-	case v1alpha1.PublicIPPhaseReady:
-		t.syncPhaseReady()
-	case v1alpha1.PublicIPPhaseDeleting:
-		t.syncPhaseDeleting()
+func (t *publicIPFeedbackReconcilerTask) syncState(ctx context.Context) {
+	switch t.object.Status.State {
+	case v1alpha1.PublicIPStatePending:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING)
+	case v1alpha1.PublicIPStateAllocated:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED)
+	case v1alpha1.PublicIPStateFailed:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
 	default:
 		log := ctrllog.FromContext(ctx)
-		log.Info(
-			"Unknown phase, will ignore it",
-			"phase", t.object.Status.Phase,
-		)
+		log.Info("Unknown state, will ignore it", "state", t.object.Status.State)
 	}
-}
-
-func (t *publicIPFeedbackReconcilerTask) syncPhaseProgressing() {
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING)
-}
-
-func (t *publicIPFeedbackReconcilerTask) syncPhaseFailed() {
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
-}
-
-func (t *publicIPFeedbackReconcilerTask) syncPhaseReady() {
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED)
-}
-
-func (t *publicIPFeedbackReconcilerTask) syncPhaseDeleting() {
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
 }
 
 func (t *publicIPFeedbackReconcilerTask) syncAddress() {

@@ -25,19 +25,22 @@ type PublicIPPoolSpec struct {
 	// CIDRs is the list of CIDR blocks for this pool. All CIDRs must match the declared IPFamily.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cidrs is immutable"
 	CIDRs []string `json:"cidrs"`
 
 	// IPFamily indicates the IP address family for this pool (IPv4 or IPv6)
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=IPv4;IPv6
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipFamily is immutable"
 	IPFamily string `json:"ipFamily"`
 
 	// ImplementationStrategy determines the backend used to advertise IPs (e.g., metallb-l2).
 	// Defaults to metallb-l2 for v7.0.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=metallb-l2
+	// +kubebuilder:validation:Enum=metallb-l2;netris
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="implementationStrategy is immutable"
 	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 }
 
@@ -70,9 +73,9 @@ type PublicIPPoolStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the PublicIPPool
 	// +kubebuilder:validation:Optional
@@ -131,4 +134,3 @@ type PublicIPPoolList struct {
 func (p *PublicIPPool) GetName() string {
 	return p.ObjectMeta.Name
 }
-

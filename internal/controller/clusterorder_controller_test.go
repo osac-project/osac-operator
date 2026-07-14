@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/internal/provisioning"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
 var _ = Describe("ClusterOrder Controller", func() {
@@ -72,12 +73,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			noopWebhookClient := &noopWebhookClientForTest{}
 			controllerReconciler := &ClusterOrderReconciler{
 				Client:               k8sClient,
 				apiReader:            k8sClient,
 				Scheme:               k8sClient.Scheme(),
-				ProvisioningProvider: provisioning.NewEDAProvider(noopWebhookClient, "http://noop-create", "http://noop-delete"),
+				ProvisioningProvider: noopProvisioningProvider{},
 				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
 			}
 
@@ -93,11 +93,13 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 		evaluateAction := func(instance *v1alpha1.ClusterOrder) (provisioning.Action, *v1alpha1.JobStatus) {
 			provState := &provisioning.State{
-				Jobs:                 &instance.Status.Jobs,
+				Jobs:                 &instance.Status.ProvisioningJobs,
 				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 			}
 			return provisioning.EvaluateAction(provState, func() bool {
-				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{})
+				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
+				})
 			})
 		}
 
@@ -116,7 +118,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "abc123",
-					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: ""}},
+					ProvisioningJobs:     []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: ""}},
 				},
 			}
 			action, _ := evaluateAction(instance)
@@ -137,7 +139,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 		It("should poll when job is still running", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
-					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateRunning}},
+					ProvisioningJobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateRunning}},
 				},
 			}
 			action, job := evaluateAction(instance)
@@ -149,7 +151,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 		It("should poll when job is pending", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
-					Jobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStatePending}},
+					ProvisioningJobs: []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStatePending}},
 				},
 			}
 			action, job := evaluateAction(instance)
@@ -161,7 +163,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "abc123",
-					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "abc123"}},
+					ProvisioningJobs:     []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "abc123"}},
 				},
 			}
 			action, job := evaluateAction(instance)
@@ -173,7 +175,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "new-version",
-					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "old-version"}},
+					ProvisioningJobs:     []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateSucceeded, ConfigVersion: "old-version"}},
 				},
 			}
 			action, job := evaluateAction(instance)
@@ -185,7 +187,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "new-version",
-					Jobs:                 []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateFailed, ConfigVersion: "old-version"}},
+					ProvisioningJobs:     []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, JobID: "job-1", State: v1alpha1.JobStateFailed, ConfigVersion: "old-version"}},
 				},
 			}
 			action, job := evaluateAction(instance)
@@ -197,7 +199,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "abc123",
-					Jobs: []v1alpha1.JobStatus{{
+					ProvisioningJobs: []v1alpha1.JobStatus{{
 						Type:          v1alpha1.JobTypeProvision,
 						JobID:         "job-1",
 						State:         v1alpha1.JobStateSucceeded,
@@ -214,7 +216,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "abc123",
-					Jobs: []v1alpha1.JobStatus{{
+					ProvisioningJobs: []v1alpha1.JobStatus{{
 						Type:          v1alpha1.JobTypeProvision,
 						JobID:         "job-1",
 						State:         v1alpha1.JobStateFailed,
@@ -231,7 +233,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "new-version",
-					Jobs: []v1alpha1.JobStatus{{
+					ProvisioningJobs: []v1alpha1.JobStatus{{
 						Type:          v1alpha1.JobTypeProvision,
 						JobID:         "job-1",
 						State:         v1alpha1.JobStateFailed,
@@ -248,7 +250,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					DesiredConfigVersion: "new-version",
-					Jobs: []v1alpha1.JobStatus{{
+					ProvisioningJobs: []v1alpha1.JobStatus{{
 						Type:          v1alpha1.JobTypeProvision,
 						JobID:         "job-1",
 						State:         v1alpha1.JobStateSucceeded,
@@ -279,7 +281,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			jobTimestamp := metav1.NewTime(time.Now().UTC())
 			apiInstance.Status.DesiredConfigVersion = "v1"
-			apiInstance.Status.Jobs = []v1alpha1.JobStatus{
+			apiInstance.Status.ProvisioningJobs = []v1alpha1.JobStatus{
 				{Type: v1alpha1.JobTypeProvision, JobID: "running-job", State: v1alpha1.JobStateRunning, Timestamp: jobTimestamp},
 			}
 			Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
@@ -327,7 +329,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
-			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).To(BeNil())
 		})
 	})
@@ -358,7 +360,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero())
-			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
 			Expect(latestDeprovisionJob).To(BeNil())
 		})
 	})
@@ -392,6 +394,152 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(reconciler.handleDesiredConfigVersion(instance1)).To(Succeed())
 			Expect(reconciler.handleDesiredConfigVersion(instance2)).To(Succeed())
 			Expect(instance1.Status.DesiredConfigVersion).NotTo(Equal(instance2.Status.DesiredConfigVersion))
+		})
+	})
+
+	Context("management-state unmanaged with deletion", func() {
+		ctx := context.Background()
+
+		It("should still handle delete for unmanaged ClusterOrder with finalizer", func() {
+			managedThenUnmanaged := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "managed-then-unmanaged",
+					Namespace: "default",
+					Annotations: map[string]string{
+						osacManagementStateAnnotation: ManagementStateUnmanaged,
+					},
+					Finalizers: []string{osacFinalizer},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+			Expect(k8sClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
+
+			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: managedThenUnmanaged.Namespace}
+
+			controllerReconciler := &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+			}
+
+			Expect(k8sClient.Delete(ctx, managedThenUnmanaged)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: key,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+	})
+
+	Context("handleHostedCluster", func() {
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			reconciler = &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should update conditions but not set Phase to Ready when HostedCluster is ready", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-hc-no-phase",
+					Namespace: "default",
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: "Available", Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: "Degraded", Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: "ClusterVersionSucceeding", Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+					},
+				},
+			}
+
+			err := reconciler.handleHostedCluster(ctx, instance, hc)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing),
+				"handleHostedCluster must not set Phase to Ready — Phase is controlled by provisioning callbacks")
+
+			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
+			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
+		})
+
+		It("should not modify Phase when HostedCluster is not yet available", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-hc-not-available",
+					Namespace: "default",
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: "Available", Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
+						{Type: "Degraded", Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+					},
+				},
+			}
+
+			err := reconciler.handleHostedCluster(ctx, instance, hc)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
+		})
+	})
+
+	Context("provisioning callbacks", func() {
+		It("should set Phase to Ready via OnSuccess callback", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+
+			Expect(callbacks.OnSuccess).NotTo(BeNil(), "OnSuccess callback must be set")
+			callbacks.OnSuccess(provisioning.ProvisionStatus{})
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+		})
+
+		It("should set Phase to Failed via OnFailed callback", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+
+			Expect(callbacks.OnFailed).NotTo(BeNil(), "OnFailed callback must be set")
+			callbacks.OnFailed("playbook failed")
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseFailed))
 		})
 	})
 
