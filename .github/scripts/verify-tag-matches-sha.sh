@@ -7,7 +7,8 @@
 # Required env vars: GH_TOKEN, REPO, TAG, GUARDED_SHA
 set -euo pipefail
 
-read -r current_type current_sha <<< "$(gh api "repos/${REPO}/git/refs/tags/${TAG}" --jq '[.object.type, .object.sha] | @tsv')"
+ref_json="$(gh api "repos/${REPO}/git/ref/tags/${TAG}" --jq '[.object.type, .object.sha] | @tsv')"
+read -r current_type current_sha <<< "$ref_json"
 if [[ "$current_type" == "tag" ]]; then
   # Annotated tag: the ref's object.sha is the tag object, not the commit - peel it.
   current_sha="$(gh api "repos/${REPO}/git/tags/${current_sha}" --jq .object.sha)"
