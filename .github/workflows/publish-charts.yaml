@@ -27,7 +27,9 @@ jobs:
         CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
       run: |
-        semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+        # No build-metadata (+...) suffix allowed: this tag is used verbatim as a
+        # container image tag downstream, and Docker/OCI tags cannot contain '+'.
+        semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
         if ! [[ "$HEAD_BRANCH" =~ $semver_re ]]; then
           echo "::error::Tag '$HEAD_BRANCH' is not a valid semver release tag"
           exit 1
@@ -66,7 +68,10 @@ jobs:
         version: v3.17.0
 
     - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login ${{ env.REGISTRY }} -u "${REGISTRY_USERNAME}" --password-stdin
 
     - name: Extract version from tag
       id: version
@@ -113,7 +118,10 @@ jobs:
         version: v3.17.0
 
     - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login ${{ env.REGISTRY }} -u "${REGISTRY_USERNAME}" --password-stdin
 
     - name: Extract version from tag
       id: version
@@ -160,13 +168,14 @@ jobs:
     - name: Create GitHub Release
       run: |
         gh release create "${TAG}" \
-          --repo "${{ github.repository }}" \
+          --repo "${REPO}" \
           --title "osac-operator ${TAG}" \
           --generate-notes \
           --verify-tag \
         || gh release edit "${TAG}" \
-          --repo "${{ github.repository }}" \
+          --repo "${REPO}" \
           --title "osac-operator ${TAG}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         TAG: ${{ needs.guard.outputs.tag }}
+        REPO: ${{ github.repository }}
