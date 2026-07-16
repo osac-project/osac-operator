@@ -91,7 +91,9 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 	}
 
 	// Step 2: Get the cluster ID from labels. CRs without this label
-	// weren't created by the fulfillment service, so we ignore them.
+	// are not linked to a fulfillment-service cluster record, so we
+	// skip them — except when being deleted with our finalizer still
+	// present, in which case we remove it to unblock garbage collection.
 	clusterID, ok := object.Labels[osacClusterOrderIDLabel]
 	if !ok {
 		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
