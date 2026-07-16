@@ -1,4 +1,4 @@
-# OSAC operator
+# OSAC Operator
 
 Reconciles custom resources created by the [fulfillment
 service](https://github.com/osac-project/fulfillment-service/) or elsewhere.
