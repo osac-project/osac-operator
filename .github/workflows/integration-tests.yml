@@ -2,6 +2,12 @@ name: Integration Tests
 
 on:
   pull_request:
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
+      - 'examples/**'
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'

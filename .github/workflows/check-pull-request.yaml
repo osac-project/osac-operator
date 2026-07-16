@@ -16,6 +16,12 @@ name: check-generated-code
 
 on:
   pull_request:
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
+      - 'examples/**'
 
 jobs:
 

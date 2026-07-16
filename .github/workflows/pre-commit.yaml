@@ -2,6 +2,12 @@ name: pre-commit
 
 on:
   pull_request:
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
+      - 'examples/**'
 
 jobs:
   pre-commit:
