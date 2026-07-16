@@ -128,6 +128,11 @@ spec:
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
+              apiEndpoint:
+                description: |-
+                  ApiEndpoint is the internal API server VIP allocated by MetalLB.
+                  Written by the CaaS template after VIP discovery.
+                type: string
               clusterReference:
                 description: Reference to the namespace that contains the HostedCluster
                   resource
@@ -264,6 +269,11 @@ spec:
                 description: |-
                   DesiredConfigVersion is a hash of the current spec, used to detect spec changes
                   that require re-provisioning.
+                type: string
+              ingressEndpoint:
+                description: |-
+                  IngressEndpoint is the internal ingress VIP allocated by MetalLB.
+                  Written by the CaaS template after VIP discovery.
                 type: string
               nodeRequests:
                 description: NodeRequests reflects how many nodes are currently associated
