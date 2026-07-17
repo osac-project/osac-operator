@@ -34,19 +34,19 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.docs-only != 'true' }}
+      should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
     steps:
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
         if: github.event_name == 'pull_request'
         id: filter
         with:
-          predicate-quantifier: 'every'
           filters: |
-            docs-only:
-              - 'OWNERS'
-              - 'LICENSE'
-              - '*.md'
-              - 'docs/**'
+            code:
+              - '**'
+              - '!OWNERS'
+              - '!LICENSE'
+              - '!*.md'
+              - '!docs/**'
 
   e2e-vmaas-full-install:
     needs: changes
