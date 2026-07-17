@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -228,8 +230,23 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		&provisioning.State{Jobs: &sg.Status.ProvisioningJobs, DesiredConfigVersion: sg.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady },
+			OnFailed: func(message string) {
+				sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed
+				apimeta.SetStatusCondition(&sg.Status.Conditions, metav1.Condition{
+					Type:    v1alpha1.ConditionReady,
+					Status:  metav1.ConditionFalse,
+					Reason:  v1alpha1.ReasonProvisioningFailed,
+					Message: message,
+				})
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady
+				apimeta.SetStatusCondition(&sg.Status.Conditions, metav1.Condition{
+					Type:   v1alpha1.ConditionReady,
+					Status: metav1.ConditionTrue,
+					Reason: v1alpha1.ReasonAsExpected,
+				})
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{}, func(obj client.Object) []v1alpha1.JobStatus {
