@@ -13,6 +13,7 @@ filters:
     - rgolangh
     - eliorerz
     - ori-amizur
+    - vladikr
     reviewers:
     - jhernand
     - adriengentil
@@ -26,3 +27,4 @@ filters:
     - rgolangh
     - eliorerz
     - ori-amizur
+    - vladikr
