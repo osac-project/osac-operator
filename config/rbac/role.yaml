@@ -93,6 +93,7 @@ rules:
   - externalipattachments/finalizers
   - externalippools/finalizers
   - externalips/finalizers
+  - natgateways/finalizers
   - publicipattachments/finalizers
   - publicippools/finalizers
   - publicips/finalizers
@@ -110,6 +111,7 @@ rules:
   - externalipattachments
   - externalippools
   - externalips
+  - natgateways
   - publicipattachments
   - publicippools
   - publicips
@@ -133,6 +135,7 @@ rules:
   - externalipattachments/status
   - externalippools/status
   - externalips/status
+  - natgateways/status
   - publicipattachments/status
   - publicippools/status
   - publicips/status
