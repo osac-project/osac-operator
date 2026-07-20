@@ -28,6 +28,7 @@ const (
 	tenantStorageClassesKey contextKey = iota
 	adminKubeconfigKey
 	storageTierDefinitionsKey
+	storageBackendConnectionsKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -94,4 +95,18 @@ func WithStorageTierDefinitions(ctx context.Context, tiers []TierDefinition) con
 func StorageTierDefinitionsFromContext(ctx context.Context) []TierDefinition {
 	tiers, _ := ctx.Value(storageTierDefinitionsKey).([]TierDefinition)
 	return tiers
+}
+
+// WithStorageBackendConnections returns a context carrying the resolved storage
+// backend connection details, keyed by backend_id. The AAP provider reads this when
+// building extra_vars.
+func WithStorageBackendConnections(ctx context.Context, conns map[string]BackendConnection) context.Context {
+	return context.WithValue(ctx, storageBackendConnectionsKey, conns)
+}
+
+// StorageBackendConnectionsFromContext retrieves the storage backend connections
+// from the context, or nil if not set.
+func StorageBackendConnectionsFromContext(ctx context.Context) map[string]BackendConnection {
+	conns, _ := ctx.Value(storageBackendConnectionsKey).(map[string]BackendConnection)
+	return conns
 }

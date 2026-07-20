@@ -58,4 +58,26 @@ var _ = Describe("ExtraVarsContext", func() {
 			Expect(result).To(BeNil())
 		})
 	})
+
+	Describe("StorageBackendConnections", func() {
+		It("should round-trip backend connections", func() {
+			ctx := context.Background()
+			conns := map[string]provisioning.BackendConnection{
+				"backend-1": {Endpoint: "https://vast.example.com", Username: "admin", Password: "s3cr3t"},
+			}
+
+			ctx = provisioning.WithStorageBackendConnections(ctx, conns)
+			result := provisioning.StorageBackendConnectionsFromContext(ctx)
+
+			Expect(result).To(Equal(conns))
+		})
+
+		It("should return nil from a context without backend connections", func() {
+			ctx := context.Background()
+
+			result := provisioning.StorageBackendConnectionsFromContext(ctx)
+
+			Expect(result).To(BeNil())
+		})
+	})
 })

@@ -361,6 +361,10 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		event["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
 	}
 
+	if conns := StorageBackendConnectionsFromContext(ctx); len(conns) > 0 {
+		event["storage_backend_connections"] = backendConnectionsToExtraVars(conns)
+	}
+
 	// Wrap in ansible_eda.event structure for AAP template compatibility.
 	return map[string]any{
 		"ansible_eda": map[string]any{
@@ -392,6 +396,21 @@ func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
 				},
 			},
 			"quota": tier.QuotaGiB,
+		}
+	}
+	return result
+}
+
+// backendConnectionsToExtraVars converts backend connection details to the
+// AAP-schema-shaped map format, keyed by backend_id, one entry per unique backend
+// (never repeated per tier — see BackendConnection's doc comment).
+func backendConnectionsToExtraVars(conns map[string]BackendConnection) map[string]map[string]any {
+	result := make(map[string]map[string]any, len(conns))
+	for backendID, conn := range conns {
+		result[backendID] = map[string]any{
+			"endpoint": conn.Endpoint,
+			"username": conn.Username,
+			"password": conn.Password,
 		}
 	}
 	return result

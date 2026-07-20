@@ -234,14 +234,16 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	// so handleBackendProvisioning, handleClusterStorageProvisioning, and
 	// handleCaaSUpdate all pick it up via the ctx they receive from this function.
 	var tierDefinitions []provisioning.TierDefinition
+	var backendConnections map[string]provisioning.BackendConnection
 	if r.TiersClient != nil {
 		var err error
-		tierDefinitions, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
+		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
+	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
 
 	// Stage 1: check hub Secret
 	hubSecretReady, err := r.hubSecretExists(ctx, tenantName)
@@ -644,14 +646,16 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	// AAP-triggering call in this function — so it, handleClusterStorageDeprovisioning,
 	// and handleBackendDeprovisioning all pick it up via the ctx they receive.
 	var tierDefinitions []provisioning.TierDefinition
+	var backendConnections map[string]provisioning.BackendConnection
 	if r.TiersClient != nil {
 		var err error
-		tierDefinitions, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
+		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
+	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
 
 	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
 	// all CaaS clusters and remove our finalizer from their ClusterOrders.

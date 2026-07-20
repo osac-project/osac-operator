@@ -42,7 +42,12 @@ const tierListLimit = 1000
 // tier's serving provider from its first backend association (multi-backend tiers
 // are not yet supported — first association wins). Backend lookups are deduplicated
 // by backend_id across all tiers: each unique backend is fetched at most once
-// regardless of how many tiers reference it.
+// regardless of how many tiers reference it. The same Get call also resolves that
+// backend's connection details (endpoint + credentials), returned as a map keyed by
+// backend_id — resolved once per unique backend, never repeated per tier, so
+// credential material is never duplicated in the extra_vars payload. Values are
+// extracted from the response immediately; the response itself is never retained
+// or logged.
 //
 // A tier with no backend association, or whose backend_id resolves to NotFound, is
 // skipped with a logged warning rather than failing the whole resolution — a bad
@@ -51,14 +56,14 @@ func resolveTierDefinitions(
 	ctx context.Context,
 	tiersClient StorageTiersClient,
 	backendsGetter StorageBackendsGetter,
-) ([]provisioning.TierDefinition, error) {
+) ([]provisioning.TierDefinition, map[string]provisioning.BackendConnection, error) {
 	log := ctrllog.FromContext(ctx)
 
 	resp, err := tiersClient.List(ctx, privatev1.StorageTiersListRequest_builder{
 		Limit: ptr.To(int32(tierListLimit)),
 	}.Build())
 	if err != nil {
-		return nil, fmt.Errorf("list storage tiers: %w", err)
+		return nil, nil, fmt.Errorf("list storage tiers: %w", err)
 	}
 
 	type backendResolution struct {
@@ -66,6 +71,7 @@ func resolveTierDefinitions(
 		found    bool
 	}
 	backendCache := make(map[string]backendResolution)
+	connections := make(map[string]provisioning.BackendConnection)
 
 	var definitions []provisioning.TierDefinition
 	for _, tier := range resp.GetItems() {
@@ -91,10 +97,16 @@ func resolveTierDefinitions(
 					backendCache[backendID] = backendResolution{found: false}
 					continue
 				}
-				return nil, fmt.Errorf("get storage backend %q: %w", backendID, err)
+				return nil, nil, fmt.Errorf("get storage backend %q: %w", backendID, err)
 			}
-			resolution = backendResolution{provider: getResp.GetObject().GetSpec().GetProvider(), found: true}
+			spec := getResp.GetObject().GetSpec()
+			resolution = backendResolution{provider: spec.GetProvider(), found: true}
 			backendCache[backendID] = resolution
+			connections[backendID] = provisioning.BackendConnection{
+				Endpoint: spec.GetEndpoint(),
+				Username: spec.GetCredentials().GetUsername(),
+				Password: spec.GetCredentials().GetPassword(),
+			}
 		}
 		if !resolution.found {
 			continue
@@ -113,7 +125,7 @@ func resolveTierDefinitions(
 		})
 	}
 
-	return definitions, nil
+	return definitions, connections, nil
 }
 
 // storageProtocolToString maps the Tier API's StorageProtocol enum to the lowercase

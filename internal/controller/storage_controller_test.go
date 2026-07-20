@@ -664,7 +664,7 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			defs, conns, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(defs).To(HaveLen(1))
 			Expect(defs[0].Name).To(Equal("fast"))
@@ -674,6 +674,11 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs[0].QuotaGiB).To(Equal(int64(500)))
 			Expect(defs[0].QosLimits.MaxReadBandwidthMBs).To(Equal(int32(100)))
 			Expect(defs[0].QosLimits.MaxWriteBandwidthMBs).To(Equal(int32(100)))
+			Expect(conns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: "admin",
+				Password: "s3cr3t",
+			}))
 		})
 
 		It("should skip a tier with no backend association without failing", func() {
@@ -693,7 +698,7 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			defs, _, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(defs).To(HaveLen(1))
 			Expect(defs[0].Name).To(Equal("fast"))
@@ -717,10 +722,12 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			defs, conns, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(defs).To(HaveLen(2))
 			Expect(backendsGetter.getCallCount).To(Equal(1))
+			Expect(conns).To(HaveLen(1))
+			Expect(conns).To(HaveKey("backend-1"))
 		})
 
 		It("should skip only tiers referencing a NotFound backend, not the whole resolution", func() {
@@ -743,10 +750,12 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			defs, conns, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(defs).To(HaveLen(1))
 			Expect(defs[0].Name).To(Equal("fast"))
+			Expect(conns).NotTo(HaveKey("backend-gone"))
+			Expect(conns).To(HaveKey("backend-1"))
 		})
 
 		It("should propagate a List error without swallowing it", func() {
@@ -761,7 +770,7 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			_, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			_, _, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -779,7 +788,7 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 
-			_, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			_, _, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -1052,6 +1061,41 @@ var _ = Describe("Storage Controller", func() {
 			Expect(sawTiers).To(BeTrue())
 			Expect(gotTiers).To(HaveLen(1))
 			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+
+		It("should inject storage_backend_connections into context alongside storage_tier_definitions", func() {
+			name := "storage-test-backend-conn-ctx"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			var gotConns map[string]provisioning.BackendConnection
+			var sawConns bool
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-storage-mock",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					sawConns = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: v1alpha1.JobStatePending}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tierDefsTiersClient()
+			r.BackendsGetter = tierDefsBackendsGetter()
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sawConns).To(BeTrue())
+			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: "admin",
+				Password: "s3cr3t",
+			}))
 		})
 
 		It("should inject storage_tier_definitions into context before handleBackendDeprovisioning (delete path)", func() {

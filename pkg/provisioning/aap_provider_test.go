@@ -903,4 +903,53 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
+
+	Describe("ExtraVars storage backend connections injection", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+		})
+
+		It("should shape storage_backend_connections keyed by backend_id", func() {
+			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
+				"backend-1": {Endpoint: "https://vast.example.com", Username: "admin", Password: "s3cr3t"},
+			})
+
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).To(HaveKey("storage_backend_connections"))
+				conns := edaEvent["storage_backend_connections"].(map[string]map[string]any)
+				Expect(conns).To(Equal(map[string]map[string]any{
+					"backend-1": {
+						"endpoint": "https://vast.example.com",
+						"username": "admin",
+						"password": "s3cr3t",
+					},
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 121}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should omit storage_backend_connections when not set in context", func() {
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).NotTo(HaveKey("storage_backend_connections"))
+				return &aap.LaunchJobTemplateResponse{JobID: 122}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
 })
