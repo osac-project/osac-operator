@@ -357,12 +357,44 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		event["admin_kubeconfig"] = kc
 	}
 
+	if tiers := StorageTierDefinitionsFromContext(ctx); len(tiers) > 0 {
+		event["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
+	}
+
 	// Wrap in ansible_eda.event structure for AAP template compatibility.
 	return map[string]any{
 		"ansible_eda": map[string]any{
 			"event": event,
 		},
 	}, nil
+}
+
+// tierDefinitionsToExtraVars converts tier definitions to the AAP-schema-shaped map
+// format osac-aap's storage_provider role expects (storage_provider/meta/
+// argument_specs.yaml). Field names are a deliberate departure from the Go/proto
+// field names: quota (not QuotaGiB — vast_storage/tasks/create_quotas.yaml reads
+// item.quota) and max_reads_bw_mbps/max_writes_bw_mbps (matching the role's
+// documented example, not the Go struct's MaxReadBandwidthMBs/MaxWriteBandwidthMBs).
+// No qos_policy key — osac-aap derives "<name>-qos" from the tier name it already
+// receives.
+func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
+	result := make([]map[string]any, len(tiers))
+	for i, tier := range tiers {
+		result[i] = map[string]any{
+			"name":       tier.Name,
+			"protocol":   tier.Protocol,
+			"provider":   tier.Provider,
+			"backend_id": tier.BackendID,
+			"qos_limits": map[string]any{
+				"static_limits": map[string]any{
+					"max_reads_bw_mbps":  tier.QosLimits.MaxReadBandwidthMBs,
+					"max_writes_bw_mbps": tier.QosLimits.MaxWriteBandwidthMBs,
+				},
+			},
+			"quota": tier.QuotaGiB,
+		}
+	}
+	return result
 }
 
 // serializeResource converts a Kubernetes resource to a map using JSON marshaling.

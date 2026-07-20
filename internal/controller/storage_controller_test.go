@@ -974,6 +974,168 @@ var _ = Describe("Storage Controller", func() {
 		})
 	})
 
+	Context("Tier definitions in AAP extra_vars context", func() {
+		tierDefsTiersClient := func() *mockStorageTiersClient {
+			return &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("fast", "backend-1")},
+					}.Build(), nil
+				},
+			}
+		}
+		tierDefsBackendsGetter := func() *mockStorageBackendsGetter {
+			return &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+		}
+
+		It("should inject storage_tier_definitions into context before handleBackendProvisioning (Stage 1)", func() {
+			name := "storage-test-tier-ctx-backend-provisioning"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			provider := &mockProvisioningProvider{
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: v1alpha1.JobStatePending}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tierDefsTiersClient()
+			r.BackendsGetter = tierDefsBackendsGetter()
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sawTiers).To(BeTrue())
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+
+		It("should inject storage_tier_definitions into context before handleClusterStorageProvisioning (Stage 2)", func() {
+			name := "storage-test-tier-ctx-cluster-provisioning"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-storage-mock",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: v1alpha1.JobStatePending}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tierDefsTiersClient()
+			r.BackendsGetter = tierDefsBackendsGetter()
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sawTiers).To(BeTrue())
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+
+		It("should inject storage_tier_definitions into context before handleBackendDeprovisioning (delete path)", func() {
+			name := "storage-test-tier-ctx-backend-deprovisioning"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			provider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object, provisionJobs []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "mock-deprovision-job-id", BlockDeletionOnFailure: true}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tierDefsTiersClient()
+			r.BackendsGetter = tierDefsBackendsGetter()
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(sawTiers).To(BeTrue())
+			}).Should(Succeed())
+
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+
+		It("should inject storage_tier_definitions into context before handleClusterStorageDeprovisioning (delete path)", func() {
+			name := "storage-test-tier-ctx-cluster-deprovisioning"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-storage-mock",
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object, provisionJobs []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "mock-deprovision-job-id", BlockDeletionOnFailure: true}, nil
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tierDefsTiersClient()
+			r.BackendsGetter = tierDefsBackendsGetter()
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(sawTiers).To(BeTrue())
+			}).Should(Succeed())
+
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+	})
+
 	Context("Finalizer and deletion", func() {
 		It("should add storage finalizer on first reconcile", func() {
 			name := "storage-test-finalizer"

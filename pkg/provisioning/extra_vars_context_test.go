@@ -29,4 +29,33 @@ var _ = Describe("ExtraVarsContext", func() {
 			Expect(result).To(BeEmpty())
 		})
 	})
+
+	Describe("StorageTierDefinitions", func() {
+		It("should round-trip tier definitions", func() {
+			ctx := context.Background()
+			tiers := []provisioning.TierDefinition{
+				{
+					Name:      "fast",
+					Protocol:  "nfs",
+					Provider:  "vast",
+					BackendID: "backend-1",
+					QosLimits: &provisioning.TierQosLimits{MaxReadBandwidthMBs: 100, MaxWriteBandwidthMBs: 200},
+					QuotaGiB:  500,
+				},
+			}
+
+			ctx = provisioning.WithStorageTierDefinitions(ctx, tiers)
+			result := provisioning.StorageTierDefinitionsFromContext(ctx)
+
+			Expect(result).To(Equal(tiers))
+		})
+
+		It("should return nil from a context without tier definitions", func() {
+			ctx := context.Background()
+
+			result := provisioning.StorageTierDefinitionsFromContext(ctx)
+
+			Expect(result).To(BeNil())
+		})
+	})
 })

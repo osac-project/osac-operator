@@ -27,6 +27,7 @@ type contextKey int
 const (
 	tenantStorageClassesKey contextKey = iota
 	adminKubeconfigKey
+	storageTierDefinitionsKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -80,4 +81,17 @@ func WithAdminKubeconfig(ctx context.Context, kubeconfig string) context.Context
 func AdminKubeconfigFromContext(ctx context.Context) string {
 	kc, _ := ctx.Value(adminKubeconfigKey).(string)
 	return kc
+}
+
+// WithStorageTierDefinitions returns a context carrying the resolved storage tier
+// definitions. The AAP provider reads this when building extra_vars.
+func WithStorageTierDefinitions(ctx context.Context, tiers []TierDefinition) context.Context {
+	return context.WithValue(ctx, storageTierDefinitionsKey, tiers)
+}
+
+// StorageTierDefinitionsFromContext retrieves the storage tier definitions from the
+// context, or nil if not set.
+func StorageTierDefinitionsFromContext(ctx context.Context) []TierDefinition {
+	tiers, _ := ctx.Value(storageTierDefinitionsKey).([]TierDefinition)
+	return tiers
 }

@@ -839,4 +839,68 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
+
+	Describe("ExtraVars storage tier definitions injection", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+		})
+
+		It("should shape storage_tier_definitions per the storage_provider role's argument_specs", func() {
+			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{
+				{
+					Name:      "fast",
+					Protocol:  "nfs",
+					Provider:  "vast",
+					BackendID: "backend-1",
+					QosLimits: &provisioning.TierQosLimits{MaxReadBandwidthMBs: 100, MaxWriteBandwidthMBs: 200},
+					QuotaGiB:  500,
+				},
+			})
+
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).To(HaveKey("storage_tier_definitions"))
+				tiers := edaEvent["storage_tier_definitions"].([]map[string]any)
+				Expect(tiers).To(HaveLen(1))
+				Expect(tiers[0]).To(Equal(map[string]any{
+					"name":       "fast",
+					"protocol":   "nfs",
+					"provider":   "vast",
+					"backend_id": "backend-1",
+					"qos_limits": map[string]any{
+						"static_limits": map[string]any{
+							"max_reads_bw_mbps":  int32(100),
+							"max_writes_bw_mbps": int32(200),
+						},
+					},
+					"quota": int64(500),
+				}))
+				Expect(tiers[0]).NotTo(HaveKey("qos_policy"))
+				return &aap.LaunchJobTemplateResponse{JobID: 111}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should omit storage_tier_definitions when not set in context", func() {
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+				Expect(edaEvent).NotTo(HaveKey("storage_tier_definitions"))
+				return &aap.LaunchJobTemplateResponse{JobID: 112}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
 })
