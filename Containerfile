@@ -1,5 +1,5 @@
 # Build the manager and console-proxy binaries
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:10.1 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
