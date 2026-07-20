@@ -29,6 +29,33 @@ const (
 	adminKubeconfigKey
 )
 
+// TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
+// (mirrors osac-aap's storage_provider role argument_specs.yaml: name/protocol/
+// provider/qos_limits/quota), resolved from the Tier and Backend APIs.
+type TierDefinition struct {
+	Name      string
+	Protocol  string
+	Provider  string
+	BackendID string
+	QosLimits *TierQosLimits
+	QuotaGiB  int64
+}
+
+// TierQosLimits carries the bandwidth limits for a TierDefinition's backend association.
+type TierQosLimits struct {
+	MaxReadBandwidthMBs  int32
+	MaxWriteBandwidthMBs int32
+}
+
+// BackendConnection carries one storage backend's management-endpoint connection
+// details, resolved once per unique backend_id across all tiers so credential
+// material is never duplicated in the extra_vars payload.
+type BackendConnection struct {
+	Endpoint string
+	Username string
+	Password string
+}
+
 // WithTenantStorageClasses returns a context carrying the tenant's resolved
 // storage classes. The AAP provider reads this when building extra_vars.
 func WithTenantStorageClasses(ctx context.Context, scs []v1alpha1.ResolvedStorageClass) context.Context {

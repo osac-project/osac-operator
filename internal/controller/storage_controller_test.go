@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,11 +27,16 @@ import (
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -96,6 +102,62 @@ func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
 	DeferCleanup(func() {
 		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, sc))).To(Succeed())
 	})
+}
+
+type mockStorageTiersClient struct {
+	listFunc      func(ctx context.Context, in *privatev1.StorageTiersListRequest, opts ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error)
+	listCallCount int
+}
+
+func (m *mockStorageTiersClient) List(ctx context.Context, in *privatev1.StorageTiersListRequest, opts ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+	m.listCallCount++
+	return m.listFunc(ctx, in, opts...)
+}
+
+type mockStorageBackendsGetter struct {
+	getFunc      func(ctx context.Context, in *privatev1.StorageBackendsGetRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error)
+	getCallCount int
+}
+
+func (m *mockStorageBackendsGetter) Get(ctx context.Context, in *privatev1.StorageBackendsGetRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+	m.getCallCount++
+	return m.getFunc(ctx, in, opts...)
+}
+
+// newTestStorageTier builds a StorageTier fixture with one BackendAssociation per
+// backendID given. Passing no backendIDs produces a tier with zero associations.
+func newTestStorageTier(name string, backendIDs ...string) *privatev1.StorageTier {
+	backends := make([]*privatev1.BackendAssociation, len(backendIDs))
+	for i, id := range backendIDs {
+		backends[i] = privatev1.BackendAssociation_builder{
+			BackendId:            id,
+			Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+			MaxReadBandwidthMbs:  100,
+			MaxWriteBandwidthMbs: 100,
+			QuotaGib:             500,
+		}.Build()
+	}
+	return privatev1.StorageTier_builder{
+		Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+		Spec:     privatev1.StorageTierSpec_builder{Backends: backends}.Build(),
+	}.Build()
+}
+
+// newTestStorageBackendGetResponse builds a StorageBackendsGetResponse fixture for
+// the given provider, with a fixed endpoint/credentials pair.
+func newTestStorageBackendGetResponse(provider string) *privatev1.StorageBackendsGetResponse {
+	return privatev1.StorageBackendsGetResponse_builder{
+		Object: privatev1.StorageBackend_builder{
+			Spec: privatev1.StorageBackendSpec_builder{
+				Provider: provider,
+				Endpoint: "https://" + provider + ".example.com",
+				Credentials: privatev1.StorageBackendCredentials_builder{
+					Username: "admin",
+					Password: "s3cr3t",
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
 }
 
 func newClusterOrder(name, namespace string, annotations map[string]string) *v1alpha1.ClusterOrder {
@@ -583,6 +645,332 @@ var _ = Describe("Storage Controller", func() {
 
 			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
 			Expect(tenant.Status.StorageClasses[0].Name).To(Equal(name + "-tenant-sc"))
+		})
+	})
+
+	Context("Tier definition validation", func() {
+		It("should resolve provider and tier fields from the Tier and Backend APIs", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("fast", "backend-1")},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					Expect(in.GetId()).To(Equal("backend-1"))
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(defs).To(HaveLen(1))
+			Expect(defs[0].Name).To(Equal("fast"))
+			Expect(defs[0].Protocol).To(Equal("nfs"))
+			Expect(defs[0].Provider).To(Equal("vast"))
+			Expect(defs[0].BackendID).To(Equal("backend-1"))
+			Expect(defs[0].QuotaGiB).To(Equal(int64(500)))
+			Expect(defs[0].QosLimits.MaxReadBandwidthMBs).To(Equal(int32(100)))
+			Expect(defs[0].QosLimits.MaxWriteBandwidthMBs).To(Equal(int32(100)))
+		})
+
+		It("should skip a tier with no backend association without failing", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("orphan"),
+							newTestStorageTier("fast", "backend-1"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(defs).To(HaveLen(1))
+			Expect(defs[0].Name).To(Equal("fast"))
+			Expect(backendsGetter.getCallCount).To(Equal(1))
+		})
+
+		It("should call the backend getter once per unique backend_id, not once per tier", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("fast", "backend-1"),
+							newTestStorageTier("standard", "backend-1"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(defs).To(HaveLen(2))
+			Expect(backendsGetter.getCallCount).To(Equal(1))
+		})
+
+		It("should skip only tiers referencing a NotFound backend, not the whole resolution", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("stale", "backend-gone"),
+							newTestStorageTier("fast", "backend-1"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == "backend-gone" {
+						return nil, status.Error(codes.NotFound, "storage backend not found")
+					}
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			defs, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(defs).To(HaveLen(1))
+			Expect(defs[0].Name).To(Equal("fast"))
+		})
+
+		It("should propagate a List error without swallowing it", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, errors.New("list rpc failed")
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			_, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should propagate a non-NotFound Get error without swallowing it", func() {
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("fast", "backend-1")},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return nil, status.Error(codes.Unavailable, "backend service down")
+				},
+			}
+
+			_, err := resolveTierDefinitions(ctx, tiersClient, backendsGetter)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should report a missing tier via Warning Event and the ClusterStorageReady condition", func() {
+			name := "storage-test-missing-tier"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("default", "backend-1"),
+							newTestStorageTier("archive", "backend-1"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsGetter = &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring(eventReasonMissingStorageTier),
+				ContainSubstring(`tier "archive" has no StorageClass`),
+			)))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Message).To(ContainSubstring(`tier "archive" has no StorageClass`))
+		})
+
+		It("should not report a missing tier when every defined tier has a matching StorageClass", func() {
+			name := "storage-test-no-missing-tier"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("default", "backend-1")},
+					}.Build(), nil
+				},
+			}
+			r.BackendsGetter = &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Consistently(fakeRecorder.Events, 200*time.Millisecond).ShouldNot(Receive(
+				ContainSubstring(eventReasonMissingStorageTier),
+			))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Message).NotTo(ContainSubstring("has no StorageClass"))
+		})
+
+		It("should skip tier validation entirely when TiersClient is nil", func() {
+			name := "storage-test-no-tiers-client"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = fakeRecorder
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Consistently(fakeRecorder.Events, 200*time.Millisecond).ShouldNot(Receive(
+				ContainSubstring(eventReasonMissingStorageTier),
+			))
+		})
+
+		It("should call resolveTierDefinitions exactly once per handleUpdate invocation", func() {
+			name := "storage-test-resolve-once"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
+
+			tiersClient := &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("default", "backend-1")},
+					}.Build(), nil
+				},
+			}
+			backendsGetter := &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = tiersClient
+			r.BackendsGetter = backendsGetter
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tiersClient.listCallCount).To(Equal(1))
+			Expect(backendsGetter.getCallCount).To(Equal(1))
+		})
+
+		It("should not flag an ambiguous (duplicate StorageClass) tier as missing", func() {
+			name := "storage-test-ambiguous-not-missing"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-fast-sc-1", name, "fast")
+			createLabeledStorageClass(ctx, name+"-fast-sc-2", name, "fast")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersClient{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("fast", "backend-1"),
+							newTestStorageTier("archive", "backend-1"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsGetter = &mockStorageBackendsGetter{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring(eventReasonMissingStorageTier),
+				ContainSubstring(`tier "archive" has no StorageClass`),
+			)))
+			Consistently(fakeRecorder.Events, 200*time.Millisecond).ShouldNot(Receive(
+				ContainSubstring(`tier "fast" has no StorageClass`),
+			))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Message).To(ContainSubstring(`tier "archive" has no StorageClass`))
+			Expect(cond.Message).NotTo(ContainSubstring(`tier "fast" has no StorageClass`))
 		})
 	})
 

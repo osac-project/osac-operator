@@ -1,0 +1,183 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-operator/pkg/provisioning"
+)
+
+// tierListLimit is a generous upper bound on the number of storage tiers fetched in a
+// single List call. Tier catalogs are expected to be small (fast/standard/archive-scale),
+// so a single unpaginated call is used instead of looping on offset/total.
+const tierListLimit = 1000
+
+// resolveTierDefinitions lists tier definitions from the Tier API and resolves each
+// tier's serving provider from its first backend association (multi-backend tiers
+// are not yet supported — first association wins). Backend lookups are deduplicated
+// by backend_id across all tiers: each unique backend is fetched at most once
+// regardless of how many tiers reference it.
+//
+// A tier with no backend association, or whose backend_id resolves to NotFound, is
+// skipped with a logged warning rather than failing the whole resolution — a bad
+// backend on one tier must not block resolution of tiers on other, healthy backends.
+func resolveTierDefinitions(
+	ctx context.Context,
+	tiersClient StorageTiersClient,
+	backendsGetter StorageBackendsGetter,
+) ([]provisioning.TierDefinition, error) {
+	log := ctrllog.FromContext(ctx)
+
+	resp, err := tiersClient.List(ctx, privatev1.StorageTiersListRequest_builder{
+		Limit: ptr.To(int32(tierListLimit)),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("list storage tiers: %w", err)
+	}
+
+	type backendResolution struct {
+		provider string
+		found    bool
+	}
+	backendCache := make(map[string]backendResolution)
+
+	var definitions []provisioning.TierDefinition
+	for _, tier := range resp.GetItems() {
+		tierName := tier.GetMetadata().GetName()
+		backends := tier.GetSpec().GetBackends()
+		if len(backends) == 0 {
+			log.Info("storage tier has no backend association, skipping", "tier", tierName)
+			continue
+		}
+
+		assoc := backends[0]
+		backendID := assoc.GetBackendId()
+
+		resolution, cached := backendCache[backendID]
+		if !cached {
+			getResp, err := backendsGetter.Get(ctx, privatev1.StorageBackendsGetRequest_builder{
+				Id: backendID,
+			}.Build())
+			if err != nil {
+				if status.Code(err) == codes.NotFound {
+					log.Info("storage backend not found, skipping tiers that reference it",
+						"backendID", backendID, "tier", tierName)
+					backendCache[backendID] = backendResolution{found: false}
+					continue
+				}
+				return nil, fmt.Errorf("get storage backend %q: %w", backendID, err)
+			}
+			resolution = backendResolution{provider: getResp.GetObject().GetSpec().GetProvider(), found: true}
+			backendCache[backendID] = resolution
+		}
+		if !resolution.found {
+			continue
+		}
+
+		definitions = append(definitions, provisioning.TierDefinition{
+			Name:      tierName,
+			Protocol:  storageProtocolToString(assoc.GetProtocol()),
+			Provider:  resolution.provider,
+			BackendID: backendID,
+			QosLimits: &provisioning.TierQosLimits{
+				MaxReadBandwidthMBs:  assoc.GetMaxReadBandwidthMbs(),
+				MaxWriteBandwidthMBs: assoc.GetMaxWriteBandwidthMbs(),
+			},
+			QuotaGiB: assoc.GetQuotaGib(),
+		})
+	}
+
+	return definitions, nil
+}
+
+// storageProtocolToString maps the Tier API's StorageProtocol enum to the lowercase
+// string form osac-aap's storage_provider role expects.
+func storageProtocolToString(p privatev1.StorageProtocol) string {
+	switch p {
+	case privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS:
+		return "nfs"
+	case privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK:
+		return "block"
+	default:
+		return ""
+	}
+}
+
+// missingTierNames returns the sorted names of tiers in defined that have no
+// matching entry in resolved and are not already flagged in ambiguousTiers.
+// Ambiguous tiers (multiple StorageClasses matched) are a distinct, separately
+// reported problem — a tier with too many StorageClasses is not "missing."
+func missingTierNames(defined []provisioning.TierDefinition, resolved []v1alpha1.ResolvedStorageClass, ambiguousTiers []string) []string {
+	covered := make(map[string]struct{}, len(resolved)+len(ambiguousTiers))
+	for _, sc := range resolved {
+		covered[sc.Tier] = struct{}{}
+	}
+	for _, tier := range ambiguousTiers {
+		covered[tier] = struct{}{}
+	}
+
+	var missing []string
+	for _, tier := range defined {
+		if _, ok := covered[tier.Name]; !ok {
+			missing = append(missing, tier.Name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// appendMissingTierWarnings emits a MissingStorageTier Warning Event for each tier
+// defined by the Tier API with no matching entry in resolved or ambiguousTiers, and
+// appends a human-readable summary of those tiers to condMsg. Returns condMsg
+// unchanged when there are no missing tiers (including when defined is empty
+// because TiersClient is nil).
+func (r *StorageReconciler) appendMissingTierWarnings(
+	instance *v1alpha1.Tenant,
+	defined []provisioning.TierDefinition,
+	resolved []v1alpha1.ResolvedStorageClass,
+	ambiguousTiers []string,
+	condMsg string,
+) string {
+	names := missingTierNames(defined, resolved, ambiguousTiers)
+	if len(names) == 0 {
+		return condMsg
+	}
+
+	messages := make([]string, len(names))
+	for i, name := range names {
+		msg := fmt.Sprintf("tier %q has no StorageClass", name)
+		messages[i] = msg
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonMissingStorageTier, eventActionDetectMissingTier, "%s", msg)
+	}
+
+	if condMsg == "" {
+		return strings.Join(messages, "; ")
+	}
+	return condMsg + "; " + strings.Join(messages, "; ")
+}
