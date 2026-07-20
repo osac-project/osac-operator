@@ -25,6 +25,7 @@ import (
 	"time"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -48,6 +49,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
@@ -56,6 +58,19 @@ const (
 	clusterStorageFinalizer = "osac.openshift.io/cluster-storage"
 	storageControllerName   = "storage-controller"
 )
+
+// StorageTiersClient is a narrow subset of the generated privatev1.StorageTiersClient
+// used to list tier definitions. The generated client satisfies this interface
+// automatically; it is defined here to allow test mocking (mirrors StorageBackendsGetter).
+type StorageTiersClient interface {
+	List(ctx context.Context, in *privatev1.StorageTiersListRequest, opts ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error)
+}
+
+// StorageBackendsGetter is a narrow subset of the generated privatev1.StorageBackendsClient
+// used to resolve a single backend's provider and connection details by ID.
+type StorageBackendsGetter interface {
+	Get(ctx context.Context, in *privatev1.StorageBackendsGetRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error)
+}
 
 // StorageReconciler reconciles storage lifecycle on Tenant CRs.
 // It owns StorageBackendReady, ClusterStorageReady conditions,
@@ -72,6 +87,11 @@ type StorageReconciler struct {
 	ClusterStorageProvider provisioning.ProvisioningProvider
 	StatusPollInterval     time.Duration
 	MaxJobHistory          int
+	// TiersClient queries the fulfillment service Tier API. When nil, tier
+	// validation and extra_vars injection are both skipped — backward compatible
+	// with environments without a fulfillment service connection.
+	TiersClient    StorageTiersClient
+	BackendsGetter StorageBackendsGetter
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;update;patch

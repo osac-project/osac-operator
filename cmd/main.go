@@ -61,6 +61,7 @@ import (
 	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/helpers"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/internal/controller"
 	"github.com/osac-project/osac-operator/internal/migrations"
 	"github.com/osac-project/osac-operator/pkg/aap"
@@ -384,8 +385,10 @@ func setupTenantController(mgr mcmanager.Manager) error {
 }
 
 // setupStorageController registers the OSAC Storage Controller with two AAP
-// provider instances (backend and cluster-storage).
-func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
+// provider instances (backend and cluster-storage). When grpcConn is set, it
+// also wires the Tier and Backend API clients used to validate and pass
+// through storage tier definitions.
+func setupStorageController(mgr mcmanager.Manager, grpcConn *grpc.ClientConn, maxJobHistory int) error {
 	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
@@ -431,7 +434,7 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 			"clusterStorageDeprovision", clusterStorageDeprovisionTemplate)
 	}
 
-	if err := (controller.NewStorageReconciler(
+	reconciler := controller.NewStorageReconciler(
 		mgr,
 		tenantNamespace,
 		targetCluster,
@@ -439,7 +442,12 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 		clusterStorageProvider,
 		pollInterval,
 		maxJobHistory,
-	)).SetupWithManager(mgr); err != nil {
+	)
+	if grpcConn != nil {
+		reconciler.TiersClient = privatev1.NewStorageTiersClient(grpcConn)
+		reconciler.BackendsGetter = privatev1.NewStorageBackendsClient(grpcConn)
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("storage controller: %w", err)
 	}
 	return nil
@@ -991,7 +999,7 @@ func main() {
 		}
 	}
 	if ctrlFlags.Storage {
-		if err := setupStorageController(mgr, maxJobHistory); err != nil {
+		if err := setupStorageController(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup storage controller")
 			os.Exit(1)
 		}
