@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-OSAC operator is a Kubernetes operator that reconciles infrastructure resources for the [OSAC](https://github.com/osac-project) project. It integrates with the [fulfillment service](https://github.com/osac-project/fulfillment-service/) and Ansible Automation Platform to provision OpenShift clusters and compute instances with networking.
+OSAC operator is a Kubernetes operator that reconciles infrastructure resources for the [OSAC](https://github.com/osac-project) project. It integrates with the [fulfillment service](https://github.com/osac-project/fulfillment-service/) and Ansible Automation Platform to provision OpenShift clusters and compute instances with networking. Includes a console proxy (aggregated API server) for KubeVirt VM console/VNC access via WebSocket.
 
 ### Resources Managed
 
@@ -13,41 +13,58 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **Subnet** (`subnet`) — subnet within a VirtualNetwork
 - **SecurityGroup** (`sg`) — network security rules
 - **PublicIPPool** (`pippool`) — public IP pool for MetalLB
+- **PublicIP** — public IP allocated from PublicIPPool
+- **PublicIPAttachment** — attachment of PublicIP to ComputeInstance
+- **ExternalIPPool** (`extippool`) — external IP pool
+- **ExternalIP** — external IP allocated from ExternalIPPool
+- **ExternalIPAttachment** — attachment of ExternalIP to ComputeInstance
+- **NATGateway** — outbound SNAT for a VirtualNetwork
 
 ## Critical Rules
 
 - **Always `make manifests generate`** after modifying CRD types in `api/v1alpha1/*_types.go`
-- **Always `make helm-crds`** after regenerating CRDs (or run `make check-helm-crds` to verify sync)
-- **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, or `internal/api/` — all generated
-- **Always `buf generate`** after updating the module version in `buf.gen.yaml`
-- **Commit message format**: `MGMT-XXXXX: description of change`
+- **Always `make helm-crds`** after regenerating CRDs (runs `make manifests` + `hack/sync-helm-crds.py`) to sync Helm charts (or run `make check-helm-crds` to verify sync)
+- **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, `internal/api/`, or `go.sum` — all generated (regenerate `go.sum` with `go mod tidy`)
+- **Always `buf generate`** after updating the module version in `buf.gen.yaml` (check the file for the current pinned version)
+- **Commit message format**: `OSAC-XXXXX: description of change` (Red Hat Jira key prefix)
+- **AI attribution**: Use `Assisted-by: Claude Code <noreply@anthropic.com>` (not Co-Authored-By)
+- **Sign-off required**: `git commit -s` for DCO compliance
 - **Always `make lint`** after changing any Go code — fix all issues before proceeding
 - Run `make lint test` before committing
 
 ## Development Commands
 
 ```bash
-make build                    # Build (runs tests first)
-make test                     # Unit tests only
-make test-integration         # All tests including integration
-make test-kustomize           # Kustomize validation
-make test-smoke               # Smoke tests in kind cluster
-make lint                     # golangci-lint
-make fmt                      # go fmt
+# Build and test (requires Go 1.26.3)
+make build                    # Build manager + console-proxy (runs 'make test' first, then builds)
+make test                     # Unit tests only (excludes e2e)
+make test-integration         # Runs test + test-kustomize + test-smoke
+make test-kustomize           # Validate all kustomization.yaml configs (catches missing files)
+make test-smoke               # Create kind cluster 'osac-test', apply CRDs + samples, verify ComputeInstance
+make test-integration-kind    # Go integration tests against a running kind cluster
+make lint                     # golangci-lint v2.12.1 (strict — always run before commit)
+make fmt                      # go fmt + goimports
 make vet                      # go vet
 
+# Code generation
 make manifests                # Generate CRD manifests + RBAC
 make generate                 # Generate DeepCopy
-buf generate                  # Generate gRPC client code
+buf generate                  # Generate gRPC client from Buf Schema Registry
 
+# Local development
 make install                  # Install CRDs into cluster
 make run                      # Run controller locally
 make uninstall                # Remove CRDs
 
-make image-build IMG=<r>/osac-operator:tag
-make image-push IMG=<r>/osac-operator:tag
-make deploy IMG=<r>/osac-operator:tag
+# Container builds (multi-arch via Containerfile, UBI10 base)
+make image-build IMG=<registry>/osac-operator:tag
+make image-push IMG=<registry>/osac-operator:tag
+make deploy IMG=<registry>/osac-operator:tag
 make undeploy
+
+# Helm
+make helm-crds                # Regenerate manifests + sync CRDs to charts/operator-crds/
+make check-helm-crds          # Verify CRD sync (CI enforces)
 ```
 
 ## Architecture
@@ -56,23 +73,31 @@ make undeploy
 
 Each resource has a **resource controller** (provisions via AAP, manages finalizers) and a **feedback controller** (syncs state to fulfillment-service via gRPC). See `.claude/rules/controller-patterns.md` for reconciliation, finalizer, and AAP integration patterns.
 
+`internal/controller/storage_controller.go` (`StorageReconciler`) is an exception to this pattern: it reconciles `Tenant` resources to provision/deprovision tenant storage (StorageClass discovery, CaaS backend and cluster storage lifecycle) rather than owning its own CRD or following the AAP-based provisioning flow.
+
 ### Provisioning
 
-All controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`).
+ClusterOrder and ComputeInstance controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`). Networking controllers (VirtualNetwork, Subnet, SecurityGroup) and the PublicIP/ExternalIP family of controllers also use this pattern. `pkg/provisioning` and `pkg/aap` are public packages consumed outside this repo (e.g., `bare-metal-fulfillment-operator`) — changes to their interfaces can impact those consumers. Management-state annotation (`osac.openshift.io/management-state = Unmanaged`) is checked by every resource controller except `tenant_controller.go` to skip reconciliation.
 
 ### Multi-cluster
 
-Hub cluster runs the operator; remote cluster hosts Tenant/ComputeInstance resources (via `OSAC_REMOTE_CLUSTER_KUBECONFIG`).
+Built on controller-runtime and multicluster-runtime (see `go.mod` for current versions). Hub cluster runs the operator; remote cluster hosts Tenant/ComputeInstance resources (via `OSAC_REMOTE_CLUSTER_KUBECONFIG`).
+
+### Console Proxy
+
+Aggregated API server in `cmd/console-proxy/` provides KubeVirt VM console/VNC access via WebSocket. TLS configured via `OSAC_CONSOLE_PROXY_TLS_CERT_FILE` and `OSAC_CONSOLE_PROXY_TLS_KEY_FILE`. Server implementation in `internal/consoleproxy/` (auth, config resolver, discovery, server, subresource handlers). Tested in `test/integration/console_proxy_test.go`.
 
 ### gRPC Client
 
-Consumes private fulfillment-service API. Generated from Buf Schema Registry module pinned in `buf.gen.yaml`. Update version there and run `buf generate` when API changes.
+Consumes private fulfillment-service API. Generated in `internal/api/` from Buf Schema Registry (module version pinned in `buf.gen.yaml`). Update version there and run `buf generate` when API changes. Auth via `OSAC_FULFILLMENT_TOKEN_FILE`.
 
 ## File Organization
 
 ```text
 api/v1alpha1/              # CRD type definitions
-cmd/main.go                # Operator entry point
+cmd/
+  main.go                  # Operator entry point
+  console-proxy/           # Console proxy aggregated API server
 pkg/
   aap/                     # AAP REST API client (public package)
   provisioning/            # ProvisioningProvider abstraction
@@ -81,26 +106,42 @@ internal/
   controller/              # Reconciliation logic
     {resource}_controller.go           # Provisioning controller
     {resource}_feedback_controller.go  # Feedback controller
-  helpers/                 # Utility functions
+  consoleproxy/            # Console proxy server implementation (auth, config, handlers)
+  migrations/              # Data migrations (e.g., migrate_subnetrefs.go)
+helpers/                   # Utility functions (at project root, not under internal/)
 config/
   crd/                     # Generated CRD manifests (DO NOT EDIT)
   rbac/                    # Generated RBAC rules
   samples/                 # Example CRs and config Secret
-test/e2e/                  # End-to-end tests
+  testing/                 # Testing configurations
+    default/               # Default testing kustomization
+    console-proxy/         # Console proxy testing kustomization
+charts/
+  operator/                # Helm chart for operator
+  operator-crds/           # Helm chart for CRDs
+test/integration/          # Integration tests (console_proxy_test.go, integration_suite_test.go, networking_test.go)
+hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to Helm charts
 ```
 
 ## Testing
 
 - **Unit tests**: Ginkgo + Gomega with `envtest` (real etcd + kube-apiserver)
 - **Integration**: `make test-kustomize` (manifest validation) + `make test-smoke` (kind cluster)
-- Kind cluster named `osac` (configurable via `KIND_CLUSTER_NAME`)
-- Clean up: `kind delete cluster --name osac`
+- **Go integration tests**: `test/integration/` (console_proxy_test.go, integration_suite_test.go, networking_test.go) — run against an already-running kind cluster via `make test-integration-kind` (`go test ./test/integration/ -v -ginkgo.v`)
+- **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered from this repo via `.github/workflows/e2e-vmaas-full-install.yml`
+- Kind cluster defaults to `osac` (`KIND_CLUSTER_NAME` in Makefile line 81), but smoke tests create `osac-test`
+- Clean up: `kind delete cluster --name osac-test`
+- `test-kustomize` catches missing files in kustomization.yaml — always run before committing manifest changes
 
 ## Code Quality
 
-- Pre-commit hooks in `.pre-commit-config.yaml`: whitespace, yamllint, golangci-lint
-- Linter config in `.golangci.yml`
+- **golangci-lint** (see `Makefile` for pinned version) configured in `.golangci.yml`: dupl, errcheck, ginkgolinter, goconst, gocyclo, govet, ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert, unused
+- Formatters: gofmt, goimports
+- Pre-commit hooks (both files share trailing-whitespace, check-merge-conflict, end-of-file-fixer, yamllint --strict excluding `config/`, detect-private-key):
+  - `.pre-commit-config.yaml` — local default (used by `pre-commit run --all-files`), also runs the `golangci-lint` hook
+  - `.pre-commit-config-ci.yaml` — used in CI (`pre-commit/action` with `-c .pre-commit-config-ci.yaml`); golangci-lint runs as a separate CI job instead
 - Run manually: `pre-commit run --all-files`
+- **CRITICAL**: Always run `make lint` before committing — CI enforces strict linting
 
 ## Automation Hooks
 
@@ -120,10 +161,30 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 ## PR Checklist
 
 - [ ] `make manifests generate` if types changed
-- [ ] `make lint` passes
+- [ ] `make helm-crds` run after CRD regeneration
+- [ ] `make lint` passes (enforced by CI)
 - [ ] `make test` passes
+- [ ] `make test-kustomize` passes (catches missing files)
 - [ ] CRD changes tested against a cluster
 - [ ] Cross-repo dependencies documented in PR description
+- [ ] PR title includes Jira key (e.g., "OSAC-12345: fix subnet race")
+- [ ] Commits signed off (`git commit -s`) and include AI attribution if applicable
+
+## CI Workflows
+
+- **build-image.yaml**: Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container
+- **check-pull-request.yaml**: Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
+- **helm-lint.yaml**: Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts
+- **e2e-vmaas-full-install.yml**: E2E tests in VMaaS environment
+
+## Security
+
+- **Containers**: UBI10 base images (see `Containerfile` for pinned tags), non-root USER 1001
+- **Secrets**: AAP credentials and fulfillment-service tokens via Secret (`config/samples/osac-config-secret.yaml`)
+- **TLS**: Console proxy uses `OSAC_CONSOLE_PROXY_TLS_CERT_FILE` and `OSAC_CONSOLE_PROXY_TLS_KEY_FILE`
+- **gRPC auth**: Token file via `OSAC_FULFILLMENT_TOKEN_FILE`
+- **AAP TLS verification**: Configurable via `OSAC_AAP_INSECURE_SKIP_VERIFY` (defaults false)
+- **Pre-commit**: `detect-private-key` hook prevents credential leaks
 
 ## Links
 
