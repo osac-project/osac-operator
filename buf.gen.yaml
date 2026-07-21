@@ -21,10 +21,11 @@ managed:
   disable:
   - module: buf.build/googleapis/googleapis
   - module: buf.build/grpc-ecosystem/grpc-gateway
+  - module: buf.build/bufbuild/protovalidate
 
 inputs:
 
-- module: buf.build/osac-project/private-api:v0.0.75
+- module: buf.build/osac-project/private-api:v0.0.79
 
 plugins:
 
