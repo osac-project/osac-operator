@@ -37,7 +37,7 @@ var ErrExternalIPAttachmentNotFound = errors.New("external IP attachment not fou
 type ExternalIPAttachmentFeedbackReconciler struct {
 	hubClient                   clnt.Client
 	externalIPAttachmentsClient privatev1.ExternalIPAttachmentsClient
-	publicIPsClient             privatev1.ExternalIPsClient
+	externalIPsClient           privatev1.ExternalIPsClient
 	networkingNamespace         string
 }
 
@@ -51,7 +51,7 @@ func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn *
 	return &ExternalIPAttachmentFeedbackReconciler{
 		hubClient:                   hubClient,
 		externalIPAttachmentsClient: privatev1.NewExternalIPAttachmentsClient(grpcConn),
-		publicIPsClient:             privatev1.NewExternalIPsClient(grpcConn),
+		externalIPsClient:           privatev1.NewExternalIPsClient(grpcConn),
 		networkingNamespace:         networkingNamespace,
 	}
 }
@@ -208,6 +208,7 @@ func (t *externalIPAttachmentFeedbackReconcilerTask) handleUpdate(ctx context.Co
 		}
 	}
 	t.syncState(ctx)
+	t.syncAddress(ctx)
 
 	if t.object.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseReady {
 		if err := t.syncAttachedOnParentExternalIP(ctx, true); err != nil {
@@ -241,13 +242,34 @@ func (t *externalIPAttachmentFeedbackReconcilerTask) syncState(ctx context.Conte
 	}
 }
 
+func (t *externalIPAttachmentFeedbackReconcilerTask) syncAddress(ctx context.Context) {
+	externalIPID := t.externalIPAttachment.GetSpec().GetExternalIp()
+	if externalIPID == "" {
+		return
+	}
+	response, err := t.r.externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
+		Id: externalIPID,
+	}.Build())
+	if err != nil {
+		ctrllog.FromContext(ctx).Error(err, "Failed to fetch parent ExternalIP for address sync", "externalIPID", externalIPID)
+		return
+	}
+	obj := response.GetObject()
+	if obj == nil || !obj.HasStatus() {
+		return
+	}
+	if addr := obj.GetStatus().GetAddress(); addr != "" {
+		t.externalIPAttachment.GetStatus().SetExternalIpAddress(addr)
+	}
+}
+
 func (t *externalIPAttachmentFeedbackReconcilerTask) syncAttachedOnParentExternalIP(ctx context.Context, attached bool) error {
 	externalIPID := t.externalIPAttachment.GetSpec().GetExternalIp()
 	if externalIPID == "" {
 		return nil
 	}
 
-	response, err := t.r.publicIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
+	response, err := t.r.externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 		Id: externalIPID,
 	}.Build())
 	if err != nil {
@@ -271,7 +293,7 @@ func (t *externalIPAttachmentFeedbackReconcilerTask) syncAttachedOnParentExterna
 	}
 
 	publicIP.GetStatus().SetAttached(attached)
-	_, err = t.r.publicIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+	_, err = t.r.externalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 		Object: publicIP,
 	}.Build())
 	return err
