@@ -981,6 +981,30 @@ var _ = Describe("Storage Controller", func() {
 			Expect(cond.Message).To(ContainSubstring(`tier "archive" has no StorageClass`))
 			Expect(cond.Message).NotTo(ContainSubstring(`tier "fast" has no StorageClass`))
 		})
+
+		It("should map each StorageProtocol enum value to its AAP-schema string", func() {
+			Expect(storageProtocolToString(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)).To(Equal("nfs"))
+			Expect(storageProtocolToString(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)).To(Equal("block"))
+			Expect(storageProtocolToString(privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED)).To(BeEmpty())
+		})
+
+		It("should join a missing-tier message onto an existing condition message without a leading separator when condMsg is empty", func() {
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = events.NewFakeRecorder(100)
+			instance := &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "storage-test-empty-condmsg", Namespace: testNamespace}}
+
+			result := r.appendMissingTierWarnings(
+				instance,
+				[]provisioning.TierDefinition{{Name: "archive"}},
+				nil, nil, "",
+			)
+
+			Expect(result).To(Equal(`tier "archive" has no StorageClass`))
+		})
 	})
 
 	Context("Tier definitions in AAP extra_vars context", func() {
