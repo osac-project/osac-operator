@@ -125,7 +125,7 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 	if object.DeletionTimestamp.IsZero() {
 		err = t.handleUpdate(ctx)
 	} else {
-		t.handleDelete(ctx)
+		err = t.handleDelete(ctx)
 	}
 	if err != nil {
 		return result, err
@@ -209,8 +209,8 @@ func (t *feedbackReconcilerTask) handleUpdate(ctx context.Context) error {
 	return t.syncState(ctx)
 }
 
-func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) {
-	_ = t.syncState(ctx)
+func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) error {
+	return t.syncState(ctx)
 }
 
 func (t *feedbackReconcilerTask) syncState(ctx context.Context) error {
