@@ -941,7 +941,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetPublicIpAddress()).To(Equal("10.0.0.100"))
+			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(Equal("10.0.0.100"))
 		})
 
 		It("should sync internal IP address from CR status", func() {
@@ -966,7 +966,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetPublicIpAddress()).To(Equal("10.0.0.100"))
+			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(Equal("10.0.0.100"))
 			Expect(mockClient.lastUpdate.GetStatus().GetInternalIpAddress()).To(Equal("192.168.1.50"))
 		})
 
@@ -974,7 +974,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetPublicIpAddress()).To(BeEmpty())
+			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(BeEmpty())
 			Expect(mockClient.lastUpdate.GetStatus().GetInternalIpAddress()).To(BeEmpty())
 		})
 
@@ -986,7 +986,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(mockClient.lastUpdate.GetStatus().GetPublicIpAddress()).To(Equal("10.0.0.100"))
+			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(Equal("10.0.0.100"))
 
 			// Simulate detach: clear the status field
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())
@@ -997,7 +997,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
-			Expect(mockClient.lastUpdate.GetStatus().GetPublicIpAddress()).To(BeEmpty())
+			Expect(mockClient.lastUpdate.GetStatus().GetExternalIpAddress()).To(BeEmpty())
 		})
 
 		It("should not crash when restart conditions are not present", func() {

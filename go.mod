@@ -3,6 +3,7 @@ module github.com/osac-project/osac-operator
 go 1.26.3
 
 require (
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260709200747-435963d16310.1
 	github.com/coder/websocket v1.8.15
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.32.0

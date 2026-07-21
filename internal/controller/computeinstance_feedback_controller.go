@@ -408,7 +408,7 @@ func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kin
 }
 
 func (t *computeInstanceFeedbackReconcilerTask) syncIPAddresses() {
-	t.ci.GetStatus().SetPublicIpAddress(t.object.Status.PublicIPAddress)
+	t.ci.GetStatus().SetExternalIpAddress(t.object.Status.PublicIPAddress)
 	t.ci.GetStatus().SetInternalIpAddress(t.object.Status.IPAddress)
 }
 

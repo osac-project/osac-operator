@@ -38,6 +38,8 @@ const (
 
 // A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
 // that can be used to create bare metal instances via a catalog item.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
 type BareMetalInstanceTemplate struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Unique identifier of the template.
