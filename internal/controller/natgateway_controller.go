@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -258,8 +260,23 @@ func (r *NATGatewayReconciler) handleProvisioning(ctx context.Context, natgw *v1
 		&provisioning.State{Jobs: &natgw.Status.ProvisioningJobs, DesiredConfigVersion: natgw.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { natgw.Status.Phase = v1alpha1.NATGatewayPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady },
+			OnFailed: func(message string) {
+				natgw.Status.Phase = v1alpha1.NATGatewayPhaseFailed
+				apimeta.SetStatusCondition(&natgw.Status.Conditions, metav1.Condition{
+					Type:    v1alpha1.ConditionReady,
+					Status:  metav1.ConditionFalse,
+					Reason:  v1alpha1.ReasonProvisioningFailed,
+					Message: message,
+				})
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady
+				apimeta.SetStatusCondition(&natgw.Status.Conditions, metav1.Condition{
+					Type:   v1alpha1.ConditionReady,
+					Status: metav1.ConditionTrue,
+					Reason: v1alpha1.ReasonAsExpected,
+				})
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(natgw), &v1alpha1.NATGateway{}, func(obj client.Object) []v1alpha1.JobStatus {
