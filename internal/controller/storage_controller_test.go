@@ -736,6 +736,7 @@ var _ = Describe("Storage Controller", func() {
 					return privatev1.StorageTiersListResponse_builder{
 						Items: []*privatev1.StorageTier{
 							newTestStorageTier("stale", "backend-gone"),
+							newTestStorageTier("also-stale", "backend-gone"),
 							newTestStorageTier("fast", "backend-1"),
 						},
 					}.Build(), nil
@@ -756,6 +757,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs[0].Name).To(Equal("fast"))
 			Expect(conns).NotTo(HaveKey("backend-gone"))
 			Expect(conns).To(HaveKey("backend-1"))
+			Expect(backendsGetter.getCallCount).To(Equal(2), "backend-gone should be fetched once (cached NotFound), backend-1 once")
 		})
 
 		It("should propagate a List error without swallowing it", func() {
