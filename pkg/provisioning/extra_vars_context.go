@@ -35,9 +35,11 @@ const (
 // (mirrors osac-aap's storage_provider role argument_specs.yaml: name/protocol/
 // provider/qos_limits/quota), resolved from the Tier and Backend APIs.
 type TierDefinition struct {
-	Name      string
-	Protocol  string
-	Provider  string
+	Name     string
+	Protocol string
+	Provider string
+	// BackendID is the join key into a map of BackendConnection values keyed by
+	// backend_id — not the connection itself.
 	BackendID string
 	QosLimits *TierQosLimits
 	QuotaGiB  int64
