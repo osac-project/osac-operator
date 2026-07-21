@@ -54,7 +54,7 @@ const tierListLimit = 1000
 // backend on one tier must not block resolution of tiers on other, healthy backends.
 func resolveTierDefinitions(
 	ctx context.Context,
-	tiersClient StorageTiersClient,
+	tiersClient StorageTiersLister,
 	backendsGetter StorageBackendsGetter,
 ) ([]provisioning.TierDefinition, map[string]provisioning.BackendConnection, error) {
 	log := ctrllog.FromContext(ctx)
@@ -166,9 +166,13 @@ func missingTierNames(defined []provisioning.TierDefinition, resolved []v1alpha1
 
 // appendMissingTierWarnings emits a MissingStorageTier Warning Event for each tier
 // defined by the Tier API with no matching entry in resolved or ambiguousTiers, and
-// appends a human-readable summary of those tiers to condMsg. Returns condMsg
-// unchanged when there are no missing tiers (including when defined is empty
-// because TiersClient is nil).
+// appends a human-readable summary of those tiers to condMsg. defined is the Tier
+// API's source of truth for which tiers should exist; resolved and ambiguousTiers
+// come from StorageClass label resolution (resolveTenantSpecificStorageClasses /
+// getTenantStorageClasses — pre-existing, unaffected by the Tier API integration)
+// and reflect what has actually been provisioned in the cluster. This function's
+// job is to catch the gap between the two. Returns condMsg unchanged when there
+// are no missing tiers (including when defined is empty because TiersClient is nil).
 func (r *StorageReconciler) appendMissingTierWarnings(
 	instance *v1alpha1.Tenant,
 	defined []provisioning.TierDefinition,
