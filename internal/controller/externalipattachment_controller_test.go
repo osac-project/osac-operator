@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -417,6 +418,104 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			)
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
+
+	Context("provisioning condition updates", func() {
+		BeforeEach(func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+		})
+
+		It("should set Ready=False condition with error message when job fails", func() {
+			attachment.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "failed-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateFailed,
+					Message: "Ansible traceback: role xyz failed",
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(attachment.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("Ansible traceback"))
+		})
+
+		It("should set Ready=True condition when job succeeds", func() {
+			attachment.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "success-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(attachment.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+		})
+
+		It("should clear stale Ready=False condition on provisioning recovery", func() {
+			attachment.Status.Conditions = []metav1.Condition{
+				{
+					Type:               osacv1alpha1.ConditionReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             osacv1alpha1.ReasonProvisioningFailed,
+					Message:            "previous failure",
+					LastTransitionTime: metav1.Now(),
+				},
+			}
+			attachment.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "recovery-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(attachment.Status.Phase).To(Equal(osacv1alpha1.ExternalIPAttachmentPhaseReady))
+			cond := apimeta.FindStatusCondition(attachment.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+			Expect(cond.Message).To(BeEmpty())
 		})
 	})
 
