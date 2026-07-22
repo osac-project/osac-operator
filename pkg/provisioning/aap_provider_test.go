@@ -876,7 +876,7 @@ var _ = Describe("AAPProvider", func() {
 							"max_writes_bw_mbps": int32(200),
 						},
 					},
-					"quota": int64(500),
+					"quota_bytes": int64(500 * 1073741824),
 				}))
 				Expect(tiers[0]).NotTo(HaveKey("qos_policy"))
 				return &aap.LaunchJobTemplateResponse{JobID: 111}, nil
