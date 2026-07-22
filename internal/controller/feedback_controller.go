@@ -20,6 +20,8 @@ import (
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -27,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
@@ -75,7 +78,7 @@ func (r *FeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 
 // Reconcile is the implementation of the reconciler interface.
 func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
-	// Fetch the object to reconcile, and do nothing if it no longer exists:
+	// Step 1: Fetch the object to reconcile, and do nothing if it no longer exists:
 	object := &ckv1alpha1.ClusterOrder{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
@@ -83,10 +86,17 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		return //nolint:nakedret
 	}
 
-	// Get the identifier of the cluster from the labels. If this isn't present it means that the object wasn't
+	// Step 2: Get the identifier of the cluster from the labels. If this isn't present it means that the object wasn't
 	// created by the fulfillment service, so we ignore it.
 	clusterID, ok := object.Labels[osacClusterOrderIDLabel]
 	if !ok {
+		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+			r.logger.Info("CR without cluster ID label is being deleted, removing feedback finalizer")
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		r.logger.Info(
 			"There is no label containing the cluster identifier, will ignore it",
 			"label", osacClusterOrderIDLabel,
@@ -94,9 +104,16 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		return
 	}
 
-	// Fetch the cluster:
+	// Step 3: Fetch the cluster from the fulfillment service so we can compare before/after.
 	cluster, err := r.fetchCluster(ctx, clusterID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			r.logger.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		return
 	}
 
@@ -107,20 +124,55 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		object:  object,
 		cluster: clone(cluster),
 	}
+
+	// Step 4: Sync CR state to the fulfillment service record.
 	if object.ObjectMeta.DeletionTimestamp.IsZero() {
 		result, err = t.handleUpdate(ctx)
 	} else {
-		result, err = t.handleDelete(ctx)
+		t.handleDelete(ctx)
 	}
 	if err != nil {
 		return
 	}
 
-	// Save the objects that have changed:
+	// Step 5: Persist synced state to the fulfillment service.
 	err = r.saveCluster(ctx, cluster, t.cluster)
 	if err != nil {
 		return
 	}
+
+	// Step 6: Handle finalizer removal and signal for deletions. This must happen after step 5 so the
+	// deletion state is persisted before the CR is garbage collected.
+	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+		if len(object.GetFinalizers()) == 1 {
+			r.logger.Info(
+				"Feedback finalizer is last remaining, removing finalizer and signaling",
+				"clusterID", clusterID,
+			)
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+				if err != nil {
+					return
+				}
+			}
+			_, signalErr := r.clustersClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{
+				Id: clusterID,
+			}.Build())
+			if signalErr != nil {
+				r.logger.Error(
+					signalErr,
+					"Failed to signal fulfillment service, periodic sync will handle cleanup",
+					"clusterID", clusterID,
+				)
+			}
+		} else {
+			r.logger.Info(
+				"Other finalizers still present, waiting",
+				"finalizers", object.GetFinalizers(),
+			)
+		}
+	}
+
 	return
 }
 
@@ -154,6 +206,11 @@ func (r *FeedbackReconciler) saveCluster(ctx context.Context, before, after *pri
 }
 
 func (t *feedbackReconcilerTask) handleUpdate(ctx context.Context) (result ctrl.Result, err error) {
+	if controllerutil.AddFinalizer(t.object, osacClusterOrderFeedbackFinalizer) {
+		if err = t.r.hubClient.Update(ctx, t.object); err != nil {
+			return
+		}
+	}
 	err = t.syncConditions()
 	if err != nil {
 		return
@@ -167,6 +224,11 @@ func (t *feedbackReconcilerTask) handleUpdate(ctx context.Context) (result ctrl.
 		return
 	}
 	return
+}
+
+// handleDelete syncs the deletion phase to the fulfillment service.
+func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) {
+	t.syncPhaseDeleting()
 }
 
 func (t *feedbackReconcilerTask) syncConditions() error {
@@ -266,8 +328,8 @@ func (t *feedbackReconcilerTask) syncPhase(ctx context.Context) error {
 	case ckv1alpha1.ClusterOrderPhaseReady:
 		return t.syncPhaseReady(ctx)
 	case ckv1alpha1.ClusterOrderPhaseDeleting:
-		// TODO: There is no equivalent phase.
-		// return t.syncPhaseDeleting(ctx)
+		t.syncPhaseDeleting()
+		return nil
 	default:
 		t.r.logger.Info(
 			"Unknown phase, will ignore it",
@@ -275,7 +337,6 @@ func (t *feedbackReconcilerTask) syncPhase(ctx context.Context) error {
 		)
 		return nil
 	}
-	return nil
 }
 
 func (t *feedbackReconcilerTask) syncPhaseProgressing() error {
@@ -308,6 +369,10 @@ func (t *feedbackReconcilerTask) syncPhaseReady(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (t *feedbackReconcilerTask) syncPhaseDeleting() {
+	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
 }
 
 func (t *feedbackReconcilerTask) syncNodeRequests() error {
@@ -408,11 +473,6 @@ func (t *feedbackReconcilerTask) calculateConsoleURL() string {
 		"https://console-openshift-console.apps.%s.%s",
 		t.hostedCluster.Name, t.hostedCluster.Spec.DNS.BaseDomain,
 	)
-}
-
-func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) (result ctrl.Result, err error) {
-	// TODO.
-	return
 }
 
 func (t *feedbackReconcilerTask) findClusterCondition(kind privatev1.ClusterConditionType) *privatev1.ClusterCondition {
