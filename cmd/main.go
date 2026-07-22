@@ -457,6 +457,7 @@ func setupNetworkingControllers(
 
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
+	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
 
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
@@ -539,7 +540,7 @@ func setupNetworkingControllers(
 		return err
 	}
 	if err := setupExternalIPAttachmentControllers(
-		mgr, localMgr, grpcConn, networkingNamespace, computeInstanceNamespace,
+		mgr, localMgr, grpcConn, networkingNamespace, computeInstanceNamespace, clusterOrderNamespace,
 		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
 	); err != nil {
 		return err
@@ -718,12 +719,12 @@ func setupExternalIPControllers(
 
 func setupExternalIPAttachmentControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, computeInstanceNamespace string,
+	networkingNamespace string, computeInstanceNamespace string, clusterOrderNamespace string,
 	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 ) error {
 	if err := controller.NewExternalIPAttachmentReconciler(
-		mgr, networkingNamespace, computeInstanceNamespace,
+		mgr, networkingNamespace, computeInstanceNamespace, clusterOrderNamespace,
 		provider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("externalipattachment controller: %w", err)
