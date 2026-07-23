@@ -38,10 +38,15 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 	const (
 		testNetworkingNamespace      = "test-networking"
 		testComputeInstanceNamespace = "test-ci"
+		testClusterOrderNamespace    = "test-orders"
 		testPoolUUID                 = "pool-uuid-123"
 		testExternalIPUUID           = "pip-uuid-789"
 		testCIUUID                   = "ci-uuid-456"
 		testCIName                   = "test-ci-1"
+		testCOUUID                   = "co-uuid-789"
+		testCOName                   = "test-cluster-1"
+		testAPIEndpoint              = "10.0.0.100"
+		testIngressEndpoint          = "10.0.0.200"
 		testExternalIPName           = "test-pip"
 		testAttachmentName           = "test-attachment"
 		testVMNamespace              = "subnet-abc123"
@@ -68,6 +73,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				&osacv1alpha1.ExternalIPAttachment{},
 				&osacv1alpha1.ExternalIP{},
 				&osacv1alpha1.ComputeInstance{},
+				&osacv1alpha1.ClusterOrder{},
 			).
 			Build()
 	}
@@ -145,6 +151,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Scheme:                   testScheme,
 			NetworkingNamespace:      testNetworkingNamespace,
 			ComputeInstanceNamespace: testComputeInstanceNamespace,
+			ClusterOrderNamespace:    testClusterOrderNamespace,
 			ProvisioningProvider:     mockProvider,
 			StatusPollInterval:       1 * time.Second,
 			MaxJobHistory:            10,
@@ -692,6 +699,381 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 			requests := reconciler.mapComputeInstanceToExternalIPAttachments(testCtx, ci)
 			Expect(requests).To(BeEmpty())
+		})
+	})
+
+	// --- Cluster target tests ---
+
+	Context("Cluster target resolution", func() {
+		var (
+			co                *osacv1alpha1.ClusterOrder
+			clusterAttachment *osacv1alpha1.ExternalIPAttachment
+			clusterKey        types.NamespacedName
+		)
+
+		BeforeEach(func() {
+			co = &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testCOName,
+					Namespace: testClusterOrderNamespace,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: testCOUUID,
+					},
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					ApiEndpoint:     testAPIEndpoint,
+					IngressEndpoint: testIngressEndpoint,
+				},
+			}
+
+			clusterAttachment = &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cluster-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:     testExternalIPUUID,
+					Cluster:        ptr.To(testCOUUID),
+					TargetEndpoint: ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI),
+				},
+			}
+
+			clusterKey = types.NamespacedName{Name: "cluster-attachment", Namespace: testNetworkingNamespace}
+		})
+
+		clusterReconcileOnce := func() (ctrl.Result, error) {
+			return reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: clusterKey}})
+		}
+
+		It("should requeue when ClusterOrder not found", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool)
+			setupReconciler(fakeClient)
+
+			_, _ = clusterReconcileOnce() // finalizer
+
+			result, err := clusterReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when ClusterOrder has no API endpoint", func() {
+			coNoEndpoint := co.DeepCopy()
+			coNoEndpoint.Status.ApiEndpoint = ""
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, coNoEndpoint)
+			setupReconciler(fakeClient)
+
+			_, _ = clusterReconcileOnce() // finalizer
+
+			result, err := clusterReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should requeue when ClusterOrder has no ingress endpoint for Ingress target", func() {
+			clusterAttachment.Spec.TargetEndpoint = ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointIngress)
+			coNoIngress := co.DeepCopy()
+			coNoIngress.Status.IngressEndpoint = ""
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, coNoIngress)
+			setupReconciler(fakeClient)
+
+			_, _ = clusterReconcileOnce() // finalizer
+
+			result, err := clusterReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should set target-ip annotation with resolved API endpoint", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce() // finalizer
+			_, _ = clusterReconcileOnce() // annotations + provisioning
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, clusterKey, updated)).To(Succeed())
+			Expect(updated.Annotations[osacExternalIPTargetIPAnnotation]).To(Equal(testAPIEndpoint))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+		})
+
+		It("should set target-ip annotation with resolved ingress endpoint", func() {
+			clusterAttachment.Spec.TargetEndpoint = ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointIngress)
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce() // finalizer
+			_, _ = clusterReconcileOnce() // annotations
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, clusterKey, updated)).To(Succeed())
+			Expect(updated.Annotations[osacExternalIPTargetIPAnnotation]).To(Equal(testIngressEndpoint))
+		})
+
+		It("should add detach finalizer to ClusterOrder", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce() // finalizer
+			_, _ = clusterReconcileOnce() // resolve CO + add finalizer
+
+			updatedCO := &osacv1alpha1.ClusterOrder{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Finalizers).To(ContainElement(osacExternalIPDetachFinalizer))
+		})
+	})
+
+	Context("Cluster watch mapping", func() {
+		var (
+			co                *osacv1alpha1.ClusterOrder
+			clusterAttachment *osacv1alpha1.ExternalIPAttachment
+			clusterKey        types.NamespacedName
+		)
+
+		BeforeEach(func() {
+			co = &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testCOName,
+					Namespace: testClusterOrderNamespace,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: testCOUUID,
+					},
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					ApiEndpoint: testAPIEndpoint,
+				},
+			}
+
+			clusterAttachment = &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cluster-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:     testExternalIPUUID,
+					Cluster:        ptr.To(testCOUUID),
+					TargetEndpoint: ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI),
+				},
+			}
+
+			clusterKey = types.NamespacedName{Name: "cluster-attachment", Namespace: testNetworkingNamespace}
+			_ = clusterKey // used in other tests
+		})
+
+		It("should map ClusterOrder changes to attachment reconcile requests", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapClusterOrderToExternalIPAttachments(testCtx, co)
+			Expect(requests).To(HaveLen(1))
+			Expect(requests[0].NamespacedName).To(Equal(reconcile.Request{
+				NamespacedName: clusterKey,
+			}.NamespacedName))
+		})
+
+		It("should not map ClusterOrder changes to unrelated attachments", func() {
+			unrelatedAttachment := clusterAttachment.DeepCopy()
+			unrelatedAttachment.Spec.Cluster = ptr.To("other-cluster-uuid")
+			fakeClient = buildClient(unrelatedAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapClusterOrderToExternalIPAttachments(testCtx, co)
+			Expect(requests).To(BeEmpty())
+		})
+	})
+
+	Context("Cluster detach finalizer management", func() {
+		var co *osacv1alpha1.ClusterOrder
+
+		BeforeEach(func() {
+			co = &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testCOName,
+					Namespace: testClusterOrderNamespace,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: testCOUUID,
+					},
+				},
+			}
+		})
+
+		It("should remove detach finalizer when no other attachments reference the ClusterOrder", func() {
+			co.Finalizers = []string{osacExternalIPDetachFinalizer}
+			fakeClient = buildClient(co)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveCODetachFinalizer(testCtx, testCOUUID, "")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCO := &osacv1alpha1.ClusterOrder{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Finalizers).NotTo(ContainElement(osacExternalIPDetachFinalizer))
+		})
+
+		It("should keep detach finalizer when other attachments reference the ClusterOrder", func() {
+			otherAttachment := &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-cluster-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:     "other-pip",
+					Cluster:        ptr.To(testCOUUID),
+					TargetEndpoint: ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI),
+				},
+			}
+			co.Finalizers = []string{osacExternalIPDetachFinalizer}
+			fakeClient = buildClient(co, otherAttachment)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveCODetachFinalizer(testCtx, testCOUUID, "excluded-attachment")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCO := &osacv1alpha1.ClusterOrder{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Finalizers).To(ContainElement(osacExternalIPDetachFinalizer))
+		})
+	})
+
+	Context("Cluster provisioning lifecycle", func() {
+		var (
+			co                *osacv1alpha1.ClusterOrder
+			clusterAttachment *osacv1alpha1.ExternalIPAttachment
+			clusterKey        types.NamespacedName
+		)
+
+		BeforeEach(func() {
+			co = &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testCOName,
+					Namespace: testClusterOrderNamespace,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: testCOUUID,
+					},
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					ApiEndpoint: testAPIEndpoint,
+				},
+			}
+
+			clusterAttachment = &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cluster-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:     testExternalIPUUID,
+					Cluster:        ptr.To(testCOUUID),
+					TargetEndpoint: ptr.To(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI),
+				},
+			}
+
+			clusterKey = types.NamespacedName{Name: "cluster-attachment", Namespace: testNetworkingNamespace}
+		})
+
+		clusterReconcileOnce := func() (ctrl.Result, error) {
+			return reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: clusterKey}})
+		}
+
+		It("should set phase to Ready on successful provision with cluster target", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce() // finalizer
+			_, _ = clusterReconcileOnce() // annotations + trigger
+			_, _ = clusterReconcileOnce() // poll -> Ready
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, clusterKey, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPAttachmentPhaseReady))
+		})
+
+		It("should set ExternalIP.status.attached on provision success with cluster target", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			pip := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Address = "192.168.1.10"
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "done",
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce()
+			_, _ = clusterReconcileOnce()
+			_, _ = clusterReconcileOnce()
+
+			updatedPIP := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
+			Expect(updatedPIP.Status.Attached).To(BeTrue())
+		})
+
+		It("should clear ExternalIP.status.attached on deprovision with cluster target", func() {
+			fakeClient = buildClient(clusterAttachment, publicIP, pool, co)
+			setupReconciler(fakeClient)
+
+			pip := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
+			pip.Status.Attached = true
+			Expect(fakeClient.Status().Update(testCtx, pip)).To(Succeed())
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			_, _ = clusterReconcileOnce() // finalizer
+
+			toDelete := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, clusterKey, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+
+			updatedPIP := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
+			Expect(updatedPIP.Status.Attached).To(BeFalse())
 		})
 	})
 })

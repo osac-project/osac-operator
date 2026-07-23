@@ -25,6 +25,13 @@ spec:
     - jsonPath: .spec.computeInstance
       name: ComputeInstance
       type: string
+    - jsonPath: .spec.cluster
+      name: Cluster
+      type: string
+    - jsonPath: .spec.targetEndpoint
+      name: TargetEndpoint
+      priority: 1
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -57,10 +64,16 @@ spec:
           spec:
             description: spec defines the desired state of ExternalIPAttachment
             properties:
+              cluster:
+                description: |-
+                  Cluster is the UUID of the ClusterOrder to attach to.
+                  Exactly one target field (computeInstance or cluster) must be set.
+                minLength: 1
+                type: string
               computeInstance:
                 description: |-
-                  ComputeInstance is the name of the ComputeInstance to attach to.
-                  Exactly one target field must be set.
+                  ComputeInstance is the UUID of the ComputeInstance to attach to.
+                  Exactly one target field (computeInstance or cluster) must be set.
                 minLength: 1
                 type: string
               externalIP:
@@ -68,12 +81,27 @@ spec:
                   attach.
                 minLength: 1
                 type: string
+              targetEndpoint:
+                description: |-
+                  TargetEndpoint specifies which cluster endpoint receives the DNAT rule.
+                  Required when cluster is set; must not be set when computeInstance is set.
+                enum:
+                - API
+                - Ingress
+                type: string
             required:
             - externalIP
             type: object
             x-kubernetes-validations:
             - message: spec is immutable after creation
               rule: self == oldSelf
+            - message: at most one target field may be set
+              rule: '(has(self.computeInstance) ? 1 : 0) + (has(self.cluster) ? 1
+                : 0) <= 1'
+            - message: targetEndpoint is required when cluster is set
+              rule: '!has(self.cluster) || has(self.targetEndpoint)'
+            - message: targetEndpoint must not be set when computeInstance is set
+              rule: '!has(self.computeInstance) || !has(self.targetEndpoint)'
           status:
             description: status defines the observed state of ExternalIPAttachment
             properties:
