@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -199,8 +201,23 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady },
+			OnFailed: func(message string) {
+				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
+				apimeta.SetStatusCondition(&vnet.Status.Conditions, metav1.Condition{
+					Type:    v1alpha1.ConditionReady,
+					Status:  metav1.ConditionFalse,
+					Reason:  v1alpha1.ReasonProvisioningFailed,
+					Message: message,
+				})
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
+				apimeta.SetStatusCondition(&vnet.Status.Conditions, metav1.Condition{
+					Type:   v1alpha1.ConditionReady,
+					Status: metav1.ConditionTrue,
+					Reason: v1alpha1.ReasonAsExpected,
+				})
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{}, func(obj client.Object) []v1alpha1.JobStatus {

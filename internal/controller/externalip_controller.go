@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -340,9 +341,15 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, publicIP 
 		&provisioning.State{Jobs: &publicIP.Status.ProvisioningJobs, DesiredConfigVersion: publicIP.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed: func(_ string) {
+			OnFailed: func(message string) {
 				publicIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
 				publicIP.Status.State = v1alpha1.ExternalIPStateFailed
+				apimeta.SetStatusCondition(&publicIP.Status.Conditions, metav1.Condition{
+					Type:    v1alpha1.ConditionReady,
+					Status:  metav1.ConditionFalse,
+					Reason:  v1alpha1.ReasonProvisioningFailed,
+					Message: message,
+				})
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
 				publicIP.Status.State = v1alpha1.ExternalIPStateAllocated
@@ -356,6 +363,11 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, publicIP 
 				if publicIP.Status.Address != "" {
 					publicIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
 				}
+				apimeta.SetStatusCondition(&publicIP.Status.Conditions, metav1.Condition{
+					Type:   v1alpha1.ConditionReady,
+					Status: metav1.ConditionTrue,
+					Reason: v1alpha1.ReasonAsExpected,
+				})
 			},
 		},
 		func() bool {

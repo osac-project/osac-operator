@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -267,6 +268,37 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			Expect(latestProvisionJob.Message).To(ContainSubstring("Playbook execution failed"))
 			// No VM exists yet: phase is set to Failed to signal the provisioning failure.
 			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+		})
+
+		It("should set Provisioned=False condition with error message when job fails", func() {
+			instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "failed-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+			provider := &mockProvisioningProvider{
+				getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{
+						JobID:        jobID,
+						State:        osacv1alpha1.JobStateFailed,
+						Message:      "Job failed",
+						ErrorDetails: "Ansible traceback: role xyz failed",
+					}, nil
+				},
+			}
+			reconciler.ProvisioningProvider = provider
+
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, string(osacv1alpha1.ComputeInstanceConditionProvisioned))
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("Ansible traceback"))
 		})
 
 		It("should preserve existing phase when job fails and VM already exists (re-provisioning)", func() {

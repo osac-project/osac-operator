@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -540,6 +541,69 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(callbacks.OnFailed).NotTo(BeNil(), "OnFailed callback must be set")
 			callbacks.OnFailed("playbook failed")
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseFailed))
+		})
+
+		It("should set Progressing=False condition with error message when OnFailed is called", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+			callbacks.OnFailed("Ansible traceback: role xyz failed")
+
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("Ansible traceback"))
+		})
+
+		It("should set Progressing=True condition when OnSuccess is called", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+			callbacks.OnSuccess(provisioning.ProvisionStatus{})
+
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
+		})
+
+		It("should clear stale Progressing=False condition on provisioning recovery", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					Conditions: []metav1.Condition{
+						{
+							Type:               v1alpha1.ConditionProgressing,
+							Status:             metav1.ConditionFalse,
+							Reason:             v1alpha1.ReasonProvisioningFailed,
+							Message:            "previous failure",
+							LastTransitionTime: metav1.Now(),
+						},
+					},
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+			callbacks.OnSuccess(provisioning.ProvisionStatus{})
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
+			Expect(cond.Message).To(BeEmpty())
 		})
 	})
 
