@@ -20,6 +20,8 @@ import (
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -113,6 +115,13 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 	// Step 3: Fetch the cluster record from the fulfillment service.
 	cluster, err := r.fetchCluster(ctx, clusterID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+			return result, err
+		}
 		return result, err
 	}
 
@@ -137,7 +146,8 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		return result, err
 	}
 
-	// Step 6: Handle finalizer removal and signal for deletions.
+	// Step 6: Handle finalizer removal and signal for deletions. This must happen after step 5 so the
+	// deletion state is persisted before the CR is garbage collected.
 	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
 		if len(object.GetFinalizers()) == 1 {
 			log.Info(
@@ -368,6 +378,11 @@ func (t *feedbackReconcilerTask) syncPhaseReady(ctx context.Context) error {
 	return nil
 }
 
+func (t *feedbackReconcilerTask) syncPhaseDeleting() error {
+	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
+	return nil
+}
+
 func (t *feedbackReconcilerTask) syncNodeRequests() error {
 	for i := range len(t.object.Status.NodeRequests) {
 		err := t.syncNodeRequest(&t.object.Status.NodeRequests[i])
@@ -466,11 +481,6 @@ func (t *feedbackReconcilerTask) calculateConsoleURL() string {
 		"https://console-openshift-console.apps.%s.%s",
 		t.hostedCluster.Name, t.hostedCluster.Spec.DNS.BaseDomain,
 	)
-}
-
-func (t *feedbackReconcilerTask) syncPhaseDeleting() error {
-	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
-	return nil
 }
 
 func (t *feedbackReconcilerTask) findClusterCondition(kind privatev1.ClusterConditionType) *privatev1.ClusterCondition {
