@@ -539,6 +539,10 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		})
 	})
 
+	// The provisioning lifecycle uses a config version (hash of spec + strategy) to
+	// detect spec changes. When provisioning fails, the controller backs off with
+	// exponential delay. But if the spec changes (new config version), it retries
+	// immediately instead of waiting for the backoff to expire.
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			pool.Status.DesiredConfigVersion = testConfigVersion
