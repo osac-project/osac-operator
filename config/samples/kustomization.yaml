@@ -6,4 +6,5 @@ resources:
 - osac_v1alpha1_virtualnetwork.yaml
 - osac_v1alpha1_subnet.yaml
 - osac_v1alpha1_securitygroup.yaml
+- network-manager-fabric-netris.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
