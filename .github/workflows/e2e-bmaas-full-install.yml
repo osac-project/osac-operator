@@ -38,6 +38,7 @@ jobs:
         if: github.event_name == 'pull_request'
         id: filter
         with:
+          predicate-quantifier: 'every'
           filters: |
             code:
               - '**'

@@ -478,17 +478,7 @@ func setupNetworkingControllers(
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	networkingProvider := provisioning.NewAAPProviderWithPrefix(aapClient, templatePrefix)
 
-	// Create dedicated providers for attach/detach operations that use explicit
-	// template names instead of the prefix-based resolution.
-	publicIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
-		AAPClient:           aapClient,
-		ProvisionTemplate:   fmt.Sprintf("%s-attach-public-ip", templatePrefix),
-		DeprovisionTemplate: fmt.Sprintf("%s-detach-public-ip", templatePrefix),
-	})
-	if err != nil {
-		return fmt.Errorf("publicip attachment provider: %w", err)
-	}
-
+	// Create a dedicated provider for ExternalIP attach/detach operations.
 	externalIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
 		AAPClient:           aapClient,
 		ProvisionTemplate:   fmt.Sprintf("%s-attach-external-ip", templatePrefix),
@@ -513,24 +503,6 @@ func setupNetworkingControllers(
 	if err := setupSecurityGroupControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
-	); err != nil {
-		return err
-	}
-	if err := setupPublicIPPoolControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
-	); err != nil {
-		return err
-	}
-	if err := setupPublicIPControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
-	); err != nil {
-		return err
-	}
-	if err := setupPublicIPAttachmentControllers(
-		mgr, localMgr, grpcConn, networkingNamespace, computeInstanceNamespace,
-		publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
 	); err != nil {
 		return err
 	}
@@ -618,68 +590,6 @@ func setupSecurityGroupControllers(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
-	}
-	return nil
-}
-
-func setupPublicIPPoolControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewPublicIPPoolFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("publicippool feedback controller: %w", err)
-		}
-	}
-	if err := controller.NewPublicIPPoolReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("publicippool controller: %w", err)
-	}
-	return nil
-}
-
-func setupPublicIPControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-) error {
-	if err := controller.NewPublicIPReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("publicip controller: %w", err)
-	}
-	if grpcConn != nil {
-		if err := controller.NewPublicIPFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("publicip feedback controller: %w", err)
-		}
-	}
-	return nil
-}
-
-func setupPublicIPAttachmentControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, computeInstanceNamespace string,
-	provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-) error {
-	if err := controller.NewPublicIPAttachmentReconciler(
-		mgr, networkingNamespace, computeInstanceNamespace,
-		provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("publicipattachment controller: %w", err)
-	}
-	if grpcConn != nil {
-		if err := controller.NewPublicIPAttachmentFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("publicipattachment feedback controller: %w", err)
-		}
 	}
 	return nil
 }
