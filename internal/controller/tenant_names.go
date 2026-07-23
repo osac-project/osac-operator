@@ -39,6 +39,13 @@ const (
 
 	// eventActionDetectDuplicate is the event action for duplicate StorageClass detection
 	eventActionDetectDuplicate = "DetectDuplicate"
+
+	// eventReasonMissingStorageTier is the event reason emitted when a Tier API-defined
+	// tier has no matching resolved StorageClass
+	eventReasonMissingStorageTier = "MissingStorageTier"
+
+	// eventActionDetectMissingTier is the event action for missing storage tier detection
+	eventActionDetectMissingTier = "DetectMissingTier"
 )
 
 var (
