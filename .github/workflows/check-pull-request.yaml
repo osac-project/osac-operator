@@ -21,6 +21,7 @@ on:
       - 'LICENSE'
       - '*.md'
       - 'docs/**'
+      - 'examples/**'
 
 jobs:
 

@@ -8,6 +8,7 @@ on:
       - 'LICENSE'
       - '*.md'
       - 'docs/**'
+      - 'examples/**'
   push:
     branches:
     - main

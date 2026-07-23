@@ -7,6 +7,12 @@ permissions:
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
+      - 'examples/**'
   schedule:
     - cron: "0 */12 * * *"
   workflow_dispatch:
