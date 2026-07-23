@@ -143,6 +143,14 @@ func newTestStorageTier(name string, backendIDs ...string) *privatev1.StorageTie
 	}.Build()
 }
 
+// testBackendUsername and testBackendPassword are fixture values, not real
+// credentials — used to verify connection details round-trip through
+// resolveTierDefinitions and the AAP extra_vars conversion unmodified.
+const (
+	testBackendUsername = "test-backend-user"
+	testBackendPassword = "test-backend-password"
+)
+
 // newTestStorageBackendGetResponse builds a StorageBackendsGetResponse fixture for
 // the given provider, with a fixed endpoint/credentials pair.
 func newTestStorageBackendGetResponse(provider string) *privatev1.StorageBackendsGetResponse {
@@ -152,8 +160,8 @@ func newTestStorageBackendGetResponse(provider string) *privatev1.StorageBackend
 				Provider: provider,
 				Endpoint: "https://" + provider + ".example.com",
 				Credentials: privatev1.StorageBackendCredentials_builder{
-					Username: "admin",
-					Password: "s3cr3t",
+					Username: testBackendUsername,
+					Password: testBackendPassword,
 				}.Build(),
 			}.Build(),
 		}.Build(),
@@ -676,8 +684,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs[0].QosLimits.MaxWriteBandwidthMBs).To(Equal(int32(100)))
 			Expect(conns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
 				Endpoint: "https://vast.example.com",
-				Username: "admin",
-				Password: "s3cr3t",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
 			}))
 		})
 
@@ -1218,8 +1226,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(sawConns).To(BeTrue())
 			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
 				Endpoint: "https://vast.example.com",
-				Username: "admin",
-				Password: "s3cr3t",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
 			}))
 		})
 

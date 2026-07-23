@@ -914,7 +914,7 @@ var _ = Describe("AAPProvider", func() {
 
 		It("should shape storage_backend_connections keyed by backend_id", func() {
 			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
-				"backend-1": {Endpoint: "https://vast.example.com", Username: "admin", Password: "s3cr3t"},
+				"backend-1": {Endpoint: "https://vast.example.com", Username: testBackendUsername, Password: testBackendPassword},
 			})
 
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
@@ -924,8 +924,8 @@ var _ = Describe("AAPProvider", func() {
 				Expect(conns).To(Equal(map[string]map[string]any{
 					"backend-1": {
 						"endpoint": "https://vast.example.com",
-						"username": "admin",
-						"password": "s3cr3t",
+						"username": testBackendUsername,
+						"password": testBackendPassword,
 					},
 				}))
 				return &aap.LaunchJobTemplateResponse{JobID: 121}, nil
