@@ -61,6 +61,13 @@ type ClusterOrderSpec struct {
 	// Network contains cluster networking configuration.
 	// +kubebuilder:validation:Optional
 	Network *ClusterNetworkSpec `json:"network,omitempty"`
+	// NetworkAttachments defines the tenant subnets to connect cluster worker nodes to.
+	// Each entry references a Subnet and optionally one or more SecurityGroups.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=subnetRef
+	NetworkAttachments []NetworkAttachment `json:"networkAttachments,omitempty"`
 }
 
 // ClusterNetworkSpec defines networking configuration for a cluster.
