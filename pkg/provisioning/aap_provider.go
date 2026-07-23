@@ -383,8 +383,8 @@ const bytesPerGiB = 1 << 30
 // — the pre-existing static STORAGE_TIERS path already documents its own "quota"
 // field as bytes (see config/base/configmap-storage-operations-ig-example.yaml in
 // osac-aap), so this key is named quota_bytes rather than reusing "quota" to keep
-// the unit unambiguous; a follow-on osac-aap change is required to read it (see
-// PR description). max_reads_bw_mbps/max_writes_bw_mbps match the role's
+// the unit unambiguous; a follow-on osac-aap change (OSAC-1992's AC 4/5) is
+// required to read it. max_reads_bw_mbps/max_writes_bw_mbps match the role's
 // documented example, not the Go struct's MaxReadBandwidthMBs/MaxWriteBandwidthMBs.
 // No qos_policy key — osac-aap derives "<name>-qos" from the tier name it already
 // receives.

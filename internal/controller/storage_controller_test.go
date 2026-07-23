@@ -941,6 +941,37 @@ var _ = Describe("Storage Controller", func() {
 			))
 		})
 
+		It("should skip tier validation without panicking when BackendsGetter is nil but TiersClient is set", func() {
+			name := "storage-test-no-backends-getter"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("default", "backend-1")},
+					}.Build(), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			Expect(func() {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+				Expect(err).NotTo(HaveOccurred())
+			}).NotTo(Panic())
+
+			Consistently(fakeRecorder.Events, 200*time.Millisecond).ShouldNot(Receive(
+				ContainSubstring(eventReasonMissingStorageTier),
+			))
+		})
+
 		It("should complete StorageClass resolution when tier resolution fails", func() {
 			name := "storage-test-tier-resolution-failure"
 			createReadyTenantForStorage(ctx, name, testNamespace)

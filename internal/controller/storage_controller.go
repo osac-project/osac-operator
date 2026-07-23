@@ -228,7 +228,7 @@ func (r *StorageReconciler) resolveAndInjectTierContext(ctx context.Context, ten
 
 	var tierDefinitions []provisioning.TierDefinition
 	var backendConnections map[string]provisioning.BackendConnection
-	if r.TiersClient != nil {
+	if r.TiersClient != nil && r.BackendsGetter != nil {
 		var err error
 		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
 		if err != nil {
