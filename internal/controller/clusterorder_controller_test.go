@@ -541,6 +541,23 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks.OnFailed("playbook failed")
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseFailed))
 		})
+
+		It("should not set Phase to Failed via OnFailed when HostedCluster already exists (OSAC-2024)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+			instance.SetClusterReferenceHostedClusterName("my-existing-cluster")
+
+			reconciler := &ClusterOrderReconciler{}
+			callbacks := reconciler.provisioningCallbacks(instance)
+
+			Expect(callbacks.OnFailed).NotTo(BeNil(), "OnFailed callback must be set")
+			callbacks.OnFailed("ancillary task failed")
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing),
+				"Phase must remain Progressing when HC already exists — system retries via backoff")
+		})
 	})
 
 })
