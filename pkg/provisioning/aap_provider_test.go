@@ -855,7 +855,7 @@ var _ = Describe("AAPProvider", func() {
 					Protocol:  "nfs",
 					Provider:  "vast",
 					BackendID: "backend-1",
-					QosLimits: &provisioning.TierQosLimits{MaxReadBandwidthMBs: 100, MaxWriteBandwidthMBs: 200},
+					QosLimits: provisioning.TierQosLimits{MaxReadBandwidthMBs: 100, MaxWriteBandwidthMBs: 200},
 					QuotaGiB:  500,
 				},
 			})

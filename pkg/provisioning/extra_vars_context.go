@@ -41,7 +41,7 @@ type TierDefinition struct {
 	// BackendID is the join key into a map of BackendConnection values keyed by
 	// backend_id — not the connection itself.
 	BackendID string
-	QosLimits *TierQosLimits
+	QosLimits TierQosLimits
 	QuotaGiB  int64
 }
 

@@ -214,6 +214,35 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 	})
 }
 
+// resolveAndInjectTierContext resolves storage tier definitions and backend
+// connections from the Tier API, injects them into ctx for downstream AAP
+// calls to pick up, and returns the tier definitions directly for callers
+// that also need them locally (e.g. tier-coverage validation). A nil
+// TiersClient (no fulfillment service connection configured) and a failed
+// resolution are both treated as "no tier data" — logged and non-fatal — so
+// a transient Tier/Backend API failure never blocks Tenant storage
+// reconciliation, which functioned without this data before this feature
+// existed.
+func (r *StorageReconciler) resolveAndInjectTierContext(ctx context.Context, tenantName string) (context.Context, []provisioning.TierDefinition) {
+	log := ctrllog.FromContext(ctx)
+
+	var tierDefinitions []provisioning.TierDefinition
+	var backendConnections map[string]provisioning.BackendConnection
+	if r.TiersClient != nil {
+		var err error
+		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
+		if err != nil {
+			log.Error(err, "failed to resolve storage tier definitions, proceeding without tier data", "tenant", tenantName)
+			tierDefinitions = nil
+			backendConnections = nil
+		}
+	}
+
+	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
+	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
+	return ctx, tierDefinitions
+}
+
 func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	tenantName := instance.GetName()
@@ -227,23 +256,10 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	}
 
-	// Resolved once here, before the Stage 1 branch below (which can return early via
-	// handleBackendProvisioning, before Stage 2 ever resolves StorageClasses) so both
+	// Resolved once here, before Stage 1 (which can return early), so both
 	// Stage 2's tier-coverage validation and every downstream AAP call in this
-	// reconcile see the same result without re-fetching. Injected into ctx here too,
-	// so handleBackendProvisioning, handleClusterStorageProvisioning, and
-	// handleCaaSUpdate all pick it up via the ctx they receive from this function.
-	var tierDefinitions []provisioning.TierDefinition
-	var backendConnections map[string]provisioning.BackendConnection
-	if r.TiersClient != nil {
-		var err error
-		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
-	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
+	// reconcile see the same result without re-fetching.
+	ctx, tierDefinitions := r.resolveAndInjectTierContext(ctx, tenantName)
 
 	// Stage 1: check hub Secret
 	hubSecretReady, err := r.hubSecretExists(ctx, tenantName)
@@ -641,21 +657,10 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 		return ctrl.Result{}, nil
 	}
 
-	// Resolved independently from handleUpdate's resolution (no caching between create
-	// and delete paths) and injected into ctx here, before handleCaaSDelete — the first
-	// AAP-triggering call in this function — so it, handleClusterStorageDeprovisioning,
-	// and handleBackendDeprovisioning all pick it up via the ctx they receive.
-	var tierDefinitions []provisioning.TierDefinition
-	var backendConnections map[string]provisioning.BackendConnection
-	if r.TiersClient != nil {
-		var err error
-		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, r.TiersClient, r.BackendsGetter)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
-	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
+	// Resolved independently from handleUpdate's resolution (no caching between
+	// create and delete paths), before the first AAP-triggering call in this
+	// function, so every downstream call in this reconcile sees the same result.
+	ctx, _ = r.resolveAndInjectTierContext(ctx, instance.Name)
 
 	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
 	// all CaaS clusters and remove our finalizer from their ClusterOrders.

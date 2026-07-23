@@ -117,7 +117,7 @@ func resolveTierDefinitions(
 			Protocol:  storageProtocolToString(assoc.GetProtocol()),
 			Provider:  resolution.provider,
 			BackendID: backendID,
-			QosLimits: &provisioning.TierQosLimits{
+			QosLimits: provisioning.TierQosLimits{
 				MaxReadBandwidthMBs:  assoc.GetMaxReadBandwidthMbs(),
 				MaxWriteBandwidthMBs: assoc.GetMaxWriteBandwidthMbs(),
 			},
@@ -145,6 +145,10 @@ func storageProtocolToString(p privatev1.StorageProtocol) string {
 // matching entry in resolved and are not already flagged in ambiguousTiers.
 // Ambiguous tiers (multiple StorageClasses matched) are a distinct, separately
 // reported problem — a tier with too many StorageClasses is not "missing."
+//
+// resolved and ambiguousTiers are keyed by groupByTier's lowercased tier label,
+// but defined's tier.Name comes straight from the Tier API with no case
+// normalization — so the covered lookup below must lowercase tier.Name to match.
 func missingTierNames(defined []provisioning.TierDefinition, resolved []v1alpha1.ResolvedStorageClass, ambiguousTiers []string) []string {
 	covered := make(map[string]struct{}, len(resolved)+len(ambiguousTiers))
 	for _, sc := range resolved {
@@ -156,7 +160,7 @@ func missingTierNames(defined []provisioning.TierDefinition, resolved []v1alpha1
 
 	var missing []string
 	for _, tier := range defined {
-		if _, ok := covered[tier.Name]; !ok {
+		if _, ok := covered[strings.ToLower(tier.Name)]; !ok {
 			missing = append(missing, tier.Name)
 		}
 	}
