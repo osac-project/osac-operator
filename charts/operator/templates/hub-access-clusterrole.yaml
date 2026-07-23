@@ -18,9 +18,6 @@ rules:
   - externalippools
   - externalips
   - natgateways
-  - publicipattachments
-  - publicippools
-  - publicips
   - securitygroups
   - subnets
   - tenants
@@ -43,9 +40,6 @@ rules:
   - externalippools/status
   - externalips/status
   - natgateways/status
-  - publicipattachments/status
-  - publicippools/status
-  - publicips/status
   - securitygroups/status
   - subnets/status
   - tenants/status

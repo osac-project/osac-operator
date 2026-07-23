@@ -356,7 +356,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(updatedPIP.Status.Attached).To(BeTrue())
 		})
 
-		It("should set ComputeInstance.status.publicIPAddress on provision success", func() {
+		It("should set ComputeInstance.status.externalIPAddress on provision success", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
 
@@ -379,7 +379,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 			updatedCI := &osacv1alpha1.ComputeInstance{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
-			Expect(updatedCI.GetPublicIPAddress()).To(Equal("192.168.1.10"))
+			Expect(updatedCI.GetExternalIPAddress()).To(Equal("192.168.1.10"))
 		})
 
 		It("should set phase to Failed on provision failure", func() {
