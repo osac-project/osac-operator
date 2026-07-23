@@ -24,12 +24,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
@@ -78,20 +79,27 @@ func (r *FeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 
 // Reconcile is the implementation of the reconciler interface.
 func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
-	// Step 1: Fetch the object to reconcile, and do nothing if it no longer exists:
+	log := ctrllog.FromContext(ctx)
+
+	// Step 1: Fetch the CR from the hub cluster.
 	object := &ckv1alpha1.ClusterOrder{}
 	err = r.hubClient.Get(ctx, request.NamespacedName, object)
 	if err != nil {
-		err = clnt.IgnoreNotFound(err)
-		return //nolint:nakedret
+		if !apierrors.IsNotFound(err) {
+			return result, err
+		}
+		log.Info("CR not found, nothing to do")
+		return result, nil
 	}
 
-	// Step 2: Get the identifier of the cluster from the labels. If this isn't present it means that the object wasn't
-	// created by the fulfillment service, so we ignore it.
+	// Step 2: Get the cluster ID from labels. CRs without this label
+	// are not linked to a fulfillment-service cluster record, so we
+	// skip them — except when being deleted with our finalizer still
+	// present, in which case we remove it to unblock garbage collection.
 	clusterID, ok := object.Labels[osacClusterOrderIDLabel]
 	if !ok {
 		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
-			r.logger.Info("CR without cluster ID label is being deleted, removing feedback finalizer")
+			log.Info("CR without cluster ID label is being deleted, removing feedback finalizer")
 			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 			}
@@ -101,79 +109,76 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 			"There is no label containing the cluster identifier, will ignore it",
 			"label", osacClusterOrderIDLabel,
 		)
-		return
+		return result, nil
 	}
 
-	// Step 3: Fetch the cluster from the fulfillment service so we can compare before/after.
+	// Step 3: Fetch the cluster record from the fulfillment service.
 	cluster, err := r.fetchCluster(ctx, clusterID)
 	if err != nil {
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
-			r.logger.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
+			log.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
 			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 			}
 			return result, err
 		}
-		return
+		return result, err
 	}
 
-	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
-	// before and after values and save only the objects that have changed.
+	// Step 4: Sync CR state to the fulfillment service record.
 	t := &feedbackReconcilerTask{
 		r:       r,
 		object:  object,
 		cluster: clone(cluster),
 	}
-
-	// Step 4: Sync CR state to the fulfillment service record.
-	if object.ObjectMeta.DeletionTimestamp.IsZero() {
-		result, err = t.handleUpdate(ctx)
+	if object.DeletionTimestamp.IsZero() {
+		err = t.handleUpdate(ctx)
 	} else {
-		t.handleDelete(ctx)
+		err = t.handleDelete(ctx)
 	}
 	if err != nil {
-		return
+		return result, err
 	}
 
 	// Step 5: Persist synced state to the fulfillment service.
 	err = r.saveCluster(ctx, cluster, t.cluster)
 	if err != nil {
-		return
+		return result, err
 	}
 
 	// Step 6: Handle finalizer removal and signal for deletions. This must happen after step 5 so the
 	// deletion state is persisted before the CR is garbage collected.
 	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
 		if len(object.GetFinalizers()) == 1 {
-			r.logger.Info(
+			log.Info(
 				"Feedback finalizer is last remaining, removing finalizer and signaling",
 				"clusterID", clusterID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
 				if err != nil {
-					return
+					return result, err
 				}
 			}
 			_, signalErr := r.clustersClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{
 				Id: clusterID,
 			}.Build())
 			if signalErr != nil {
-				r.logger.Error(
+				log.Error(
 					signalErr,
 					"Failed to signal fulfillment service, periodic sync will handle cleanup",
 					"clusterID", clusterID,
 				)
 			}
 		} else {
-			r.logger.Info(
+			log.Info(
 				"Other finalizers still present, waiting",
 				"finalizers", object.GetFinalizers(),
 			)
 		}
 	}
 
-	return
+	return result, err
 }
 
 func (r *FeedbackReconciler) fetchCluster(ctx context.Context, id string) (cluster *privatev1.Cluster, err error) {
@@ -205,30 +210,33 @@ func (r *FeedbackReconciler) saveCluster(ctx context.Context, before, after *pri
 	return nil
 }
 
-func (t *feedbackReconcilerTask) handleUpdate(ctx context.Context) (result ctrl.Result, err error) {
+func (t *feedbackReconcilerTask) handleUpdate(ctx context.Context) error {
 	if controllerutil.AddFinalizer(t.object, osacClusterOrderFeedbackFinalizer) {
-		if err = t.r.hubClient.Update(ctx, t.object); err != nil {
-			return
+		if err := t.r.hubClient.Update(ctx, t.object); err != nil {
+			return err
 		}
 	}
-	err = t.syncConditions()
-	if err != nil {
-		return
-	}
-	err = t.syncPhase(ctx)
-	if err != nil {
-		return
-	}
-	err = t.syncNodeRequests()
-	if err != nil {
-		return
-	}
-	return
+	return t.syncState(ctx)
 }
 
-// handleDelete syncs the deletion phase to the fulfillment service.
-func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) {
-	t.syncPhaseDeleting()
+func (t *feedbackReconcilerTask) handleDelete(ctx context.Context) error {
+	if err := t.syncState(ctx); err != nil {
+		return err
+	}
+	return t.syncPhaseDeleting()
+}
+
+func (t *feedbackReconcilerTask) syncState(ctx context.Context) error {
+	if err := t.syncConditions(); err != nil {
+		return err
+	}
+	if err := t.syncPhase(ctx); err != nil {
+		return err
+	}
+	if err := t.syncNodeRequests(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *feedbackReconcilerTask) syncConditions() error {
@@ -328,15 +336,14 @@ func (t *feedbackReconcilerTask) syncPhase(ctx context.Context) error {
 	case ckv1alpha1.ClusterOrderPhaseReady:
 		return t.syncPhaseReady(ctx)
 	case ckv1alpha1.ClusterOrderPhaseDeleting:
-		t.syncPhaseDeleting()
-		return nil
+		return t.syncPhaseDeleting()
 	default:
 		t.r.logger.Info(
 			"Unknown phase, will ignore it",
 			"phase", t.object.Status.Phase,
 		)
-		return nil
 	}
+	return nil
 }
 
 func (t *feedbackReconcilerTask) syncPhaseProgressing() error {
@@ -371,8 +378,9 @@ func (t *feedbackReconcilerTask) syncPhaseReady(ctx context.Context) error {
 	return nil
 }
 
-func (t *feedbackReconcilerTask) syncPhaseDeleting() {
+func (t *feedbackReconcilerTask) syncPhaseDeleting() error {
 	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
+	return nil
 }
 
 func (t *feedbackReconcilerTask) syncNodeRequests() error {
@@ -444,7 +452,7 @@ func (t *feedbackReconcilerTask) fetchHostedCluster(ctx context.Context) error {
 	}
 	hostedCluster := &hypershiftv1beta1.HostedCluster{}
 	err := t.r.hubClient.Get(ctx, hostedClusterKey, hostedCluster)
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {

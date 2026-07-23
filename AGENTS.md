@@ -12,9 +12,6 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **VirtualNetwork** (`vnet`) — cloud VPC with IPv4/IPv6 CIDR blocks
 - **Subnet** (`subnet`) — subnet within a VirtualNetwork
 - **SecurityGroup** (`sg`) — network security rules
-- **PublicIPPool** (`pippool`) — public IP pool for MetalLB
-- **PublicIP** — public IP allocated from PublicIPPool
-- **PublicIPAttachment** — attachment of PublicIP to ComputeInstance
 - **ExternalIPPool** (`extippool`) — external IP pool
 - **ExternalIP** — external IP allocated from ExternalIPPool
 - **ExternalIPAttachment** — attachment of ExternalIP to ComputeInstance

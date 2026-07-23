@@ -21,8 +21,8 @@ var (
 	osacClusterOrderNameLabel         string = fmt.Sprintf("%s/clusterorder", osacPrefix)
 	osacClusterOrderIDLabel           string = fmt.Sprintf("%s/clusterorder-uuid", osacPrefix)
 	osacFinalizer                     string = fmt.Sprintf("%s/finalizer", osacPrefix)
-	osacClusterOrderFeedbackFinalizer string = fmt.Sprintf("%s/clusterorder-feedback", osacPrefix)
 	osacManagementStateAnnotation     string = fmt.Sprintf("%s/management-state", osacPrefix)
+	osacClusterOrderFeedbackFinalizer string = fmt.Sprintf("%s/clusterorder-feedback", osacPrefix)
 )
 
 func generateNamespaceName(instance *v1alpha1.ClusterOrder) string {
