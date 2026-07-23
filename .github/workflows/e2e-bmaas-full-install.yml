@@ -69,4 +69,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
+        run: |
+          echo "Upstream job results:"
+          echo "  changes: ${{ needs.changes.result }}"
+          echo "  e2e-bmaas-full-install: ${{ needs.e2e-bmaas-full-install.result }}"
+          echo ""
+          echo "One or more upstream jobs failed or were cancelled."
+          exit 1
