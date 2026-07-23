@@ -365,6 +365,130 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+	Context("handleNodePool", func() {
+		const testResourceClass = "worker"
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			reconciler = &ClusterOrderReconciler{
+				Client:    k8sClient,
+				apiReader: k8sClient,
+				Scheme:    k8sClient.Scheme(),
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should create a new status NodeRequest when none exists", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 3},
+					},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 2,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].ResourceClass).To(Equal(testResourceClass))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(2))
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1), "spec must not be modified")
+		})
+
+		It("should update an existing status NodeRequest", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 1},
+					},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1), "spec must not be modified")
+			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(3), "spec value must not change")
+		})
+
+		It("should not modify anything when there are no spec NodeRequests", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 2,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests).To(BeEmpty())
+			Expect(instance.Spec.NodeRequests).To(BeEmpty())
+		})
+
+		It("should skip when there are multiple spec NodeRequests", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 3},
+						{ResourceClass: "infra", NumberOfNodes: 1},
+					},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 2,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests).To(BeEmpty())
+		})
+
+		It("should not update status when replica count matches", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: testResourceClass, NumberOfNodes: 2},
+					},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 2,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(2))
+		})
+	})
+
 	Context("handleDesiredConfigVersion", func() {
 		It("should produce consistent hash for same spec", func() {
 			reconciler := &ClusterOrderReconciler{}
