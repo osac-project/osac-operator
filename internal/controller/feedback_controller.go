@@ -20,6 +20,8 @@ import (
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -113,6 +115,13 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 	// Step 3: Fetch the cluster record from the fulfillment service.
 	cluster, err := r.fetchCluster(ctx, clusterID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				return result, r.hubClient.Update(ctx, object)
+			}
+			return result, nil
+		}
 		return result, err
 	}
 

@@ -18,14 +18,15 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -434,6 +435,71 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 			Expect(err).To(HaveOccurred()) // CR should be garbage collected
 		})
 
+		It("should remove feedback finalizer when security group record is NotFound during deletion", func() {
+			cr := &v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sgName,
+					Namespace: sgNamespace,
+					Labels: map[string]string{
+						osacSecurityGroupIDLabel: sgID,
+					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: v1alpha1.SecurityGroupStatus{
+					Phase: v1alpha1.SecurityGroupPhaseDeleting,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      sgName,
+					Namespace: sgNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(BeEmpty())
+			Expect(mockServer.signals).To(BeEmpty())
+
+			updated := &v1alpha1.SecurityGroup{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: sgName, Namespace: sgNamespace}, updated)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error when security group record is NotFound but CR is not being deleted", func() {
+			cr := &v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sgName,
+					Namespace: sgNamespace,
+					Labels: map[string]string{
+						osacSecurityGroupIDLabel: sgID,
+					},
+					Finalizers: []string{osacSecurityGroupFeedbackFinalizer},
+				},
+				Spec: v1alpha1.SecurityGroupSpec{
+					VirtualNetwork: testVnetRef,
+				},
+				Status: v1alpha1.SecurityGroupStatus{
+					Phase: v1alpha1.SecurityGroupPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      sgName,
+					Namespace: sgNamespace,
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.NotFound))
+		})
+
 		It("should not update if status unchanged", func() {
 			sg := &privatev1.SecurityGroup{
 				Id: sgID,
@@ -502,7 +568,7 @@ func (m *mockSecurityGroupsServer) Get(ctx context.Context, req *privatev1.Secur
 
 	sg, ok := m.securityGroups[req.GetId()]
 	if !ok {
-		return nil, fmt.Errorf("security group not found: %s", req.GetId())
+		return nil, grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", req.GetId())
 	}
 
 	return &privatev1.SecurityGroupsGetResponse{

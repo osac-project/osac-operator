@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 
@@ -456,6 +457,34 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 			updated := &v1alpha1.ExternalIPAttachment{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: attachmentName, Namespace: attachmentNamespace}, updated)
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error when attachment record is NotFound but CR is not being deleted", func() {
+			cr := &v1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      attachmentName,
+					Namespace: attachmentNamespace,
+					Labels: map[string]string{
+						osacExternalIPAttachmentIDLabel: attachmentID,
+					},
+					Finalizers: []string{osacExternalIPAttachmentFeedbackFinalizer},
+				},
+				Spec: v1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP: "some-externalip",
+				},
+				Status: v1alpha1.ExternalIPAttachmentStatus{
+					Phase: v1alpha1.ExternalIPAttachmentPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      attachmentName,
+					Namespace: attachmentNamespace,
+				},
+			})
+			Expect(errors.Is(err, ErrExternalIPAttachmentNotFound)).To(BeTrue())
 		})
 
 		It("should not update if status unchanged", func() {
