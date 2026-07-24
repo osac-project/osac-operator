@@ -20,6 +20,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -439,6 +441,58 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.signalCalled).To(BeFalse())
+		})
+	})
+
+	Context("When reconciling a resource being deleted and fulfillment-service returns NotFound", func() {
+		BeforeEach(func() {
+			co := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: clusterOrderNS,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: clusterID,
+					},
+					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
+				},
+				Spec: osacv1alpha1.ClusterOrderSpec{
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
+			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+
+			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", clusterID)
+		})
+
+		AfterEach(func() {
+			co := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			if err == nil {
+				co.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+			}
+		})
+
+		It("should remove feedback finalizer and return without error", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeFalse())
+			Expect(mockClient.signalCalled).To(BeFalse())
+
+			updated := &osacv1alpha1.ClusterOrder{}
+			err = k8sClient.Get(testCtx, typeNamespacedName, updated)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 

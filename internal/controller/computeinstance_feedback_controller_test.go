@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -432,6 +434,56 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeFalse())
 			// Signal should NOT be called (our finalizer isn't present)
 			Expect(mockClient.signalCalled).To(BeFalse())
+		})
+	})
+
+	Context("When reconciling a resource being deleted and fulfillment-service returns NotFound", func() {
+		BeforeEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: computeInstanceNS,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel: ciID,
+					},
+					Finalizers: []string{osacComputeInstanceFeedbackFinalizer},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, vm)).To(Succeed())
+
+			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", ciID)
+		})
+
+		AfterEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			err := k8sClient.Get(ctx, typeNamespacedName, vm)
+			if err == nil {
+				vm.Finalizers = nil
+				Expect(k8sClient.Update(ctx, vm)).To(Succeed())
+			}
+		})
+
+		It("should remove feedback finalizer and return without error", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeFalse())
+			Expect(mockClient.signalCalled).To(BeFalse())
+
+			updated := &osacv1alpha1.ComputeInstance{}
+			err = k8sClient.Get(ctx, typeNamespacedName, updated)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 

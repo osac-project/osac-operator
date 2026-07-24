@@ -18,6 +18,8 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,6 +112,13 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 	// so we can compare before/after and only push changes.
 	ci, err := r.fetchComputeInstance(ctx, ciID)
 	if err != nil {
+		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
+			log.Info("Compute instance record not found during deletion, removing feedback finalizer", "computeInstanceID", ciID)
+			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
+				return result, r.hubClient.Update(ctx, object)
+			}
+			return result, nil
+		}
 		return result, err
 	}
 
