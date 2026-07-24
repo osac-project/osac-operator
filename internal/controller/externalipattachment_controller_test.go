@@ -15,18 +15,22 @@ package controller
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
@@ -608,6 +612,44 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedCI := &osacv1alpha1.ComputeInstance{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
 			Expect(updatedCI.Finalizers).To(ContainElement(osacExternalIPDetachFinalizer))
+		})
+
+		It("should retry finalizer removal on conflict error", func() {
+			ci.Finalizers = []string{osacExternalIPDetachFinalizer}
+
+			var updateCount atomic.Int32
+			conflictClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(ci).
+				WithStatusSubresource(
+					&osacv1alpha1.ExternalIPAttachment{},
+					&osacv1alpha1.ExternalIP{},
+					&osacv1alpha1.ComputeInstance{},
+				).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+						if _, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+							if updateCount.Add(1) == 1 {
+								return apierrors.NewConflict(
+									schema.GroupResource{Group: "osac.openshift.io", Resource: "computeinstances"},
+									obj.GetName(),
+									nil,
+								)
+							}
+						}
+						return c.Update(ctx, obj, opts...)
+					},
+				}).
+				Build()
+			setupReconciler(conflictClient)
+
+			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updateCount.Load()).To(BeNumerically(">=", int32(2)))
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(conflictClient.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).NotTo(ContainElement(osacExternalIPDetachFinalizer))
 		})
 
 		It("should keep detach finalizer when other ExternalIPAttachments still reference the CI", func() {
