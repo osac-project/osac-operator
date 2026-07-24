@@ -496,6 +496,46 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 	})
 
+	Context("When fulfillment-service returns NotFound for a resource that is NOT being deleted", func() {
+		BeforeEach(func() {
+			co := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: clusterOrderNS,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: clusterID,
+					},
+					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
+				},
+				Spec: osacv1alpha1.ClusterOrderSpec{
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+
+			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", clusterID)
+		})
+
+		AfterEach(func() {
+			co := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			if err == nil {
+				co.Finalizers = nil
+				_ = k8sClient.Update(testCtx, co)
+				_ = k8sClient.Delete(testCtx, co)
+			}
+		})
+
+		It("should propagate the NotFound error", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.NotFound))
+		})
+	})
+
 	Context("When reconciling a valid resource", func() {
 		BeforeEach(func() {
 			co := &osacv1alpha1.ClusterOrder{

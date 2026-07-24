@@ -113,7 +113,7 @@ func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, reque
 	ci, err := r.fetchComputeInstance(ctx, ciID)
 	if err != nil {
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
-			log.Info("Compute instance record not found during deletion, removing feedback finalizer", "computeInstanceID", ciID)
+			log.Info("Compute instance record not found during deletion, removing feedback finalizer", "ciID", ciID)
 			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
 				return result, r.hubClient.Update(ctx, object)
 			}

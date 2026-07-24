@@ -105,9 +105,9 @@ func (r *NATGatewayFeedbackReconciler) Reconcile(ctx context.Context, request ct
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info("NATGateway record not found during deletion, removing feedback finalizer", "natGatewayID", natGatewayID)
 			if controllerutil.RemoveFinalizer(object, osacNATGatewayFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}

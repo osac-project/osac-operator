@@ -123,9 +123,9 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 				"public_ip_pool_id", publicIPPoolID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}

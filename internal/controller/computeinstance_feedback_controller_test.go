@@ -487,6 +487,44 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		})
 	})
 
+	Context("When fulfillment-service returns NotFound for a resource that is NOT being deleted", func() {
+		BeforeEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: computeInstanceNS,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel: ciID,
+					},
+					Finalizers: []string{osacComputeInstanceFeedbackFinalizer},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+
+			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", ciID)
+		})
+
+		AfterEach(func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			err := k8sClient.Get(ctx, typeNamespacedName, vm)
+			if err == nil {
+				vm.Finalizers = nil
+				_ = k8sClient.Update(ctx, vm)
+				_ = k8sClient.Delete(ctx, vm)
+			}
+		})
+
+		It("should propagate the NotFound error", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.NotFound))
+		})
+	})
+
 	Context("When reconciling a valid resource", func() {
 		BeforeEach(func() {
 			// Reset mock client state

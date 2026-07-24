@@ -111,9 +111,9 @@ func (r *SecurityGroupFeedbackReconciler) Reconcile(ctx context.Context, request
 				"security_group_id", securityGroupID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacSecurityGroupFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}
