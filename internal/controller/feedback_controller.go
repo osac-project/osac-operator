@@ -118,9 +118,9 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
 			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}
