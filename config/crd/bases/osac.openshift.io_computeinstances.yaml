@@ -38,8 +38,8 @@ spec:
     - jsonPath: .status.ipAddress
       name: IP
       type: string
-    - jsonPath: .status.publicIPAddress
-      name: PublicIP
+    - jsonPath: .status.externalIPAddress
+      name: ExternalIP
       priority: 1
       type: string
     name: v1alpha1
@@ -332,6 +332,11 @@ spec:
                 description: DesiredConfigVersion is the version (hash) of the desired
                   configuration of the ComputeInstance
                 type: string
+              externalIPAddress:
+                description: |-
+                  ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
+                  Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
+                type: string
               ipAddress:
                 description: |-
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
@@ -414,11 +419,6 @@ spec:
                   - type
                   type: object
                 type: array
-              publicIPAddress:
-                description: |-
-                  PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.
-                  Populated when a PublicIP CR in state "Attached" references this ComputeInstance.
-                type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance
                   resources

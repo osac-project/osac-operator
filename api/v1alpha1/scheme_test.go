@@ -57,9 +57,6 @@ var _ = Describe("Scheme Registration", func() {
 			{"Subnet", "SubnetList", &v1alpha1.Subnet{}, &v1alpha1.SubnetList{}},
 			{"VirtualNetwork", "VirtualNetworkList", &v1alpha1.VirtualNetwork{}, &v1alpha1.VirtualNetworkList{}},
 			{"SecurityGroup", "SecurityGroupList", &v1alpha1.SecurityGroup{}, &v1alpha1.SecurityGroupList{}},
-			{"PublicIPPool", "PublicIPPoolList", &v1alpha1.PublicIPPool{}, &v1alpha1.PublicIPPoolList{}},
-			{"PublicIP", "PublicIPList", &v1alpha1.PublicIP{}, &v1alpha1.PublicIPList{}},
-			{"PublicIPAttachment", "PublicIPAttachmentList", &v1alpha1.PublicIPAttachment{}, &v1alpha1.PublicIPAttachmentList{}},
 			{"ExternalIPPool", "ExternalIPPoolList", &v1alpha1.ExternalIPPool{}, &v1alpha1.ExternalIPPoolList{}},
 			{"ExternalIP", "ExternalIPList", &v1alpha1.ExternalIP{}, &v1alpha1.ExternalIPList{}},
 			{"ExternalIPAttachment", "ExternalIPAttachmentList", &v1alpha1.ExternalIPAttachment{}, &v1alpha1.ExternalIPAttachmentList{}},
@@ -84,8 +81,8 @@ var _ = Describe("Scheme Registration", func() {
 			})
 		}
 
-		It("should have exactly 26 registered types plus internal types", func() {
-			// Verify all 26 expected GVKs are known
+		It("should have exactly 20 registered types plus internal types", func() {
+			// Verify all 20 expected GVKs are known
 			expectedKinds := []string{
 				"ClusterOrder", "ClusterOrderList",
 				"ComputeInstance", "ComputeInstanceList",
@@ -93,9 +90,6 @@ var _ = Describe("Scheme Registration", func() {
 				"Subnet", "SubnetList",
 				"VirtualNetwork", "VirtualNetworkList",
 				"SecurityGroup", "SecurityGroupList",
-				"PublicIPPool", "PublicIPPoolList",
-				"PublicIP", "PublicIPList",
-				"PublicIPAttachment", "PublicIPAttachmentList",
 				"ExternalIPPool", "ExternalIPPoolList",
 				"ExternalIP", "ExternalIPList",
 				"ExternalIPAttachment", "ExternalIPAttachmentList",

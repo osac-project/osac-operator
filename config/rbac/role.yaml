@@ -93,9 +93,6 @@ rules:
   - externalipattachments/finalizers
   - externalippools/finalizers
   - externalips/finalizers
-  - publicipattachments/finalizers
-  - publicippools/finalizers
-  - publicips/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -110,9 +107,6 @@ rules:
   - externalipattachments
   - externalippools
   - externalips
-  - publicipattachments
-  - publicippools
-  - publicips
   - securitygroups
   - subnets
   - tenants
@@ -133,9 +127,6 @@ rules:
   - externalipattachments/status
   - externalippools/status
   - externalips/status
-  - publicipattachments/status
-  - publicippools/status
-  - publicips/status
   - securitygroups/status
   - subnets/status
   - tenants/status

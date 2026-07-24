@@ -53,11 +53,11 @@ type ProjectsListRequest struct {
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve only top-level
 	// projects (no parent):
 	//
-	//	!has(this.spec.parent)
+	//	this.metadata.project == ""
 	//
-	// To retrieve child projects of a specific parent:
+	// To retrieve child projects of a specific parent by name:
 	//
-	//	this.spec.parent == "550e8400-e29b-41d4-a716-446655440000"
+	//	this.metadata.project == "team-a"
 	//
 	// To retrieve projects with a specific label:
 	//
@@ -202,11 +202,11 @@ type ProjectsListRequest_builder struct {
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve only top-level
 	// projects (no parent):
 	//
-	//	!has(this.spec.parent)
+	//	this.metadata.project == ""
 	//
-	// To retrieve child projects of a specific parent:
+	// To retrieve child projects of a specific parent by name:
 	//
-	//	this.spec.parent == "550e8400-e29b-41d4-a716-446655440000"
+	//	this.metadata.project == "team-a"
 	//
 	// To retrieve projects with a specific label:
 	//

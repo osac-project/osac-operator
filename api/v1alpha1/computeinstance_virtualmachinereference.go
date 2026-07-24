@@ -68,10 +68,10 @@ func (ci *ComputeInstance) GetIPAddress() string {
 	return ci.Status.IPAddress
 }
 
-func (ci *ComputeInstance) SetPublicIPAddress(ip string) {
-	ci.Status.PublicIPAddress = ip
+func (ci *ComputeInstance) SetExternalIPAddress(ip string) {
+	ci.Status.ExternalIPAddress = ip
 }
 
-func (ci *ComputeInstance) GetPublicIPAddress() string {
-	return ci.Status.PublicIPAddress
+func (ci *ComputeInstance) GetExternalIPAddress() string {
+	return ci.Status.ExternalIPAddress
 }

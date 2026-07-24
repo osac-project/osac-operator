@@ -3,6 +3,11 @@ name: Build container image
 on:
   workflow_dispatch:
   pull_request:
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
   push:
     branches:
     - main

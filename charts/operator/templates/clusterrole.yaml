@@ -71,9 +71,7 @@ rules:
   - externalipattachments
   - externalippools
   - externalips
-  - publicipattachments
-  - publicippools
-  - publicips
+  - natgateways
   - securitygroups
   - subnets
   - tenants
@@ -95,9 +93,7 @@ rules:
   - externalipattachments/finalizers
   - externalippools/finalizers
   - externalips/finalizers
-  - publicipattachments/finalizers
-  - publicippools/finalizers
-  - publicips/finalizers
+  - natgateways/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -113,9 +109,7 @@ rules:
   - externalipattachments/status
   - externalippools/status
   - externalips/status
-  - publicipattachments/status
-  - publicippools/status
-  - publicips/status
+  - natgateways/status
   - securitygroups/status
   - subnets/status
   - tenants/status

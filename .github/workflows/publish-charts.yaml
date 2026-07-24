@@ -1,36 +1,83 @@
 name: Publish Helm Charts
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows: ["Build container image"]
+    types: [completed]
 
 env:
   REGISTRY: ghcr.io
   CHARTS_REPO: ${{ github.repository_owner }}/charts
 
 jobs:
+  guard:
+    name: Verify image build succeeded
+    runs-on: ubuntu-latest
+    # Read-only job: only inspects workflow_run event metadata, no repo/API access needed.
+    permissions: {}
+    if: >
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    outputs:
+      tag: ${{ github.event.workflow_run.head_branch }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+    - name: Check image build result
+      env:
+        CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      run: |
+        # No build-metadata (+...) suffix allowed: this tag is used verbatim as a
+        # container image tag downstream, and Docker/OCI tags cannot contain '+'.
+        semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+        if ! [[ "$HEAD_BRANCH" =~ $semver_re ]]; then
+          echo "::error::Tag '$HEAD_BRANCH' is not a valid semver release tag"
+          exit 1
+        fi
+        if [[ "$CONCLUSION" != "success" ]]; then
+          echo "::error::Image build for tag $HEAD_BRANCH did not succeed (conclusion: $CONCLUSION). Refusing to publish chart."
+          exit 1
+        fi
+        echo "Image build succeeded for tag $HEAD_BRANCH"
+
   publish-operator-crds-chart:
     name: Publish osac-operator-crds chart
+    needs: guard
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/verify-tag-matches-sha.sh
 
     - name: Set up Helm
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.17.0
 
     - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
 
     - name: Extract version from tag
       id: version
-      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      env:
+        TAG: ${{ needs.guard.outputs.tag }}
 
     - name: Package chart
       run: |
@@ -45,25 +92,42 @@ jobs:
 
   publish-operator-chart:
     name: Publish osac-operator chart
+    needs: guard
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/verify-tag-matches-sha.sh
 
     - name: Set up Helm
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.17.0
 
     - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
 
     - name: Extract version from tag
       id: version
-      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      env:
+        TAG: ${{ needs.guard.outputs.tag }}
 
     - name: Update image tag in values.yaml
       run: |
@@ -83,18 +147,35 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-operator-crds-chart, publish-operator-chart]
+    needs: [guard, publish-operator-crds-chart, publish-operator-chart]
     permissions:
       contents: write
     steps:
-    - name: Create GitHub Release
-      run: |
-        gh release create "${GITHUB_REF_NAME}" \
-          --repo "${{ github.repository }}" \
-          --title "osac-operator ${GITHUB_REF_NAME}" \
-          --generate-notes \
-        || gh release edit "${GITHUB_REF_NAME}" \
-          --repo "${{ github.repository }}" \
-          --title "osac-operator ${GITHUB_REF_NAME}"
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-operator ${TAG}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-operator ${TAG}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        REPO: ${{ github.repository }}

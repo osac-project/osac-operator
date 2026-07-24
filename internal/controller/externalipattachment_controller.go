@@ -356,17 +356,17 @@ func (r *ExternalIPAttachmentReconciler) onProvisionSuccess(ctx context.Context,
 		}
 	}
 
-	// Set ComputeInstance.status.publicIPAddress from the parent ExternalIP's address
+	// Set ComputeInstance.status.externalIPAddress from the parent ExternalIP's address
 	if ci != nil && publicIP.Status.Address != "" {
 		fresh := &v1alpha1.ComputeInstance{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(ci), fresh); err != nil {
-			log.Error(err, "failed to fetch ComputeInstance for publicIPAddress update")
+			log.Error(err, "failed to fetch ComputeInstance for externalIPAddress update")
 			return
 		}
-		if fresh.GetPublicIPAddress() != publicIP.Status.Address {
-			fresh.SetPublicIPAddress(publicIP.Status.Address)
+		if fresh.GetExternalIPAddress() != publicIP.Status.Address {
+			fresh.SetExternalIPAddress(publicIP.Status.Address)
 			if err := r.Status().Update(ctx, fresh); err != nil {
-				log.Error(err, "failed to set ComputeInstance publicIPAddress")
+				log.Error(err, "failed to set ComputeInstance externalIPAddress")
 			}
 		}
 	}
@@ -400,7 +400,7 @@ func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attac
 }
 
 // onDeprovisionSuccess clears the attached state on the parent ExternalIP, clears
-// publicIPAddress on the ComputeInstance, and removes the CI detach finalizer when
+// externalIPAddress on the ComputeInstance, and removes the CI detach finalizer when
 // no other ExternalIPAttachments reference the same CI.
 func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) {
 	log := ctrllog.FromContext(ctx)
@@ -421,7 +421,7 @@ func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Contex
 		}
 	}
 
-	// Clear ComputeInstance.status.publicIPAddress and remove CI detach finalizer
+	// Clear ComputeInstance.status.externalIPAddress and remove CI detach finalizer
 	if attachment.Spec.ComputeInstance != nil {
 		ciUUID := *attachment.Spec.ComputeInstance
 		ciList := &v1alpha1.ComputeInstanceList{}
@@ -432,10 +432,10 @@ func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Contex
 			log.Error(err, "failed to list ComputeInstances for cleanup")
 		} else if len(ciList.Items) > 0 {
 			ci := &ciList.Items[0]
-			if ci.GetPublicIPAddress() != "" {
-				ci.SetPublicIPAddress("")
+			if ci.GetExternalIPAddress() != "" {
+				ci.SetExternalIPAddress("")
 				if err := r.Status().Update(ctx, ci); err != nil {
-					log.Error(err, "failed to clear ComputeInstance publicIPAddress")
+					log.Error(err, "failed to clear ComputeInstance externalIPAddress")
 				}
 			}
 		}

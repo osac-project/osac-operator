@@ -36,6 +36,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// buf:lint:ignore OSAC_OBJECT_SHAPE
 type ClusterTemplate struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Public data.
