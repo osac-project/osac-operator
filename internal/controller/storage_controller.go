@@ -25,6 +25,7 @@ import (
 	"time"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -48,6 +49,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
@@ -56,6 +58,13 @@ const (
 	clusterStorageFinalizer = "osac.openshift.io/cluster-storage"
 	storageControllerName   = "storage-controller"
 )
+
+// StorageBackendsClient is a narrow subset of the generated privatev1.StorageBackendsClient
+// used to check whether any storage backend is registered. The generated client satisfies
+// this interface automatically; it is defined here to allow test mocking.
+type StorageBackendsClient interface {
+	List(ctx context.Context, in *privatev1.StorageBackendsListRequest, opts ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error)
+}
 
 // StorageReconciler reconciles storage lifecycle on Tenant CRs.
 // It owns StorageBackendReady, ClusterStorageReady conditions,
@@ -72,6 +81,11 @@ type StorageReconciler struct {
 	ClusterStorageProvider provisioning.ProvisioningProvider
 	StatusPollInterval     time.Duration
 	MaxJobHistory          int
+	// BackendsClient queries the fulfillment service Backend API to determine whether
+	// a storage backend is registered. When nil (no gRPC connection configured),
+	// backendRegistered() returns false — backward compatible with environments that
+	// run without a fulfillment service connection (e.g. prepare-tenant.sh).
+	BackendsClient StorageBackendsClient
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;update;patch
@@ -192,6 +206,61 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 	})
 }
 
+// handleBackendReadiness evaluates Stage 1 backend readiness and updates the
+// StorageBackendReady condition. It returns (hubSecretReady, result, stop, error):
+//   - hubSecretReady: whether the hub Secret exists (needed for Stage 2 retry logic)
+//   - result: ctrl.Result to return when stop is true
+//   - stop: when true, the caller should return (result, err) immediately
+//   - error: any unexpected failure
+func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
+	hubSecretReady, err = r.hubSecretExists(ctx, tenantName)
+	if err != nil {
+		return false, ctrl.Result{}, true, err
+	}
+
+	if hubSecretReady {
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionTrue,
+			v1alpha1.TenantReasonFound,
+			fmt.Sprintf("Hub Secret for tenant %q exists", tenantName))
+		return true, ctrl.Result{}, false, nil
+	}
+
+	// Hub Secret absent: query Backend API to decide the provisioning path.
+	// This avoids triggering AAP when AAP is configured for compute provisioning
+	// but no storage backend is registered.
+	backendRegistered, err := r.backendRegistered(ctx)
+	if err != nil {
+		return false, ctrl.Result{}, true, fmt.Errorf("check backend registration: %w", err)
+	}
+	switch {
+	case backendRegistered && r.BackendProvider != nil:
+		// Backend registered and AAP available: provision the hub Secret.
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionFalse,
+			v1alpha1.TenantReasonNotFound,
+			fmt.Sprintf("Hub Secret for tenant %q not found", tenantName))
+		provResult, provErr := r.handleBackendProvisioning(ctx, instance)
+		return false, provResult, true, provErr
+	case backendRegistered:
+		// Backend registered but no AAP: cannot provision hub Secret.
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionFalse,
+			v1alpha1.TenantReasonBackendConfiguredNoProvider,
+			fmt.Sprintf("Storage backend is registered but no AAP is configured to provision the hub Secret for tenant %q", tenantName))
+		return false, ctrl.Result{}, true, nil
+	default:
+		// No backend registered: fall through to Stage 2 so the controller resolves
+		// StorageClasses from manually labeled SCs. Normal for prepare-tenant.sh
+		// environments and deployments without a gRPC connection to the fulfillment service.
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionFalse,
+			v1alpha1.TenantReasonNoProvider,
+			"No storage backend registered")
+		return false, ctrl.Result{}, false, nil
+	}
+}
+
 func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	tenantName := instance.GetName()
@@ -205,42 +274,11 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	}
 
-	// Stage 1: check hub Secret
-	hubSecretReady, err := r.hubSecretExists(ctx, tenantName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// TODO(OSAC-1957): BackendProvider != nil only means AAP is configured, not
-	// that a storage backend (e.g. VAST) is registered. When AAP is configured
-	// for compute provisioning but no backend exists, the controller triggers
-	// a backend provisioning job that will fail. Wire the Backend API
-	// (private.v1.StorageBackends/List) to check if a backend is registered
-	// before entering the AAP path.
-	if !hubSecretReady {
-		if r.BackendProvider != nil {
-			instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-				metav1.ConditionFalse,
-				v1alpha1.TenantReasonNotFound,
-				fmt.Sprintf("Hub Secret for tenant %q not found", tenantName))
-			return r.handleBackendProvisioning(ctx, instance)
-		}
-		// When no provisioning provider is configured (no AAP URL/token),
-		// the controller cannot create hub Secrets via AAP. This is the
-		// normal state for prepare-tenant.sh environments that run OSAC
-		// without a VAST storage backend. Instead of blocking here, fall
-		// through to Stage 2 so the controller can resolve StorageClasses
-		// from manually labeled SCs and populate status.storageClasses,
-		// which the compute instance controller needs to provision VMs.
-		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-			metav1.ConditionFalse,
-			v1alpha1.TenantReasonNoProvider,
-			"No backend provider configured")
-	} else {
-		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-			metav1.ConditionTrue,
-			v1alpha1.TenantReasonFound,
-			fmt.Sprintf("Hub Secret for tenant %q exists", tenantName))
+	// Stage 1: check hub Secret and route provisioning based on backend registration.
+	// stop is always true when err is non-nil (handleBackendReadiness invariant).
+	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName)
+	if stop {
+		return stageResult, err
 	}
 	// TODO(OSAC-1111): populate StorageBackendStatus once StorageBackend API provides name/provider
 
@@ -313,12 +351,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 				}
 			}
 
-			// TODO(OSAC-1957): when the Backend API confirms a storage
-			// backend is registered, requeue with backoff instead of
-			// stopping after the AAP job fails. The Default SC fallback
-			// should be temporary in that case, and the controller should
-			// keep retrying until a tenant-specific SC replaces it.
-			return r.handleClusterStorageProvisioning(ctx, instance)
+			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
 		}
 
 		condMsg := formatResolvedStorageClasses(result)
@@ -666,9 +699,23 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 
 // --- Stage 2: Cluster storage provisioning ---
 
-func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
+// handleClusterStorageProvisioning triggers or polls the AAP job that creates
+// StorageClasses on the target cluster. hubSecretReady indicates whether the
+// storage backend hub Secret already exists for this tenant; when true, a failed
+// job is retried with backoff because the backend is provisioned and the failure
+// is likely transient. When false (no backend registered), the controller waits
+// for an external trigger before retrying.
+func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context, instance *v1alpha1.Tenant, hubSecretReady bool) (ctrl.Result, error) {
 	latestJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
 	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed {
+		if hubSecretReady {
+			// Hub Secret exists: the storage backend is provisioned. Requeue
+			// periodically so the controller picks up when the failed job is
+			// externally cleared or the AAP template becomes available.
+			ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, requeueing",
+				"message", latestJob.Message)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
 		ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, waiting for external trigger to retry",
 			"message", latestJob.Message)
 		return ctrl.Result{}, nil
@@ -848,6 +895,24 @@ func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName stri
 		return false, err
 	}
 	return len(secretList.Items) > 0, nil
+}
+
+// backendRegistered reports whether at least one StorageBackend is registered in the
+// fulfillment service. When BackendsClient is nil (no gRPC connection configured),
+// it returns (false, nil) — preserving the existing behavior for deployments that
+// run without a fulfillment service connection. On transient gRPC failure the error
+// is returned so the caller can requeue rather than silently falling back.
+func (r *StorageReconciler) backendRegistered(ctx context.Context) (bool, error) {
+	if r.BackendsClient == nil {
+		return false, nil
+	}
+	req := &privatev1.StorageBackendsListRequest{}
+	req.SetLimit(1)
+	resp, err := r.BackendsClient.List(ctx, req)
+	if err != nil {
+		return false, fmt.Errorf("list storage backends: %w", err)
+	}
+	return resp.GetTotal() > 0, nil
 }
 
 // storageConfigNamespace returns the namespace where storage config Secrets are stored.
