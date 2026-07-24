@@ -98,6 +98,7 @@ func (r *ExternalIPAttachmentFeedbackReconciler) Reconcile(ctx context.Context, 
 			if controllerutil.RemoveFinalizer(object, osacExternalIPAttachmentFeedbackFinalizer) {
 				return ctrl.Result{}, r.hubClient.Update(ctx, object)
 			}
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
