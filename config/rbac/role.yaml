@@ -93,6 +93,7 @@ rules:
   - externalipattachments/finalizers
   - externalippools/finalizers
   - externalips/finalizers
+  - natgateways/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -107,6 +108,7 @@ rules:
   - externalipattachments
   - externalippools
   - externalips
+  - natgateways
   - securitygroups
   - subnets
   - tenants
@@ -127,6 +129,7 @@ rules:
   - externalipattachments/status
   - externalippools/status
   - externalips/status
+  - natgateways/status
   - securitygroups/status
   - subnets/status
   - tenants/status

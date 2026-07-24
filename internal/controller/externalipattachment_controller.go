@@ -449,26 +449,11 @@ func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Contex
 // maybeRemoveCIDetachFinalizer removes the externalip-detach finalizer from the
 // ComputeInstance if no other ExternalIPAttachments still reference it.
 // ciUUID is the fulfillment-service UUID used in spec.computeInstance and CI labels.
+// Uses retry.RetryOnConflict to handle concurrent modifications to the ComputeInstance.
 func (r *ExternalIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.Context, ciUUID string, excludeAttachment string) error {
 	log := ctrllog.FromContext(ctx)
 
-	ciList := &v1alpha1.ComputeInstanceList{}
-	if err := r.List(ctx, ciList,
-		client.InNamespace(r.ComputeInstanceNamespace),
-		client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
-	); err != nil {
-		return err
-	}
-	if len(ciList.Items) == 0 {
-		return nil
-	}
-	ci := &ciList.Items[0]
-
-	if !controllerutil.ContainsFinalizer(ci, osacExternalIPDetachFinalizer) {
-		return nil
-	}
-
-	// Check if other ExternalIPAttachments still reference this CI
+	// Check if other ExternalIPAttachments still reference this CI (no retry needed)
 	attachments := &v1alpha1.ExternalIPAttachmentList{}
 	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
 		return err
@@ -486,12 +471,25 @@ func (r *ExternalIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx contex
 	}
 
 	log.Info("no more references, removing CI detach finalizer", "computeInstanceUUID", ciUUID)
-	if controllerutil.RemoveFinalizer(ci, osacExternalIPDetachFinalizer) {
-		if err := r.Update(ctx, ci); err != nil {
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		ciList := &v1alpha1.ComputeInstanceList{}
+		if err := r.List(ctx, ciList,
+			client.InNamespace(r.ComputeInstanceNamespace),
+			client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+		); err != nil {
 			return err
 		}
-	}
-	return nil
+		if len(ciList.Items) == 0 {
+			return nil
+		}
+		ci := &ciList.Items[0]
+
+		if controllerutil.RemoveFinalizer(ci, osacExternalIPDetachFinalizer) {
+			return r.Update(ctx, ci)
+		}
+		return nil
+	})
 }
 
 func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) (ctrl.Result, error) {
