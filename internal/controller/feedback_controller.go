@@ -20,6 +20,8 @@ import (
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -116,6 +118,19 @@ func (r *FeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request
 		return result, err
 	}
 
+	// Step 3a: If the cluster record is gone (fulfillment-service already cleaned it up)
+	// and the CR is being deleted, remove the feedback finalizer so garbage collection
+	// can proceed. Without this, the CR would be stuck in Terminating forever.
+	if cluster == nil {
+		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+			log.Info("Cluster record not found during deletion, removing feedback finalizer", "clusterID", clusterID)
+			if controllerutil.RemoveFinalizer(object, osacClusterOrderFeedbackFinalizer) {
+				err = r.hubClient.Update(ctx, object)
+			}
+		}
+		return result, err
+	}
+
 	// Step 4: Sync CR state to the fulfillment service record.
 	t := &feedbackReconcilerTask{
 		r:       r,
@@ -176,9 +191,15 @@ func (r *FeedbackReconciler) fetchCluster(ctx context.Context, id string) (clust
 		Id: id,
 	}.Build())
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, nil
+		}
 		return
 	}
 	cluster = response.GetObject()
+	if cluster == nil {
+		return nil, fmt.Errorf("fulfillment-service returned a successful response with no cluster object for id %q", id)
+	}
 	if !cluster.HasSpec() {
 		cluster.SetSpec(&privatev1.ClusterSpec{})
 	}

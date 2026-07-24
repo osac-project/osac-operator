@@ -20,6 +20,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -439,6 +441,97 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.signalCalled).To(BeFalse())
+		})
+	})
+
+	Context("When fulfillment-service returns NotFound during deletion", func() {
+		BeforeEach(func() {
+			co := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: clusterOrderNS,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: clusterID,
+					},
+					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
+				},
+				Spec: osacv1alpha1.ClusterOrderSpec{
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
+			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+
+			mockClient.getError = grpcstatus.Error(codes.NotFound, "object not found")
+		})
+
+		AfterEach(func() {
+			co := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			if err == nil {
+				co.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+			}
+		})
+
+		It("should remove the feedback finalizer and not return an error", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeFalse())
+			Expect(mockClient.signalCalled).To(BeFalse())
+
+			updated := &osacv1alpha1.ClusterOrder{}
+			err = k8sClient.Get(testCtx, typeNamespacedName, updated)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("should not remove finalizer when CR is not being deleted", func() {
+			// Create a separate non-deleting CR to test the non-deletion path
+			const aliveResource = "test-cluster-order-alive"
+			aliveCo := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      aliveResource,
+					Namespace: clusterOrderNS,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: clusterID,
+					},
+					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
+				},
+				Spec: osacv1alpha1.ClusterOrderSpec{
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, aliveCo)).To(Succeed())
+			DeferCleanup(func() {
+				co := &osacv1alpha1.ClusterOrder{}
+				err := k8sClient.Get(testCtx, types.NamespacedName{Name: aliveResource, Namespace: clusterOrderNS}, co)
+				if err == nil {
+					co.Finalizers = nil
+					_ = k8sClient.Update(testCtx, co)
+					_ = k8sClient.Delete(testCtx, co)
+				}
+			})
+
+			request := reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: aliveResource, Namespace: clusterOrderNS},
+			}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+
+			updated := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: aliveResource, Namespace: clusterOrderNS}, updated)).To(Succeed())
+			Expect(updated.Finalizers).To(ContainElement(osacClusterOrderFeedbackFinalizer))
 		})
 	})
 
