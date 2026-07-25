@@ -119,7 +119,7 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 		// when the fulfillment service record has been deleted before K8s CR cleanup completes.
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info(
-				"Public IP pool record not found during deletion, removing feedback finalizer",
+				"ExternalIPPool record not found during deletion, removing feedback finalizer",
 				"external_ip_pool_id", externalIPPoolID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {

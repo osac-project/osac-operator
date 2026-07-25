@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	externalipControllerName = "externalip-controller"
-
 	// Must match the AAP playbook Service naming convention in osac-aap.
 	externalIPServiceNamePrefix       = "osac-eip-"
 	externalIPDefaultMetalLBNamespace = "metallb-system"
