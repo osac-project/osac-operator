@@ -37,21 +37,21 @@ var ErrExternalIPNotFound = errors.New("external IP not found in fulfillment ser
 // ExternalIPFeedbackReconciler sends updates to the fulfillment service.
 type ExternalIPFeedbackReconciler struct {
 	hubClient           clnt.Client
-	publicIPsClient     privatev1.ExternalIPsClient
+	externalIPsClient   privatev1.ExternalIPsClient
 	networkingNamespace string
 }
 
 type externalIPFeedbackReconcilerTask struct {
-	r        *ExternalIPFeedbackReconciler
-	object   *v1alpha1.ExternalIP
-	publicIP *privatev1.ExternalIP
+	r          *ExternalIPFeedbackReconciler
+	object     *v1alpha1.ExternalIP
+	externalIP *privatev1.ExternalIP
 }
 
 // NewExternalIPFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about external IPs.
 func NewExternalIPFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *ExternalIPFeedbackReconciler {
 	return &ExternalIPFeedbackReconciler{
 		hubClient:           hubClient,
-		publicIPsClient:     privatev1.NewExternalIPsClient(grpcConn),
+		externalIPsClient:   privatev1.NewExternalIPsClient(grpcConn),
 		networkingNamespace: networkingNamespace,
 	}
 }
@@ -81,7 +81,7 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 
 	// Step 2: Get the identifier of the external IP from the labels. If this isn't present it means that the object
 	// wasn't created by the fulfillment service, so we ignore it.
-	publicIPID, ok := object.Labels[osacExternalIPIDLabel]
+	externalIPID, ok := object.Labels[osacExternalIPIDLabel]
 	if !ok {
 		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacExternalIPFeedbackFinalizer) {
 			log.Info("CR without external IP ID label is being deleted, removing feedback finalizer")
@@ -97,10 +97,10 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 	}
 
 	// Step 3: Fetch the external IP from the fulfillment service so we can compare before/after.
-	publicIP, err := r.fetchExternalIP(ctx, publicIPID)
+	externalIP, err := r.fetchExternalIP(ctx, externalIPID)
 	if err != nil {
 		if !object.DeletionTimestamp.IsZero() && errors.Is(err, ErrExternalIPNotFound) {
-			log.Info("ExternalIP record not found during deletion, removing feedback finalizer", "publicIPID", publicIPID)
+			log.Info("ExternalIP record not found during deletion, removing feedback finalizer", "externalIPID", externalIPID)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPFeedbackFinalizer) {
 				return ctrl.Result{}, r.hubClient.Update(ctx, object)
 			}
@@ -112,9 +112,9 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
 	// before and after values and save only the objects that have changed.
 	t := &externalIPFeedbackReconcilerTask{
-		r:        r,
-		object:   object,
-		publicIP: clone(publicIP),
+		r:          r,
+		object:     object,
+		externalIP: clone(externalIP),
 	}
 
 	// Step 4: Sync CR state to the fulfillment service record.
@@ -127,7 +127,7 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 	}
 
 	// Step 5: Persist synced state to the fulfillment service.
-	if err := r.saveExternalIP(ctx, publicIP, t.publicIP); err != nil {
+	if err := r.saveExternalIP(ctx, externalIP, t.externalIP); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -136,21 +136,21 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 		if len(object.GetFinalizers()) == 1 {
 			log.Info(
 				"Feedback finalizer is last remaining, removing finalizer and signaling",
-				"publicIPID", publicIPID,
+				"externalIPID", externalIPID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPFeedbackFinalizer) {
 				if err := r.hubClient.Update(ctx, object); err != nil {
 					return ctrl.Result{}, err
 				}
 			}
-			_, signalErr := r.publicIPsClient.Signal(ctx, privatev1.ExternalIPsSignalRequest_builder{
-				Id: publicIPID,
+			_, signalErr := r.externalIPsClient.Signal(ctx, privatev1.ExternalIPsSignalRequest_builder{
+				Id: externalIPID,
 			}.Build())
 			if signalErr != nil {
 				log.Error(
 					signalErr,
 					"Failed to signal fulfillment service, periodic sync will handle cleanup",
-					"publicIPID", publicIPID,
+					"externalIPID", externalIPID,
 				)
 			}
 		} else {
@@ -165,7 +165,7 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 }
 
 func (r *ExternalIPFeedbackReconciler) fetchExternalIP(ctx context.Context, id string) (*privatev1.ExternalIP, error) {
-	response, err := r.publicIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
+	response, err := r.externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 		Id: id,
 	}.Build())
 	if err != nil {
@@ -174,17 +174,17 @@ func (r *ExternalIPFeedbackReconciler) fetchExternalIP(ctx context.Context, id s
 		}
 		return nil, err
 	}
-	publicIP := response.GetObject()
-	if publicIP == nil {
+	externalIP := response.GetObject()
+	if externalIP == nil {
 		return nil, fmt.Errorf("%w: response contained nil object", ErrExternalIPNotFound)
 	}
-	if !publicIP.HasSpec() {
-		publicIP.SetSpec(&privatev1.ExternalIPSpec{})
+	if !externalIP.HasSpec() {
+		externalIP.SetSpec(&privatev1.ExternalIPSpec{})
 	}
-	if !publicIP.HasStatus() {
-		publicIP.SetStatus(&privatev1.ExternalIPStatus{})
+	if !externalIP.HasStatus() {
+		externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
-	return publicIP, nil
+	return externalIP, nil
 }
 
 func (r *ExternalIPFeedbackReconciler) saveExternalIP(ctx context.Context, before, after *privatev1.ExternalIP) error {
@@ -196,7 +196,7 @@ func (r *ExternalIPFeedbackReconciler) saveExternalIP(ctx context.Context, befor
 			"before", before,
 			"after", after,
 		)
-		_, err := r.publicIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+		_, err := r.externalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 			Object: after,
 		}.Build())
 		if err != nil {
@@ -219,20 +219,20 @@ func (t *externalIPFeedbackReconcilerTask) handleUpdate(ctx context.Context) err
 
 func (t *externalIPFeedbackReconcilerTask) handleDelete() {
 	if t.object.Status.State == v1alpha1.ExternalIPStateFailed {
-		t.publicIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 		return
 	}
-	t.publicIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
+	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
 }
 
 func (t *externalIPFeedbackReconcilerTask) syncState(ctx context.Context) {
 	switch t.object.Status.State {
 	case v1alpha1.ExternalIPStatePending:
-		t.publicIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	case v1alpha1.ExternalIPStateAllocated:
-		t.publicIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 	case v1alpha1.ExternalIPStateFailed:
-		t.publicIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info("Unknown state, will ignore it", "state", t.object.Status.State)
@@ -241,6 +241,6 @@ func (t *externalIPFeedbackReconcilerTask) syncState(ctx context.Context) {
 
 func (t *externalIPFeedbackReconcilerTask) syncAddress() {
 	if t.object.Status.Address != "" {
-		t.publicIP.GetStatus().SetAddress(t.object.Status.Address)
+		t.externalIP.GetStatus().SetAddress(t.object.Status.Address)
 	}
 }

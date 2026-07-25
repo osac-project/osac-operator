@@ -689,7 +689,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			fakeClient = buildClient(ci)
 			setupReconciler(fakeClient)
 
-			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "")
+			err := reconciler.removeCIDetachFinalizerIfUnreferenced(testCtx, testCIUUID, "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedCI := &osacv1alpha1.ComputeInstance{}
@@ -712,7 +712,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			fakeClient = buildClient(ci, otherAttachment)
 			setupReconciler(fakeClient)
 
-			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, testAttachmentName)
+			err := reconciler.removeCIDetachFinalizerIfUnreferenced(testCtx, testCIUUID, testAttachmentName)
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedCI := &osacv1alpha1.ComputeInstance{}
@@ -749,7 +749,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				Build()
 			setupReconciler(conflictClient)
 
-			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "")
+			err := reconciler.removeCIDetachFinalizerIfUnreferenced(testCtx, testCIUUID, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(updateCount.Load()).To(BeNumerically(">=", int32(2)))
 
@@ -783,7 +783,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			fakeClient = buildClient(ci, excludedAttachment, remainingAttachment)
 			setupReconciler(fakeClient)
 
-			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "excluded-attachment")
+			err := reconciler.removeCIDetachFinalizerIfUnreferenced(testCtx, testCIUUID, "excluded-attachment")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedCI := &osacv1alpha1.ComputeInstance{}
