@@ -16,7 +16,7 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **ExternalIP** (`externalip`) — external IP allocated from ExternalIPPool
 - **ExternalIPAttachment** (`externalipattachment`) — attachment of ExternalIP to ComputeInstance
 - **NATGateway** (`natgw`) — outbound SNAT for a VirtualNetwork
-- **BareMetalInstance** — bare metal host (CRD defined in bare-metal-fulfillment-operator; feedback controller only in this repo)
+- **BareMetalInstance** — bare-metal host (CRD defined in bare-metal-fulfillment-operator; feedback controller only in this repo)
 
 ## Critical Rules
 
