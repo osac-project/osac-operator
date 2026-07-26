@@ -2,7 +2,7 @@
 
 ## Dual-Controller Pattern
 
-Each resource has two controllers:
+Most resources have two controllers:
 
 ```text
 Resource Controller                    Feedback Controller
@@ -17,6 +17,11 @@ Resource Controller                    Feedback Controller
 | `{resource}_feedback_controller.go` | Sync to fulfillment-service |
 
 **Why?** Resource controller handles infra lifecycle; feedback controller handles fulfillment-service integration. Operator works even if fulfillment-service is down.
+
+**Exceptions:**
+- ClusterOrder and Tenant: resource controller only (no feedback controller)
+- BareMetalInstance: feedback controller only — CRD is defined in bare-metal-fulfillment-operator; this operator syncs its state to fulfillment-service
+- StorageController (`storage_controller.go`): manages storage lifecycle on Tenant CRs — no paired feedback controller, no separate CRD
 
 ## Reconciliation Pattern
 
@@ -65,7 +70,6 @@ Key rules:
 ## AAP Integration
 
 Networking controllers use `provisioning.RunProvisioningLifecycle()` with callbacks:
-- `OnBeforeProvision` — validate preconditions
 - `OnSuccess` — extract outputs, set Phase to Ready
 - `OnFailed` — set Phase to Failed
 

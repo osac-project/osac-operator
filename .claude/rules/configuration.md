@@ -9,6 +9,14 @@ Config via environment variables from a Secret (see `config/samples/osac-config-
 - `OSAC_AAP_TEMPLATE_PREFIX` — template name prefix (default: `osac`)
 - `OSAC_AAP_STATUS_POLL_INTERVAL` — job polling interval (default: 30s)
 - `OSAC_AAP_INSECURE_SKIP_VERIFY` — skip TLS verification (default: false)
+- `OSAC_AAP_PROVISION_TEMPLATE` — global provision template override
+- `OSAC_AAP_DEPROVISION_TEMPLATE` — global deprovision template override
+- `OSAC_CLUSTER_AAP_PROVISION_TEMPLATE` — cluster-specific provision template override
+- `OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE` — cluster-specific deprovision template override
+- `OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE` — storage backend provision template override
+- `OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE` — storage backend deprovision template override
+- `OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE` — cluster storage provision template override
+- `OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE` — cluster storage deprovision template override
 
 ## Fulfillment Service gRPC
 
@@ -19,6 +27,7 @@ Config via environment variables from a Secret (see `config/samples/osac-config-
 
 - `OSAC_CLUSTER_ORDER_NAMESPACE`, `OSAC_COMPUTE_INSTANCE_NAMESPACE`
 - `OSAC_TENANT_NAMESPACE`, `OSAC_NETWORKING_NAMESPACE`
+- `OSAC_BARE_METAL_INSTANCE_NAMESPACE`
 
 ## Controller Enable Flags
 
@@ -26,5 +35,11 @@ Config via environment variables from a Secret (see `config/samples/osac-config-
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` / `--enable-compute-instance-controller`
 - `OSAC_ENABLE_TENANT_CONTROLLER` / `--enable-tenant-controller`
 - `OSAC_ENABLE_NETWORKING_CONTROLLER` / `--enable-networking-controller`
+- `OSAC_ENABLE_STORAGE_CONTROLLER` / `--enable-storage-controller`
+- `OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER` / `--enable-baremetal-instance-controller`
 
 If none set, all controllers run. If any set, only flagged controllers run.
+
+## Other
+
+- `OSAC_MAX_JOB_HISTORY` — maximum number of job history entries to retain per resource

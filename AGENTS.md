@@ -12,10 +12,11 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **VirtualNetwork** (`vnet`) — cloud VPC with IPv4/IPv6 CIDR blocks
 - **Subnet** (`subnet`) — subnet within a VirtualNetwork
 - **SecurityGroup** (`sg`) — network security rules
-- **ExternalIPPool** (`extippool`) — external IP pool
-- **ExternalIP** — external IP allocated from ExternalIPPool
-- **ExternalIPAttachment** — attachment of ExternalIP to ComputeInstance
-- **NATGateway** — outbound SNAT for a VirtualNetwork
+- **ExternalIPPool** (`externalippool`) — external IP pool
+- **ExternalIP** (`externalip`) — external IP allocated from ExternalIPPool
+- **ExternalIPAttachment** (`externalipattachment`) — attachment of ExternalIP to ComputeInstance
+- **NATGateway** (`natgw`) — outbound SNAT for a VirtualNetwork
+- **BareMetalInstance** — bare metal host (CRD defined in bare-metal-fulfillment-operator; feedback controller only in this repo)
 
 ## Critical Rules
 
@@ -40,7 +41,7 @@ make test-kustomize           # Validate all kustomization.yaml configs (catches
 make test-smoke               # Create kind cluster 'osac-test', apply CRDs + samples, verify ComputeInstance
 make test-integration-kind    # Go integration tests against a running kind cluster
 make lint                     # golangci-lint v2.12.1 (strict — always run before commit)
-make fmt                      # go fmt + goimports
+make fmt                      # go fmt
 make vet                      # go vet
 
 # Code generation
@@ -68,13 +69,17 @@ make check-helm-crds          # Verify CRD sync (CI enforces)
 
 ### Dual-Controller Pattern
 
-Each resource has a **resource controller** (provisions via AAP, manages finalizers) and a **feedback controller** (syncs state to fulfillment-service via gRPC). See `.claude/rules/controller-patterns.md` for reconciliation, finalizer, and AAP integration patterns.
+Most resources have a **resource controller** (provisions via AAP, manages finalizers) and a **feedback controller** (syncs state to fulfillment-service via gRPC). Exceptions: ClusterOrder and Tenant have resource controllers only (no feedback controller); BareMetalInstance has a feedback controller only (resource controller lives in bare-metal-fulfillment-operator). See `.claude/rules/controller-patterns.md` for reconciliation, finalizer, and AAP integration patterns.
+
+Most controllers check the `osac.openshift.io/management-state` annotation and skip reconciliation when set to `unmanaged`. Exception: tenant_controller does not check this annotation.
+
+`NetworkingNamespacePredicate` filters controllers to a configured networking namespace — used by networking controllers and by ComputeInstance's PublicIPAttachment watch (ComputeInstance itself uses `ComputeInstanceNamespacePredicate`).
 
 `internal/controller/storage_controller.go` (`StorageReconciler`) is an exception to this pattern: it reconciles `Tenant` resources to provision/deprovision tenant storage (StorageClass discovery, CaaS backend and cluster storage lifecycle) rather than owning its own CRD or following the AAP-based provisioning flow.
 
 ### Provisioning
 
-ClusterOrder and ComputeInstance controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`). Networking controllers (VirtualNetwork, Subnet, SecurityGroup) and the PublicIP/ExternalIP family of controllers also use this pattern. `pkg/provisioning` and `pkg/aap` are public packages consumed outside this repo (e.g., `bare-metal-fulfillment-operator`) — changes to their interfaces can impact those consumers. Management-state annotation (`osac.openshift.io/management-state = Unmanaged`) is checked by every resource controller except `tenant_controller.go` to skip reconciliation.
+ClusterOrder and ComputeInstance controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`). Networking controllers (VirtualNetwork, Subnet, SecurityGroup) and the PublicIP/ExternalIP family of controllers also use this pattern. `pkg/provisioning` and `pkg/aap` are public packages consumed outside this repo (e.g., `bare-metal-fulfillment-operator`) — changes to their interfaces can impact those consumers. Management-state annotation (`osac.openshift.io/management-state = unmanaged`) is checked by every resource controller except `tenant_controller.go` to skip reconciliation.
 
 ### Multi-cluster
 
@@ -103,6 +108,7 @@ internal/
   controller/              # Reconciliation logic
     {resource}_controller.go           # Provisioning controller
     {resource}_feedback_controller.go  # Feedback controller
+    storage_tier_resolution.go         # Storage tier lookup helper
   consoleproxy/            # Console proxy server implementation (auth, config, handlers)
   migrations/              # Data migrations (e.g., migrate_subnetrefs.go)
 helpers/                   # Utility functions (at project root, not under internal/)
@@ -140,6 +146,19 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 - Run manually: `pre-commit run --all-files`
 - **CRITICAL**: Always run `make lint` before committing — CI enforces strict linting
 
+## CI Workflows
+
+| Workflow | Purpose |
+|----------|---------|
+| `build-image.yaml` | Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container |
+| `check-pull-request.yaml` | Validates `buf generate` output unchanged (ensures gRPC client is up-to-date) |
+| `e2e-vmaas-full-install.yml` | E2E tests in VMaaS environment |
+| `helm-lint.yaml` | Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts |
+| `ok-to-test-label-cleanup.yml` | Remove ok-to-test label on new pushes |
+| `pre-commit.yaml` | Pre-commit hook checks |
+| `publish-charts.yaml` | Publish Helm charts |
+| `slash-command.yml` | Slash command handler for PRs |
+
 ## Automation Hooks
 
 Hooks are configured in `.claude/settings.json` and run automatically during agent sessions:
@@ -166,13 +185,6 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 - [ ] Cross-repo dependencies documented in PR description
 - [ ] PR title includes Jira key (e.g., "OSAC-12345: fix subnet race")
 - [ ] Commits signed off (`git commit -s`) and include AI attribution if applicable
-
-## CI Workflows
-
-- **build-image.yaml**: Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container
-- **check-pull-request.yaml**: Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
-- **helm-lint.yaml**: Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts
-- **e2e-vmaas-full-install.yml**: E2E tests in VMaaS environment
 
 ## Security
 
