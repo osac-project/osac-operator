@@ -580,7 +580,6 @@ func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Contex
 		}
 	}
 
-
 	// Remove ClusterOrder detach finalizer
 	if attachment.Spec.Cluster != nil {
 		coUUID := *attachment.Spec.Cluster
