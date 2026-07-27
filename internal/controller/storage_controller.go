@@ -352,39 +352,13 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 				return ctrl.Result{}, nil
 			}
 
-			// No tenant-specific SCs. Check for shared Default SCs so VMs
-			// can provision while the AAP job creates the real one.
-			defaultFallback, err := getTenantStorageClasses(ctx, targetClient, tenantName)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-
-			for _, msg := range defaultFallback.duplicateMessages {
-				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
-			}
-
-			if len(defaultFallback.resolved) > 0 {
-				condMsg := r.appendMissingTierWarnings(instance, tierDefinitions, defaultFallback.resolved, defaultFallback.ambiguousTiers,
-					defaultFallback.conditionMessage()+"; tenant-specific provisioning pending")
-				instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-					metav1.ConditionTrue,
-					v1alpha1.TenantReasonFound,
-					condMsg)
-				instance.Status.StorageClasses = defaultFallback.resolved
-				instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-					{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
-				}
-			} else {
-				condMsg := r.appendMissingTierWarnings(instance, tierDefinitions, nil, defaultFallback.ambiguousTiers,
-					fmt.Sprintf("no StorageClass found for tenant %q", tenantName))
-				instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-					metav1.ConditionFalse,
-					v1alpha1.TenantReasonNotFound,
-					condMsg)
-				instance.Status.StorageClasses = nil
-				instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-					{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
-				}
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				fmt.Sprintf("no StorageClass found for tenant %q", tenantName))
+			instance.Status.StorageClasses = nil
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
 			}
 
 			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
@@ -977,12 +951,6 @@ func (r *StorageReconciler) mapStorageClassToTenant(ctx context.Context, obj cli
 	tenantName, exists := obj.GetLabels()[osacTenantKey]
 	if !exists || tenantName == "" {
 		return nil
-	}
-
-	if tenantName == defaultStorageClassSentinel {
-		log.Info("shared Default StorageClass changed, reconciling all tenants",
-			"storageClass", obj.GetName())
-		return r.allTenantReconcileRequests(ctx)
 	}
 
 	tenant := &v1alpha1.Tenant{}
