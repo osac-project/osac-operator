@@ -146,19 +146,6 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 - Run manually: `pre-commit run --all-files`
 - **CRITICAL**: Always run `make lint` before committing — CI enforces strict linting
 
-## CI Workflows
-
-| Workflow | Purpose |
-|----------|---------|
-| `build-image.yaml` | Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container |
-| `check-pull-request.yaml` | Validates `buf generate` output unchanged (ensures gRPC client is up-to-date) |
-| `e2e-vmaas-full-install.yml` | E2E tests in VMaaS environment |
-| `helm-lint.yaml` | Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts |
-| `ok-to-test-label-cleanup.yml` | Remove ok-to-test label on new pushes |
-| `pre-commit.yaml` | Pre-commit hook checks |
-| `publish-charts.yaml` | Publish Helm charts |
-| `slash-command.yml` | Slash command handler for PRs |
-
 ## Automation Hooks
 
 Hooks are configured in `.claude/settings.json` and run automatically during agent sessions:
