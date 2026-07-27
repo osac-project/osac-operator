@@ -104,6 +104,7 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 			if controllerutil.RemoveFinalizer(object, osacExternalIPFeedbackFinalizer) {
 				return ctrl.Result{}, r.hubClient.Update(ctx, object)
 			}
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
