@@ -467,20 +467,28 @@ func (r *ExternalIPAttachmentReconciler) onProvisionSuccess(ctx context.Context,
 		return fmt.Errorf("failed to set ExternalIP status.attached=true: %w", err)
 	}
 
-	// Set ComputeInstance.status.externalIPAddress from the parent ExternalIP's address
-	if ci != nil && externalIP.Status.Address != "" {
-		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			fresh := &v1alpha1.ComputeInstance{}
-			if err := r.Get(ctx, client.ObjectKeyFromObject(ci), fresh); err != nil {
-				return err
+	// Set ComputeInstance.status.externalIPAddress from the parent ExternalIP's address.
+	// Re-fetch ExternalIP to get the latest address — the object captured by handleUpdate
+	// may be stale if the ExternalIP controller populated the address after our initial read.
+	if ci != nil {
+		freshEIP := &v1alpha1.ExternalIP{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(externalIP), freshEIP); err != nil {
+			return fmt.Errorf("failed to fetch ExternalIP for address lookup: %w", err)
+		}
+		if freshEIP.Status.Address != "" {
+			if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				fresh := &v1alpha1.ComputeInstance{}
+				if err := r.Get(ctx, client.ObjectKeyFromObject(ci), fresh); err != nil {
+					return err
+				}
+				if fresh.GetExternalIPAddress() == freshEIP.Status.Address {
+					return nil
+				}
+				fresh.SetExternalIPAddress(freshEIP.Status.Address)
+				return r.Status().Update(ctx, fresh)
+			}); err != nil {
+				return fmt.Errorf("failed to set ComputeInstance externalIPAddress: %w", err)
 			}
-			if fresh.GetExternalIPAddress() == externalIP.Status.Address {
-				return nil
-			}
-			fresh.SetExternalIPAddress(externalIP.Status.Address)
-			return r.Status().Update(ctx, fresh)
-		}); err != nil {
-			return fmt.Errorf("failed to set ComputeInstance externalIPAddress: %w", err)
 		}
 	}
 

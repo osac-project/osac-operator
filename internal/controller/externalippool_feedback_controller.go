@@ -120,7 +120,7 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info(
 				"ExternalIPPool record not found during deletion, removing feedback finalizer",
-				"external_ip_pool_id", externalIPPoolID,
+				"externalIPPoolID", externalIPPoolID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {
 				return result, r.hubClient.Update(ctx, object)
@@ -203,6 +203,9 @@ func (r *ExternalIPPoolFeedbackReconciler) fetchExternalIPPool(ctx context.Conte
 		return
 	}
 	externalIPPool = response.GetObject()
+	if externalIPPool == nil {
+		return nil, fmt.Errorf("external IP pool not found: response contained nil object")
+	}
 	if !externalIPPool.HasSpec() {
 		externalIPPool.SetSpec(&privatev1.ExternalIPPoolSpec{})
 	}
