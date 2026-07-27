@@ -283,7 +283,7 @@ func (t *externalIPAttachmentFeedbackReconcilerTask) syncAttachedOnParentExterna
 
 	externalIP := response.GetObject()
 	if externalIP == nil {
-		return nil
+		return fmt.Errorf("parent ExternalIP %s: response contained nil object", externalIPID)
 	}
 	if !externalIP.HasStatus() {
 		externalIP.SetStatus(&privatev1.ExternalIPStatus{})
