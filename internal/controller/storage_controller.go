@@ -979,24 +979,6 @@ func (r *StorageReconciler) mapSecretToTenant(ctx context.Context, obj client.Ob
 	return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(tenant)}}
 }
 
-func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []reconcile.Request {
-	log := ctrllog.FromContext(ctx)
-
-	tenantList := &v1alpha1.TenantList{}
-	if err := r.List(ctx, tenantList, client.InNamespace(r.tenantNamespace)); err != nil {
-		log.Error(err, "unable to list Tenants for Default SC reconciliation")
-		return nil
-	}
-
-	requests := make([]reconcile.Request, 0, len(tenantList.Items))
-	for i := range tenantList.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: client.ObjectKeyFromObject(&tenantList.Items[i]),
-		})
-	}
-	return requests
-}
-
 // tenantSpecificStorageClasses is the result of resolveTenantSpecificStorageClasses:
 // resolved StorageClasses per tier, plus the duplicate-SC messages and ambiguous
 // tier names for tiers excluded from resolved because multiple StorageClasses
@@ -1006,7 +988,6 @@ type tenantSpecificStorageClasses struct {
 	duplicateMessages []string
 	ambiguousTiers    []string
 }
-
 // resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
 // given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
 // AAP is configured and the controller should not fall back to shared defaults.
