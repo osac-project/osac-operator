@@ -33,6 +33,8 @@ import (
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
+	"k8s.io/utils/ptr"
+
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
@@ -57,6 +59,7 @@ type ExternalIPAttachmentReconciler struct {
 	mgr                      mcmanager.Manager
 	NetworkingNamespace      string
 	ComputeInstanceNamespace string
+	ClusterOrderNamespace    string
 	ProvisioningProvider     provisioning.ProvisioningProvider
 	StatusPollInterval       time.Duration
 	MaxJobHistory            int
@@ -68,6 +71,7 @@ func NewExternalIPAttachmentReconciler(
 	mgr mcmanager.Manager,
 	networkingNamespace string,
 	computeInstanceNamespace string,
+	clusterOrderNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -85,6 +89,9 @@ func NewExternalIPAttachmentReconciler(
 	if computeInstanceNamespace == "" {
 		computeInstanceNamespace = defaultComputeInstanceNamespace
 	}
+	if clusterOrderNamespace == "" {
+		clusterOrderNamespace = defaultClusterOrderNamespace
+	}
 	return &ExternalIPAttachmentReconciler{
 		Client:                   mgr.GetLocalManager().GetClient(),
 		APIReader:                mgr.GetLocalManager().GetAPIReader(),
@@ -92,6 +99,7 @@ func NewExternalIPAttachmentReconciler(
 		mgr:                      mgr,
 		NetworkingNamespace:      networkingNamespace,
 		ComputeInstanceNamespace: computeInstanceNamespace,
+		ClusterOrderNamespace:    clusterOrderNamespace,
 		ProvisioningProvider:     provisioningProvider,
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
@@ -102,6 +110,8 @@ func NewExternalIPAttachmentReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 
 // Reconcile handles create/update/delete for a ExternalIPAttachment CR.
 func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
@@ -118,7 +128,7 @@ func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcre
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("start reconcile", "publicIP", attachment.Spec.ExternalIP, "phase", attachment.Status.Phase)
+	log.Info("start reconcile", "externalIP", attachment.Spec.ExternalIP, "phase", attachment.Status.Phase)
 
 	oldstatus := attachment.Status.DeepCopy()
 
@@ -158,30 +168,30 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseProgressing
 	}
 
-	// Resolve parent ExternalIP by UUID label (spec.publicIP contains the fulfillment-service UUID)
-	publicIPList := &v1alpha1.ExternalIPList{}
-	if err := r.List(ctx, publicIPList,
+	// Resolve parent ExternalIP by UUID label (spec.externalIP contains the fulfillment-service UUID)
+	externalIPList := &v1alpha1.ExternalIPList{}
+	if err := r.List(ctx, externalIPList,
 		client.InNamespace(attachment.Namespace),
 		client.MatchingLabels{osacExternalIPIDLabel: attachment.Spec.ExternalIP},
 	); err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(publicIPList.Items) == 0 {
-		log.Info("parent ExternalIP not found, requeueing", "publicIPUUID", attachment.Spec.ExternalIP)
+	if len(externalIPList.Items) == 0 {
+		log.Info("parent ExternalIP not found, requeueing", "externalIPUUID", attachment.Spec.ExternalIP)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	publicIP := &publicIPList.Items[0]
+	externalIP := &externalIPList.Items[0]
 
 	// Resolve parent ExternalIPPool by UUID label
 	poolList := &v1alpha1.ExternalIPPoolList{}
 	if err := r.List(ctx, poolList,
 		client.InNamespace(attachment.Namespace),
-		client.MatchingLabels{osacExternalIPPoolIDLabel: publicIP.Spec.Pool},
+		client.MatchingLabels{osacExternalIPPoolIDLabel: externalIP.Spec.Pool},
 	); err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(poolList.Items) == 0 {
-		log.Info("parent ExternalIPPool not found, requeueing", "poolUUID", publicIP.Spec.Pool)
+		log.Info("parent ExternalIPPool not found, requeueing", "poolUUID", externalIP.Spec.Pool)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	pool := &poolList.Items[0]
@@ -193,6 +203,12 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 
 	// Resolve target ComputeInstance
 	ci, result, err := r.resolveComputeInstance(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
+	// Resolve target ClusterOrder
+	co, result, err := r.resolveClusterOrder(ctx, attachment)
 	if err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
@@ -211,14 +227,21 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		attachment.Annotations[osacExternalIPPoolNameAnnotation] = pool.Name
 		needsUpdate = true
 	}
-	if attachment.Annotations[osacExternalIPNameAnnotation] != publicIP.Name {
-		attachment.Annotations[osacExternalIPNameAnnotation] = publicIP.Name
+	if attachment.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
+		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
 		needsUpdate = true
 	}
 	if ci != nil && ci.Status.VirtualMachineReference != nil {
 		targetNamespace := ci.Status.VirtualMachineReference.Namespace
 		if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
 			attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+			needsUpdate = true
+		}
+	}
+	if co != nil {
+		targetIP := r.resolveClusterEndpoint(co, attachment)
+		if targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
+			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
 			needsUpdate = true
 		}
 	}
@@ -234,7 +257,8 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
 		Spec                   v1alpha1.ExternalIPAttachmentSpec
 		ImplementationStrategy string
-	}{attachment.Spec, implementationStrategy})
+		TargetIP               string
+	}{attachment.Spec, implementationStrategy, attachment.Annotations[osacExternalIPTargetIPAnnotation]})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}
@@ -253,7 +277,7 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseProgressing
 	}
 
-	return r.handleProvisioning(ctx, attachment, publicIP, ci)
+	return r.handleProvisioning(ctx, attachment, externalIP, ci)
 }
 
 // resolveComputeInstance looks up the target ComputeInstance by UUID label, handles
@@ -287,7 +311,7 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 		if err := r.Delete(ctx, attachment); err != nil {
 			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
 		}
-		return nil, ctrl.Result{}, nil
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	if ci.Status.VirtualMachineReference == nil {
@@ -305,10 +329,80 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 	return ci, ctrl.Result{}, nil
 }
 
+// resolveClusterOrder looks up the target ClusterOrder by UUID label, handles
+// auto-detach if the ClusterOrder is being deleted, checks endpoint readiness,
+// and adds the detach finalizer.
+// Returns nil ClusterOrder (with no requeue) when spec.cluster is not set.
+func (r *ExternalIPAttachmentReconciler) resolveClusterOrder(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalIPAttachment,
+) (*v1alpha1.ClusterOrder, ctrl.Result, error) {
+	if attachment.Spec.Cluster == nil {
+		return nil, ctrl.Result{}, nil
+	}
+
+	log := ctrllog.FromContext(ctx)
+
+	coList := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, coList,
+		client.InNamespace(r.ClusterOrderNamespace),
+		client.MatchingLabels{osacClusterOrderIDLabel: *attachment.Spec.Cluster},
+	); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(coList.Items) == 0 {
+		log.Info("ClusterOrder not found, requeueing", "clusterOrderUUID", *attachment.Spec.Cluster)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	co := &coList.Items[0]
+
+	if !co.DeletionTimestamp.IsZero() {
+		log.Info("auto-detaching: ClusterOrder is being deleted", "clusterOrder", co.Name)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+
+	endpoint := r.resolveClusterEndpoint(co, attachment)
+	if endpoint == "" {
+		log.Info("ClusterOrder endpoint not available yet, requeueing",
+			"clusterOrder", co.Name,
+			"targetEndpoint", ptr.Deref(attachment.Spec.TargetEndpoint, ""))
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	if controllerutil.AddFinalizer(co, osacExternalIPDetachFinalizer) {
+		log.Info("adding externalip-detach finalizer to ClusterOrder", "clusterOrder", co.Name)
+		if err := r.Update(ctx, co); err != nil {
+			return nil, ctrl.Result{}, err
+		}
+	}
+
+	return co, ctrl.Result{}, nil
+}
+
+func (r *ExternalIPAttachmentReconciler) resolveClusterEndpoint(
+	co *v1alpha1.ClusterOrder,
+	attachment *v1alpha1.ExternalIPAttachment,
+) string {
+	if attachment.Spec.TargetEndpoint == nil {
+		return ""
+	}
+	switch *attachment.Spec.TargetEndpoint {
+	case v1alpha1.ExternalIPAttachmentTargetEndpointAPI:
+		return co.Status.ApiEndpoint
+	case v1alpha1.ExternalIPAttachmentTargetEndpointIngress:
+		return co.Status.IngressEndpoint
+	default:
+		return ""
+	}
+}
+
 func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 	ctx context.Context,
 	attachment *v1alpha1.ExternalIPAttachment,
-	publicIP *v1alpha1.ExternalIP,
+	externalIP *v1alpha1.ExternalIP,
 	ci *v1alpha1.ComputeInstance,
 ) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
@@ -316,14 +410,24 @@ func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 		return ctrl.Result{}, nil
 	}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
+	var provisionErr error
+
+	result, err := provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
 		&provisioning.State{Jobs: &attachment.Status.ProvisioningJobs, DesiredConfigVersion: attachment.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed: func(_ string) { attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseFailed },
+			OnFailed: func(message string) {
+				attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseFailed
+				setReadyConditionFailed(&attachment.Status.Conditions, message)
+			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
 				attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseReady
-				r.onProvisionSuccess(ctx, publicIP, ci)
+				// onProvisionSuccess error causes a requeue via provisionErr, but the
+				// provisioning lifecycle won't re-invoke OnSuccess (job already succeeded).
+				// The retry.RetryOnConflict inside onProvisionSuccess makes this window
+				// very narrow — only persistent non-conflict API errors can reach here.
+				provisionErr = r.onProvisionSuccess(ctx, externalIP, ci)
+				setReadyConditionTrue(&attachment.Status.Conditions)
 			},
 		},
 		func() bool {
@@ -336,40 +440,59 @@ func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status)
 		},
 	)
+	if err != nil {
+		return result, err
+	}
+	if provisionErr != nil {
+		return ctrl.Result{}, provisionErr
+	}
+	return result, nil
 }
 
 // onProvisionSuccess updates the parent ExternalIP and target ComputeInstance after
 // a successful attach operation.
-func (r *ExternalIPAttachmentReconciler) onProvisionSuccess(ctx context.Context, publicIP *v1alpha1.ExternalIP, ci *v1alpha1.ComputeInstance) {
-	log := ctrllog.FromContext(ctx)
-
+func (r *ExternalIPAttachmentReconciler) onProvisionSuccess(ctx context.Context, externalIP *v1alpha1.ExternalIP, ci *v1alpha1.ComputeInstance) error {
 	// Set ExternalIP.status.attached = true
-	if !publicIP.Status.Attached {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		fresh := &v1alpha1.ExternalIP{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(publicIP), fresh); err != nil {
-			log.Error(err, "failed to fetch ExternalIP for attached update")
-			return
+		if err := r.Get(ctx, client.ObjectKeyFromObject(externalIP), fresh); err != nil {
+			return err
+		}
+		if fresh.Status.Attached {
+			return nil
 		}
 		fresh.Status.Attached = true
-		if err := r.Status().Update(ctx, fresh); err != nil {
-			log.Error(err, "failed to set ExternalIP status.attached=true")
-		}
+		return r.Status().Update(ctx, fresh)
+	}); err != nil {
+		return fmt.Errorf("failed to set ExternalIP status.attached=true: %w", err)
 	}
 
-	// Set ComputeInstance.status.externalIPAddress from the parent ExternalIP's address
-	if ci != nil && publicIP.Status.Address != "" {
-		fresh := &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ci), fresh); err != nil {
-			log.Error(err, "failed to fetch ComputeInstance for externalIPAddress update")
-			return
+	// Set ComputeInstance.status.externalIPAddress from the parent ExternalIP's address.
+	// Re-fetch ExternalIP to get the latest address — the object captured by handleUpdate
+	// may be stale if the ExternalIP controller populated the address after our initial read.
+	if ci != nil {
+		freshEIP := &v1alpha1.ExternalIP{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(externalIP), freshEIP); err != nil {
+			return fmt.Errorf("failed to fetch ExternalIP for address lookup: %w", err)
 		}
-		if fresh.GetExternalIPAddress() != publicIP.Status.Address {
-			fresh.SetExternalIPAddress(publicIP.Status.Address)
-			if err := r.Status().Update(ctx, fresh); err != nil {
-				log.Error(err, "failed to set ComputeInstance externalIPAddress")
+		if freshEIP.Status.Address != "" {
+			if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				fresh := &v1alpha1.ComputeInstance{}
+				if err := r.Get(ctx, client.ObjectKeyFromObject(ci), fresh); err != nil {
+					return err
+				}
+				if fresh.GetExternalIPAddress() == freshEIP.Status.Address {
+					return nil
+				}
+				fresh.SetExternalIPAddress(freshEIP.Status.Address)
+				return r.Status().Update(ctx, fresh)
+			}); err != nil {
+				return fmt.Errorf("failed to set ComputeInstance externalIPAddress: %w", err)
 			}
 		}
 	}
+
+	return nil
 }
 
 func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) (ctrl.Result, error) {
@@ -388,7 +511,9 @@ func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attac
 	}
 
 	// Deprovisioning complete: update parent resources and remove finalizers
-	r.onDeprovisionSuccess(ctx, attachment)
+	if err := r.onDeprovisionSuccess(ctx, attachment); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	log.Info("removing finalizer after successful deprovisioning")
 	controllerutil.RemoveFinalizer(attachment, osacExternalIPAttachmentFinalizer)
@@ -402,55 +527,75 @@ func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attac
 // onDeprovisionSuccess clears the attached state on the parent ExternalIP, clears
 // externalIPAddress on the ComputeInstance, and removes the CI detach finalizer when
 // no other ExternalIPAttachments reference the same CI.
-func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) {
-	log := ctrllog.FromContext(ctx)
-
+func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) error {
 	// Clear ExternalIP.status.attached (look up by UUID label)
-	publicIPList := &v1alpha1.ExternalIPList{}
-	if err := r.List(ctx, publicIPList,
-		client.InNamespace(attachment.Namespace),
-		client.MatchingLabels{osacExternalIPIDLabel: attachment.Spec.ExternalIP},
-	); err != nil {
-		log.Error(err, "failed to list ExternalIPs for attached=false update")
-	} else if len(publicIPList.Items) == 0 {
-		log.Info("parent ExternalIP not found during deprovision cleanup", "publicIPUUID", attachment.Spec.ExternalIP)
-	} else if publicIP := &publicIPList.Items[0]; publicIP.Status.Attached {
-		publicIP.Status.Attached = false
-		if err := r.Status().Update(ctx, publicIP); err != nil {
-			log.Error(err, "failed to clear ExternalIP status.attached")
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		externalIPList := &v1alpha1.ExternalIPList{}
+		if err := r.List(ctx, externalIPList,
+			client.InNamespace(attachment.Namespace),
+			client.MatchingLabels{osacExternalIPIDLabel: attachment.Spec.ExternalIP},
+		); err != nil {
+			return err
 		}
+		if len(externalIPList.Items) == 0 {
+			return nil
+		}
+		externalIP := &externalIPList.Items[0]
+		if !externalIP.Status.Attached {
+			return nil
+		}
+		externalIP.Status.Attached = false
+		return r.Status().Update(ctx, externalIP)
+	}); err != nil {
+		return fmt.Errorf("failed to clear ExternalIP status.attached: %w", err)
 	}
 
 	// Clear ComputeInstance.status.externalIPAddress and remove CI detach finalizer
 	if attachment.Spec.ComputeInstance != nil {
 		ciUUID := *attachment.Spec.ComputeInstance
-		ciList := &v1alpha1.ComputeInstanceList{}
-		if err := r.List(ctx, ciList,
-			client.InNamespace(r.ComputeInstanceNamespace),
-			client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
-		); err != nil {
-			log.Error(err, "failed to list ComputeInstances for cleanup")
-		} else if len(ciList.Items) > 0 {
-			ci := &ciList.Items[0]
-			if ci.GetExternalIPAddress() != "" {
-				ci.SetExternalIPAddress("")
-				if err := r.Status().Update(ctx, ci); err != nil {
-					log.Error(err, "failed to clear ComputeInstance externalIPAddress")
-				}
+
+		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			ciList := &v1alpha1.ComputeInstanceList{}
+			if err := r.List(ctx, ciList,
+				client.InNamespace(r.ComputeInstanceNamespace),
+				client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+			); err != nil {
+				return err
 			}
+			if len(ciList.Items) == 0 {
+				return nil
+			}
+			ci := &ciList.Items[0]
+			if ci.GetExternalIPAddress() == "" {
+				return nil
+			}
+			ci.SetExternalIPAddress("")
+			return r.Status().Update(ctx, ci)
+		}); err != nil {
+			return fmt.Errorf("failed to clear ComputeInstance externalIPAddress: %w", err)
 		}
 
-		if err := r.maybeRemoveCIDetachFinalizer(ctx, ciUUID, attachment.Name); err != nil {
-			log.Error(err, "failed to remove CI detach finalizer")
+		if err := r.removeCIDetachFinalizerIfUnreferenced(ctx, ciUUID, attachment.Name); err != nil {
+			return fmt.Errorf("failed to remove CI detach finalizer: %w", err)
 		}
 	}
+
+	// Remove ClusterOrder detach finalizer
+	if attachment.Spec.Cluster != nil {
+		coUUID := *attachment.Spec.Cluster
+		if err := r.maybeRemoveCODetachFinalizer(ctx, coUUID, attachment.Name); err != nil {
+			return fmt.Errorf("failed to remove ClusterOrder detach finalizer: %w", err)
+		}
+	}
+
+	return nil
 }
 
-// maybeRemoveCIDetachFinalizer removes the externalip-detach finalizer from the
+// removeCIDetachFinalizerIfUnreferenced removes the externalip-detach finalizer from the
 // ComputeInstance if no other ExternalIPAttachments still reference it.
 // ciUUID is the fulfillment-service UUID used in spec.computeInstance and CI labels.
 // Uses retry.RetryOnConflict to handle concurrent modifications to the ComputeInstance.
-func (r *ExternalIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.Context, ciUUID string, excludeAttachment string) error {
+func (r *ExternalIPAttachmentReconciler) removeCIDetachFinalizerIfUnreferenced(ctx context.Context, ciUUID string, excludeAttachment string) error {
 	log := ctrllog.FromContext(ctx)
 
 	// Check if other ExternalIPAttachments still reference this CI (no retry needed)
@@ -491,6 +636,88 @@ func (r *ExternalIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx contex
 		}
 		return nil
 	})
+}
+
+// maybeRemoveCODetachFinalizer removes the externalip-detach finalizer from the
+// ClusterOrder if no other ExternalIPAttachments still reference it.
+func (r *ExternalIPAttachmentReconciler) maybeRemoveCODetachFinalizer(ctx context.Context, coUUID string, excludeAttachment string) error {
+	log := ctrllog.FromContext(ctx)
+
+	// Check if other ExternalIPAttachments still reference this CO (no retry needed)
+	attachments := &v1alpha1.ExternalIPAttachmentList{}
+	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		return err
+	}
+	for i := range attachments.Items {
+		if attachments.Items[i].Name == excludeAttachment {
+			continue
+		}
+		if attachments.Items[i].Spec.Cluster != nil && *attachments.Items[i].Spec.Cluster == coUUID {
+			log.Info("other ExternalIPAttachments still reference ClusterOrder, keeping finalizer",
+				"clusterOrderUUID", coUUID,
+				"attachment", attachments.Items[i].Name)
+			return nil
+		}
+	}
+
+	log.Info("no more references, removing ClusterOrder detach finalizer", "clusterOrderUUID", coUUID)
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		coList := &v1alpha1.ClusterOrderList{}
+		if err := r.List(ctx, coList,
+			client.InNamespace(r.ClusterOrderNamespace),
+			client.MatchingLabels{osacClusterOrderIDLabel: coUUID},
+		); err != nil {
+			return err
+		}
+		if len(coList.Items) == 0 {
+			return nil
+		}
+		co := &coList.Items[0]
+
+		// RemoveFinalizer returns false if the finalizer is absent, skipping the unnecessary Update.
+		if controllerutil.RemoveFinalizer(co, osacExternalIPDetachFinalizer) {
+			return r.Update(ctx, co)
+		}
+		return nil
+	})
+}
+
+// mapClusterOrderToExternalIPAttachments maps a ClusterOrder change to all
+// ExternalIPAttachments that reference it, so the controller can react to
+// ClusterOrder deletion or endpoint changes.
+func (r *ExternalIPAttachmentReconciler) mapClusterOrderToExternalIPAttachments(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	coUUID, exists := obj.GetLabels()[osacClusterOrderIDLabel]
+	if !exists {
+		return nil
+	}
+
+	attachments := &v1alpha1.ExternalIPAttachmentList{}
+	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		log.Error(err, "failed to list ExternalIPAttachments for ClusterOrder watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range attachments.Items {
+		if attachments.Items[i].Spec.Cluster != nil && *attachments.Items[i].Spec.Cluster == coUUID {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(&attachments.Items[i]),
+			})
+		}
+	}
+
+	if len(requests) > 0 {
+		log.Info("mapped ClusterOrder change to ExternalIPAttachments",
+			"clusterOrder", obj.GetName(),
+			"clusterOrderUUID", coUUID,
+			"attachmentCount", len(requests),
+		)
+	}
+
+	return requests
 }
 
 func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) (ctrl.Result, error) {
@@ -565,6 +792,13 @@ func (r *ExternalIPAttachmentReconciler) SetupWithManager(mgr mcmanager.Manager)
 			&v1alpha1.ComputeInstance{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapComputeInstanceToExternalIPAttachments),
 			mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
+		Watches(
+			&v1alpha1.ClusterOrder{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapClusterOrderToExternalIPAttachments),
+			mcbuilder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).

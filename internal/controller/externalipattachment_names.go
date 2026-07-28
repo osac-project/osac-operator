@@ -21,4 +21,5 @@ var (
 	osacExternalIPNameAnnotation              string = fmt.Sprintf("%s/externalip-name", osacPrefix)
 	osacExternalIPAttachmentIDLabel           string = fmt.Sprintf("%s/externalipattachment-uuid", osacPrefix)
 	osacExternalIPAttachmentFeedbackFinalizer string = fmt.Sprintf("%s/externalipattachment-feedback", osacPrefix)
+	osacExternalIPTargetIPAnnotation          string = fmt.Sprintf("%s/target-ip", osacPrefix)
 )

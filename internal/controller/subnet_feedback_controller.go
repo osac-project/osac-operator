@@ -105,9 +105,9 @@ func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info("Subnet record not found during deletion, removing feedback finalizer", "subnetID", subnetID)
 			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}

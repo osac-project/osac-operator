@@ -343,13 +343,14 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 		r.provisionState(instance),
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed: func(_ string) {
+			OnFailed: func(message string) {
 				// Only set Failed phase if no VM exists yet (first-time provisioning failure).
 				// If the VM already exists (re-provisioning failure), the phase is driven by KubeVirt
 				// PrintableStatus and the failed job is visible in status.provisioningJobs.
 				if instance.Status.VirtualMachineReference == nil {
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
 				}
+				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
 			},
 		},
 		func() bool {

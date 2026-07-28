@@ -228,8 +228,14 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		&provisioning.State{Jobs: &sg.Status.ProvisioningJobs, DesiredConfigVersion: sg.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady },
+			OnFailed: func(message string) {
+				sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed
+				setReadyConditionFailed(&sg.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady
+				setReadyConditionTrue(&sg.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{}, func(obj client.Object) []v1alpha1.JobStatus {

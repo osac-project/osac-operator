@@ -105,9 +105,9 @@ func (r *VirtualNetworkFeedbackReconciler) Reconcile(ctx context.Context, reques
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info("VirtualNetwork record not found during deletion, removing feedback finalizer", "virtualNetworkID", virtualNetworkID)
 			if controllerutil.RemoveFinalizer(object, osacVirtualNetworkFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}

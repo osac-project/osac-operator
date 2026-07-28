@@ -35,27 +35,27 @@ import (
 // to the fulfillment service via gRPC. This is the reverse channel: the provisioning controller drives the CR forward,
 // while this controller keeps the fulfillment service in sync with the CR's current state.
 type ExternalIPPoolFeedbackReconciler struct {
-	hubClient           clnt.Client
-	publicIPPoolClient  privatev1.ExternalIPPoolsClient
-	networkingNamespace string
+	hubClient            clnt.Client
+	externalIPPoolClient privatev1.ExternalIPPoolsClient
+	networkingNamespace  string
 }
 
 // externalIPPoolFeedbackReconcilerTask is a per-reconciliation scratch pad. It holds a clone of the proto object so we
 // can mutate it freely and then diff against the original to decide whether a gRPC Update is actually needed, avoiding
 // unnecessary API calls when nothing changed.
 type externalIPPoolFeedbackReconcilerTask struct {
-	r            *ExternalIPPoolFeedbackReconciler
-	object       *v1alpha1.ExternalIPPool
-	publicIPPool *privatev1.ExternalIPPool
+	r              *ExternalIPPoolFeedbackReconciler
+	object         *v1alpha1.ExternalIPPool
+	externalIPPool *privatev1.ExternalIPPool
 }
 
 // NewExternalIPPoolFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about
 // external IP pools.
 func NewExternalIPPoolFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *ExternalIPPoolFeedbackReconciler {
 	return &ExternalIPPoolFeedbackReconciler{
-		hubClient:           hubClient,
-		publicIPPoolClient:  privatev1.NewExternalIPPoolsClient(grpcConn),
-		networkingNamespace: networkingNamespace,
+		hubClient:            hubClient,
+		externalIPPoolClient: privatev1.NewExternalIPPoolsClient(grpcConn),
+		networkingNamespace:  networkingNamespace,
 	}
 }
 
@@ -94,7 +94,7 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 
 	// Step 2: Get the identifier of the external IP pool from the labels. CRs created by the fulfillment service carry
 	// this label; manually-created CRs don't, so we skip them.
-	publicIPPoolID, ok := object.Labels[osacExternalIPPoolIDLabel]
+	externalIPPoolID, ok := object.Labels[osacExternalIPPoolIDLabel]
 	if !ok {
 		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
 		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {
@@ -112,20 +112,20 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 	}
 
 	// Step 3: Fetch the external IP pool from the fulfillment service so we can compare before/after.
-	publicIPPool, err := r.fetchExternalIPPool(ctx, publicIPPoolID)
+	externalIPPool, err := r.fetchExternalIPPool(ctx, externalIPPoolID)
 	if err != nil {
 		// If the fulfillment service record is already deleted during CR deletion, remove the feedback
 		// finalizer and exit gracefully. This prevents the controller from blocking CR garbage collection
 		// when the fulfillment service record has been deleted before K8s CR cleanup completes.
 		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
 			log.Info(
-				"Public IP pool record not found during deletion, removing feedback finalizer",
-				"public_ip_pool_id", publicIPPoolID,
+				"ExternalIPPool record not found during deletion, removing feedback finalizer",
+				"externalIPPoolID", externalIPPoolID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+				return result, r.hubClient.Update(ctx, object)
 			}
-			return result, err
+			return result, nil
 		}
 		return result, err
 	}
@@ -133,9 +133,9 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
 	// before and after values and save only the objects that have changed.
 	t := &externalIPPoolFeedbackReconcilerTask{
-		r:            r,
-		object:       object,
-		publicIPPool: clone(publicIPPool),
+		r:              r,
+		object:         object,
+		externalIPPool: clone(externalIPPool),
 	}
 
 	// Step 4: Sync CR state to the fulfillment service record.
@@ -150,7 +150,7 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 	}
 
 	// Step 5: Persist synced state to the fulfillment service.
-	err = r.saveExternalIPPool(ctx, publicIPPool, t.publicIPPool)
+	err = r.saveExternalIPPool(ctx, externalIPPool, t.externalIPPool)
 	if err != nil {
 		return result, err
 	}
@@ -163,7 +163,7 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 			// fulfillment service to immediately re-reconcile (instead of waiting for periodic sync).
 			log.Info(
 				"Feedback finalizer is last remaining, removing finalizer and signaling",
-				"publicIPPoolID", publicIPPoolID,
+				"externalIPPoolID", externalIPPoolID,
 			)
 			if controllerutil.RemoveFinalizer(object, osacExternalIPPoolFeedbackFinalizer) {
 				err = r.hubClient.Update(ctx, object)
@@ -171,14 +171,14 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 					return result, err
 				}
 			}
-			_, signalErr := r.publicIPPoolClient.Signal(ctx, privatev1.ExternalIPPoolsSignalRequest_builder{
-				Id: publicIPPoolID,
+			_, signalErr := r.externalIPPoolClient.Signal(ctx, privatev1.ExternalIPPoolsSignalRequest_builder{
+				Id: externalIPPoolID,
 			}.Build())
 			if signalErr != nil {
 				log.Error(
 					signalErr,
 					"Failed to signal fulfillment service, periodic sync will handle cleanup",
-					"publicIPPoolID", publicIPPoolID,
+					"externalIPPoolID", externalIPPoolID,
 				)
 			}
 		} else {
@@ -195,19 +195,22 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 
 // fetchExternalIPPool retrieves the proto record from the fulfillment service. It also initializes empty Spec/Status
 // if the proto object doesn't have them, so downstream code can safely call SetState/SetTotal without nil checks.
-func (r *ExternalIPPoolFeedbackReconciler) fetchExternalIPPool(ctx context.Context, id string) (publicIPPool *privatev1.ExternalIPPool, err error) {
-	response, err := r.publicIPPoolClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
+func (r *ExternalIPPoolFeedbackReconciler) fetchExternalIPPool(ctx context.Context, id string) (externalIPPool *privatev1.ExternalIPPool, err error) {
+	response, err := r.externalIPPoolClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
 		Id: id,
 	}.Build())
 	if err != nil {
 		return
 	}
-	publicIPPool = response.GetObject()
-	if !publicIPPool.HasSpec() {
-		publicIPPool.SetSpec(&privatev1.ExternalIPPoolSpec{})
+	externalIPPool = response.GetObject()
+	if externalIPPool == nil {
+		return nil, fmt.Errorf("external IP pool not found: response contained nil object")
 	}
-	if !publicIPPool.HasStatus() {
-		publicIPPool.SetStatus(&privatev1.ExternalIPPoolStatus{})
+	if !externalIPPool.HasSpec() {
+		externalIPPool.SetSpec(&privatev1.ExternalIPPoolSpec{})
+	}
+	if !externalIPPool.HasStatus() {
+		externalIPPool.SetStatus(&privatev1.ExternalIPPoolStatus{})
 	}
 	return
 }
@@ -223,7 +226,7 @@ func (r *ExternalIPPoolFeedbackReconciler) saveExternalIPPool(ctx context.Contex
 			"before", before,
 			"after", after,
 		)
-		_, err := r.publicIPPoolClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+		_, err := r.externalIPPoolClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 			Object: after,
 		}.Build())
 		if err != nil {
@@ -249,10 +252,10 @@ func (t *externalIPPoolFeedbackReconcilerTask) handleUpdate(ctx context.Context)
 // Capacity is not synced during deletion because the pool is going away and the counts are no longer meaningful.
 func (t *externalIPPoolFeedbackReconcilerTask) handleDelete() {
 	if t.object.Status.Phase == v1alpha1.ExternalIPPoolPhaseFailed {
-		t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETE_FAILED)
+		t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETE_FAILED)
 		return
 	}
-	t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
 }
 
 // syncPhase maps the CR's phase to the corresponding proto state. The default case logs and ignores unknown phases
@@ -279,17 +282,17 @@ func (t *externalIPPoolFeedbackReconcilerTask) syncPhase(ctx context.Context) {
 // syncPhaseProgressing maps to PENDING. The fulfillment service uses PENDING (not PROGRESSING) for all networking
 // resources, consistent with VirtualNetwork, Subnet, SecurityGroup, NetworkClass, and HostClass.
 func (t *externalIPPoolFeedbackReconcilerTask) syncPhaseProgressing() {
-	t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
 }
 
 func (t *externalIPPoolFeedbackReconcilerTask) syncPhaseFailed() {
-	t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_FAILED)
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_FAILED)
 }
 
 func (t *externalIPPoolFeedbackReconcilerTask) syncPhaseReady() {
-	t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
 }
 
 func (t *externalIPPoolFeedbackReconcilerTask) syncPhaseDeleting() {
-	t.publicIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
 }

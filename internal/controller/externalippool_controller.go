@@ -234,8 +234,14 @@ func (r *ExternalIPPoolReconciler) handleProvisioning(ctx context.Context, pool 
 		&provisioning.State{Jobs: &pool.Status.ProvisioningJobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady },
+			OnFailed: func(message string) {
+				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseFailed
+				setReadyConditionFailed(&pool.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady
+				setReadyConditionTrue(&pool.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(

@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -338,6 +339,103 @@ var _ = Describe("NATGatewayReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(natgw.Status.Phase).To(Equal(osacv1alpha1.NATGatewayPhaseFailed))
+		})
+	})
+
+	Context("provisioning condition updates", func() {
+		BeforeEach(func() {
+			natgw.Status.Phase = osacv1alpha1.NATGatewayPhaseProgressing
+		})
+
+		It("should set Ready=False condition with error message when job fails", func() {
+			natgw.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "failed-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateFailed,
+					Message: "Ansible traceback: role xyz failed",
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, natgw)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(natgw.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("Ansible traceback"))
+		})
+
+		It("should set Ready=True condition when job succeeds", func() {
+			natgw.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "success-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, natgw)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(natgw.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+		})
+
+		It("should clear stale Ready=False condition on provisioning recovery", func() {
+			natgw.Status.Conditions = []metav1.Condition{
+				{
+					Type:               osacv1alpha1.ConditionReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             osacv1alpha1.ReasonProvisioningFailed,
+					Message:            "previous failure",
+					LastTransitionTime: metav1.Now(),
+				},
+			}
+			natgw.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "recovery-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, natgw)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(natgw.Status.Phase).To(Equal(osacv1alpha1.NATGatewayPhaseReady))
+			cond := apimeta.FindStatusCondition(natgw.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+			Expect(cond.Message).To(BeEmpty())
 		})
 	})
 
