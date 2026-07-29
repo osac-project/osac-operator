@@ -1749,10 +1749,9 @@ var _ = Describe("Storage Controller", func() {
 	})
 
 	Context("Backend API routing (OSAC-1957)", func() {
-		It("should fall through to SC resolution when BackendsClient is nil", func() {
+		It("should set StorageBackendReady=False with NoProvider and no StorageClasses when BackendsClient is nil", func() {
 			name := "storage-test-nil-client"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
 
 			// BackendProvider set but BackendsClient nil: should behave as no backend registered
 			r := NewStorageReconciler(
@@ -1773,15 +1772,13 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
 			Expect(backendCond.Message).To(ContainSubstring("No fulfillment service connection configured"))
-			// Falls through to Stage 2: default SC resolved, no AAP job triggered
-			Expect(tenant.Status.StorageClasses).NotTo(BeEmpty())
+			Expect(tenant.Status.StorageClasses).To(BeNil())
 			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
 		})
 
-		It("should fall through to SC resolution when BackendsClient reports no backends (total=0)", func() {
+		It("should set StorageBackendReady=False with NoProvider and no StorageClasses when BackendsClient reports no backends (total=0)", func() {
 			name := "storage-test-zero-backends"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createLabeledStorageClass(ctx, "default-sc-"+name, defaultStorageClassSentinel, "default")
 
 			r := NewStorageReconciler(
 				testMcManager, testNamespace, mcmanager.LocalCluster,
@@ -1802,7 +1799,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
 			Expect(backendCond.Message).To(ContainSubstring("No storage backend registered"))
-			Expect(tenant.Status.StorageClasses).NotTo(BeEmpty())
+			Expect(tenant.Status.StorageClasses).To(BeNil())
 			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
 		})
 
