@@ -36,3 +36,4 @@ MEMORY.md
 # Helm dependency build artifacts
 charts/*/charts/
 charts/*/Chart.lock
+test/integration/logs/
