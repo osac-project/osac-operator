@@ -29,17 +29,28 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
 
-      - name: Create Kind cluster
-        uses: helm/kind-action@v1
+      - name: Create Kind cluster with OSAC infrastructure
+        uses: osac-project/osac-test-infra/.github/actions/kind-dev@main
         with:
-          cluster_name: kind
+          mode: skip-osac
+
+      - name: Install ginkgo
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
       - name: Run integration tests
         timeout-minutes: 15
         env:
           CONTAINER_TOOL: docker
-        run: make test-integration-kind
+        run: make integration-tests
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: test/integration/logs
+          retention-days: 7
