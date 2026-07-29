@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"time"
@@ -39,6 +40,13 @@ import (
 type State struct {
 	Jobs                 *[]v1alpha1.JobStatus
 	DesiredConfigVersion string
+
+	// Target identifies which manager this State tracks, for resources dispatched
+	// to more than one manager (e.g. Subnet: fabric + k8s). Left empty for
+	// single-target resources — all lookups against Jobs treat an empty Target as
+	// JobTargetFabric (see FindLatestJobByTypeAndTarget), so leaving this unset
+	// preserves today's behavior exactly.
+	Target v1alpha1.JobTarget
 }
 
 // JobsExtractor extracts a jobs array from a resource. Used by CheckAPIServerForNonTerminalProvisionJob
@@ -48,7 +56,7 @@ type JobsExtractor func(client.Object) []v1alpha1.JobStatus
 
 // EvaluateAction determines the next provisioning action based on job history and config versions.
 func EvaluateAction(provState *State, checkAPIServer func() bool) (Action, *v1alpha1.JobStatus) {
-	latestJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+	latestJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, provState.Target)
 
 	if !HasJobID(latestJob) {
 		// No provision job exists — trigger one.
@@ -77,14 +85,24 @@ func EvaluateAction(provState *State, checkAPIServer func() bool) (Action, *v1al
 // and returns true if a non-terminal provision job exists. The extract parameter (a JobsExtractor)
 // determines which jobs array to check — each controller passes a typed extractor for its CRD.
 func CheckAPIServerForNonTerminalProvisionJob(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor) bool {
+	return CheckAPIServerForNonTerminalProvisionJobForTarget(ctx, apiReader, key, fresh, extract, "")
+}
+
+// CheckAPIServerForNonTerminalProvisionJobForTarget is the target-scoped counterpart of
+// CheckAPIServerForNonTerminalProvisionJob, for resources dispatched to more than one
+// manager. Scoping by target ensures a non-terminal job on one target (e.g. the k8s
+// overlay job) doesn't spuriously block triggering on another target (e.g. the fabric
+// segment job) for the same resource.
+func CheckAPIServerForNonTerminalProvisionJobForTarget(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor, target v1alpha1.JobTarget) bool {
 	log := ctrllog.FromContext(ctx)
 	if err := apiReader.Get(ctx, key, fresh); err != nil {
+		log.Error(err, "failed to read resource from API server for duplicate-trigger check; proceeding without it", "target", target)
 		return false
 	}
 	freshJobs := extract(fresh)
-	freshJob := FindLatestJobByType(freshJobs, v1alpha1.JobTypeProvision)
+	freshJob := FindLatestJobByTypeAndTarget(freshJobs, v1alpha1.JobTypeProvision, target)
 	if HasJobID(freshJob) && !freshJob.State.IsTerminal() {
-		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
+		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State, "target", target)
 		return true
 	}
 	return false
@@ -107,13 +125,14 @@ func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource cli
 	*provState.Jobs = AppendJob(*provState.Jobs, v1alpha1.JobStatus{
 		JobID:         result.JobID,
 		Type:          v1alpha1.JobTypeProvision,
+		Target:        provState.Target,
 		State:         result.InitialState,
 		Message:       result.Message,
 		Timestamp:     metav1.NewTime(time.Now().UTC()),
 		ConfigVersion: provState.DesiredConfigVersion,
 	}, maxHistory)
 
-	latestJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+	latestJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, provState.Target)
 	log.Info("provision job triggered", "jobID", latestJob.JobID, "configVersion", latestJob.ConfigVersion)
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
@@ -187,7 +206,7 @@ func RunProvisioningLifecycle(
 
 	log := ctrllog.FromContext(ctx)
 	trigger := func() (ctrl.Result, error) {
-		prevJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		prevJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, provState.Target)
 		prevJobID := ""
 		if prevJob != nil {
 			prevJobID = prevJob.JobID
@@ -196,7 +215,7 @@ func RunProvisioningLifecycle(
 		if err != nil {
 			return res, err
 		}
-		newJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		newJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, provState.Target)
 		if statusFlush != nil && newJob != nil && newJob.JobID != prevJobID {
 			if flushErr := statusFlush(); flushErr != nil {
 				log.Error(flushErr, "failed to flush status after job trigger; end-of-reconcile update will retry")
@@ -219,6 +238,97 @@ func RunProvisioningLifecycle(
 	}
 }
 
+// TargetSpec configures a single manager target within a multi-target provisioning
+// lifecycle. Callers construct one TargetSpec per manager a resource dispatches to
+// (see pkg/dispatcher.DispatchPlan) and pass them to RunMultiTargetProvisioningLifecycle.
+type TargetSpec struct {
+	// Target identifies which manager this spec provisions against.
+	Target v1alpha1.JobTarget
+
+	// Provider triggers and polls jobs for this target. Callers may pass the same
+	// ProvisioningProvider for every target (e.g. when the manager is selected via
+	// extra_vars/context) or a distinct provider per target.
+	Provider ProvisioningProvider
+
+	// Callbacks are invoked on this target's own job state transitions. May be nil.
+	// Note: OnSuccess firing does not mean the resource as a whole is Ready — use
+	// AllTargetsApplied after RunMultiTargetProvisioningLifecycle returns to decide
+	// overall readiness, since that requires knowing about every target, not just one.
+	Callbacks *PollCallbacks
+
+	// CheckAPIServer performs the same duplicate-trigger safety check as the
+	// single-target RunProvisioningLifecycle, scoped to this target. Typically built
+	// with CheckAPIServerForNonTerminalProvisionJobForTarget. Optional — a nil value is
+	// treated as "always false" (no extra safety check) rather than panicking.
+	CheckAPIServer func() bool
+}
+
+// RunMultiTargetProvisioningLifecycle runs RunProvisioningLifecycle once per target in
+// specs, against the same shared jobs slice — every target's jobs are tracked in the
+// same status.ProvisioningJobs array, distinguished by JobStatus.Target (AppendJob
+// budgets maxHistory per target, so targets don't compete for history). It combines the
+// per-target ctrl.Result values (soonest non-zero RequeueAfter wins) and joins any errors.
+// With a single entry in specs, this is equivalent to calling RunProvisioningLifecycle
+// directly — this is how resources degrade to single-target behavior when a manager is
+// absent (e.g. a Subnet whose NetworkClass has no k8sManager).
+func RunMultiTargetProvisioningLifecycle(
+	ctx context.Context,
+	resource client.Object,
+	jobs *[]v1alpha1.JobStatus,
+	desiredConfigVersion string,
+	specs []TargetSpec,
+	maxHistory int,
+	pollInterval time.Duration,
+	statusFlush func() error,
+) (ctrl.Result, error) {
+	var combined ctrl.Result
+	var errs []error
+
+	for _, spec := range specs {
+		checkAPIServer := spec.CheckAPIServer
+		if checkAPIServer == nil {
+			checkAPIServer = func() bool { return false }
+		}
+		state := &State{
+			Jobs:                 jobs,
+			DesiredConfigVersion: desiredConfigVersion,
+			Target:               spec.Target,
+		}
+		// maxHistory is applied per-target by AppendJob (see its doc comment), so
+		// passing it through unscaled here is safe: one target's retries cannot evict
+		// another target's history.
+		res, err := RunProvisioningLifecycle(ctx, spec.Provider, resource, state,
+			maxHistory, pollInterval, spec.Callbacks, checkAPIServer, statusFlush)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("target %q: %w", spec.Target, err))
+			continue
+		}
+		combined = combineResults(combined, res)
+	}
+
+	if len(errs) > 0 {
+		return combined, errors.Join(errs...)
+	}
+	return combined, nil
+}
+
+// combineResults merges two ctrl.Result values from independent lifecycle runs: the
+// soonest non-zero RequeueAfter wins. ctrl.Result.Requeue is deprecated in
+// controller-runtime in favor of RequeueAfter/returned errors, and nothing in this
+// codebase sets it, so it is intentionally not propagated here.
+func combineResults(a, b ctrl.Result) ctrl.Result {
+	switch {
+	case a.RequeueAfter == 0:
+		return ctrl.Result{RequeueAfter: b.RequeueAfter}
+	case b.RequeueAfter == 0:
+		return ctrl.Result{RequeueAfter: a.RequeueAfter}
+	case a.RequeueAfter < b.RequeueAfter:
+		return ctrl.Result{RequeueAfter: a.RequeueAfter}
+	default:
+		return ctrl.Result{RequeueAfter: b.RequeueAfter}
+	}
+}
+
 // IsConfigApplied returns true if the current spec has been successfully applied.
 // Only the latest provision job is considered to avoid false positives when a spec
 // reverts to a previously applied value (A-B-A problem).
@@ -234,6 +344,38 @@ func IsConfigApplied(jobs *[]v1alpha1.JobStatus, desiredConfigVersion string) bo
 		return true
 	}
 	return latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == ""
+}
+
+// IsConfigAppliedForTarget is the target-scoped counterpart of IsConfigApplied, for
+// resources dispatched to more than one manager. Used together with AllTargetsApplied
+// to determine overall readiness once every target's provisioning has completed.
+func IsConfigAppliedForTarget(jobs *[]v1alpha1.JobStatus, desiredConfigVersion string, target v1alpha1.JobTarget) bool {
+	latest := FindLatestJobByTypeAndTarget(*jobs, v1alpha1.JobTypeProvision, target)
+	if latest == nil {
+		return false
+	}
+	if latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == desiredConfigVersion {
+		return true
+	}
+	return latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == ""
+}
+
+// AllTargetsApplied reports whether every given target's latest provision job has
+// successfully applied the desired config version. Multi-target controllers (e.g.
+// Subnet) use this after RunMultiTargetProvisioningLifecycle returns to decide whether
+// the resource as a whole is Ready — "both must succeed for Ready".
+// An empty targets slice returns false: it indicates no dispatch plan was resolved,
+// which must not be conflated with every target having successfully applied.
+func AllTargetsApplied(jobs *[]v1alpha1.JobStatus, desiredConfigVersion string, targets []v1alpha1.JobTarget) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for _, target := range targets {
+		if !IsConfigAppliedForTarget(jobs, desiredConfigVersion, target) {
+			return false
+		}
+	}
+	return true
 }
 
 // ComputeDesiredConfigVersion computes a hash of the spec and returns it.
@@ -252,6 +394,16 @@ func ComputeDesiredConfigVersion(spec any) (string, error) {
 
 // TriggerDeprovisionJob triggers a deprovision job via the provider and handles the result.
 // Updates the jobs slice in place. Returns the result for the controller to return.
+//
+// KNOWN LIMITATION: unlike the provisioning path, this function and the rest of the
+// deprovisioning lifecycle (PollDeprovisionJob, updateProvisionJobFromDeprovisionResult,
+// RunDeprovisioningLifecycle) are not target-aware — they use FindLatestJobByType, not
+// FindLatestJobByTypeAndTarget. For a single-target resource this is exact. For a
+// multi-target resource (once deprovisioning is wired up for one, e.g. Subnet),
+// updateProvisionJobFromDeprovisionResult would update whichever target's provision job
+// happens to have the latest timestamp, not necessarily the one the deprovision result
+// actually corresponds to. Deprovisioning multi-target resources correctly requires
+// target-scoped counterparts of these functions, mirroring RunMultiTargetProvisioningLifecycle.
 func TriggerDeprovisionJob(ctx context.Context, provider ProvisioningProvider, resource client.Object,
 	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)

@@ -293,6 +293,61 @@ var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
 	})
 })
 
+var _ = ginkgo.Describe("AppendJob", func() {
+	ginkgo.It("trims history per target, not across the whole shared slice", func() {
+		baseTime := time.Now().UTC()
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric,
+				State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(baseTime)},
+		}
+
+		// k8s target retries repeatedly (e.g. stuck in failure/backoff) and keeps
+		// appending new jobs to the same shared slice, well past maxHistory.
+		const maxHistory = 3
+		for i := 1; i <= 5; i++ {
+			jobs = AppendJob(jobs, v1alpha1.JobStatus{
+				JobID: fmt.Sprintf("k8s-%d", i), Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetK8s,
+				State: v1alpha1.JobStateFailed, Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Minute)),
+			}, maxHistory)
+		}
+
+		// The k8s target's history is capped to maxHistory...
+		k8sCount := 0
+		for i := range jobs {
+			if jobs[i].Target == v1alpha1.JobTargetK8s {
+				k8sCount++
+			}
+		}
+		Expect(k8sCount).To(Equal(maxHistory))
+
+		// ...but the fabric target's sole succeeded job must survive regardless of how
+		// many times k8s retried. If it were evicted, FindLatestJobByTypeAndTarget would
+		// see "no job" for fabric and EvaluateAction would re-trigger a duplicate even
+		// though fabric already succeeded.
+		fabricJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetFabric)
+		Expect(fabricJob).NotTo(BeNil())
+		Expect(fabricJob.JobID).To(Equal("fabric-1"))
+	})
+
+	ginkgo.It("trims across job types for a single-target resource, matching pre-existing behavior", func() {
+		baseTime := time.Now().UTC()
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "job-1", Type: v1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(baseTime)},
+			{JobID: "job-2", Type: v1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(baseTime.Add(time.Second))},
+			{JobID: "job-3", Type: v1alpha1.JobTypeDeprovision, Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second))},
+		}
+		// Single-target resources never set Target, so Provision and Deprovision jobs
+		// still normalize into one group and share one history budget, as before.
+		result := AppendJob(jobs, v1alpha1.JobStatus{
+			JobID: "job-4", Type: v1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
+		}, 3)
+		Expect(result).To(HaveLen(3))
+		Expect(result[0].JobID).To(Equal("job-2"))
+		Expect(result[1].JobID).To(Equal("job-3"))
+		Expect(result[2].JobID).To(Equal("job-4"))
+	})
+})
+
 var _ = ginkgo.Describe("FindLatestJobByType", func() {
 	var baseTime time.Time
 
@@ -440,6 +495,280 @@ var _ = ginkgo.Describe("FindLatestJobByType", func() {
 		Expect(result).NotTo(BeNil())
 		// When timestamps are equal, returns first one found
 		Expect(result.JobID).To(Equal("job1"))
+	})
+})
+
+var _ = ginkgo.Describe("FindLatestJobByTypeAndTarget", func() {
+	var baseTime time.Time
+
+	ginkgo.BeforeEach(func() {
+		baseTime = time.Now().UTC()
+	})
+
+	ginkgo.It("returns nil when no job matches the target", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric, Timestamp: metav1.NewTime(baseTime)},
+		}
+		result := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetK8s)
+		Expect(result).To(BeNil())
+	})
+
+	ginkgo.It("scopes lookups independently per target on a shared jobs array", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric,
+				State: v1alpha1.JobStateFailed, Timestamp: metav1.NewTime(baseTime.Add(-2 * time.Hour))},
+			{JobID: "fabric-2", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric,
+				State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(baseTime.Add(-time.Hour))},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetK8s,
+				State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute))},
+		}
+
+		// Two fabric jobs exist — the newer one must win, not merely the first target match.
+		fabricJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetFabric)
+		Expect(fabricJob).NotTo(BeNil())
+		Expect(fabricJob.JobID).To(Equal("fabric-2"))
+
+		k8sJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetK8s)
+		Expect(k8sJob).NotTo(BeNil())
+		Expect(k8sJob.JobID).To(Equal("k8s-1"))
+	})
+
+	ginkgo.It("treats a legacy empty Target as fabric for upgrade compatibility", func() {
+		// Job created before multi-target dispatch existed — no Target set.
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "legacy-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(baseTime)},
+		}
+
+		fabricJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetFabric)
+		Expect(fabricJob).NotTo(BeNil())
+		Expect(fabricJob.JobID).To(Equal("legacy-1"))
+
+		k8sJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetK8s)
+		Expect(k8sJob).To(BeNil())
+	})
+
+	ginkgo.It("matches single-target callers (empty query target) against legacy jobs", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "legacy-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(baseTime)},
+		}
+		result := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "")
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("legacy-1"))
+	})
+})
+
+var _ = ginkgo.Describe("RunProvisioningLifecycle with State.Target", func() {
+	noAPIServerJob := func() bool { return false }
+
+	ginkgo.It("tracks fabric and k8s jobs independently in the same shared jobs slice", func() {
+		jobs := []v1alpha1.JobStatus{}
+
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return &ProvisionResult{JobID: "fabric-job", InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+		fabricState := &State{Jobs: &jobs, DesiredConfigVersion: "v1", Target: v1alpha1.JobTargetFabric}
+		_, err := RunProvisioningLifecycle(ctx, fabricProvider, &v1alpha1.Subnet{}, fabricState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		k8sProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return &ProvisionResult{JobID: "k8s-job", InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+		k8sState := &State{Jobs: &jobs, DesiredConfigVersion: "v1", Target: v1alpha1.JobTargetK8s}
+		_, err = RunProvisioningLifecycle(ctx, k8sProvider, &v1alpha1.Subnet{}, k8sState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(jobs).To(HaveLen(2))
+		fabricJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetFabric)
+		Expect(fabricJob.JobID).To(Equal("fabric-job"))
+		k8sJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetK8s)
+		Expect(k8sJob.JobID).To(Equal("k8s-job"))
+	})
+
+	ginkgo.It("does not re-trigger a legacy fabric job on upgrade into dual-dispatch", func() {
+		jobs := []v1alpha1.JobStatus{
+			// Pre-existing job from before dual-dispatch: no Target set.
+			{JobID: "legacy-fabric", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		triggered := false
+		provider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				triggered = true
+				return &ProvisionResult{JobID: "should-not-happen"}, nil
+			},
+		}
+		fabricState := &State{Jobs: &jobs, DesiredConfigVersion: "v1", Target: v1alpha1.JobTargetFabric}
+		result, err := RunProvisioningLifecycle(ctx, provider, &v1alpha1.Subnet{}, fabricState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(triggered).To(BeFalse())
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(jobs).To(HaveLen(1))
+	})
+})
+
+var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
+	const pollInterval = 30 * time.Second
+	const maxHistory = 5
+
+	newTriggerProvider := func(jobID string) *mockProvider {
+		return &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return &ProvisionResult{JobID: jobID, InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+	}
+
+	ginkgo.It("triggers every target against the same shared jobs slice", func() {
+		jobs := []v1alpha1.JobStatus{}
+		specs := []TargetSpec{
+			{Target: v1alpha1.JobTargetFabric, Provider: newTriggerProvider("fabric-job"), CheckAPIServer: func() bool { return false }},
+			{Target: v1alpha1.JobTargetK8s, Provider: newTriggerProvider("k8s-job"), CheckAPIServer: func() bool { return false }},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(jobs).To(HaveLen(2))
+		Expect(AllTargetsApplied(&jobs, "v1", []v1alpha1.JobTarget{v1alpha1.JobTargetFabric, v1alpha1.JobTargetK8s})).To(BeFalse())
+	})
+
+	ginkgo.It("does not panic when a TargetSpec omits CheckAPIServer", func() {
+		jobs := []v1alpha1.JobStatus{}
+		specs := []TargetSpec{
+			{Target: v1alpha1.JobTargetFabric, Provider: newTriggerProvider("fabric-job")},
+		}
+
+		Expect(func() {
+			_, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+			Expect(err).NotTo(HaveOccurred())
+		}).NotTo(Panic())
+		Expect(jobs).To(HaveLen(1))
+	})
+
+	ginkgo.It("degrades to single-target behavior with one spec", func() {
+		jobs := []v1alpha1.JobStatus{}
+		specs := []TargetSpec{
+			{Target: v1alpha1.JobTargetFabric, Provider: newTriggerProvider("fabric-only"), CheckAPIServer: func() bool { return false }},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].JobID).To(Equal("fabric-only"))
+	})
+
+	ginkgo.It("joins errors from multiple targets", func() {
+		jobs := []v1alpha1.JobStatus{}
+		failingProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return nil, fmt.Errorf("fabric backend unavailable")
+			},
+		}
+		specs := []TargetSpec{
+			{Target: v1alpha1.JobTargetFabric, Provider: failingProvider, CheckAPIServer: func() bool { return false }},
+			{Target: v1alpha1.JobTargetK8s, Provider: newTriggerProvider("k8s-job"), CheckAPIServer: func() bool { return false }},
+		}
+
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("fabric"))
+		Expect(err.Error()).To(ContainSubstring("fabric backend unavailable"))
+		// The k8s target still ran and appended its job despite the fabric error.
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].JobID).To(Equal("k8s-job"))
+	})
+
+	ginkgo.It("returns the soonest RequeueAfter across targets", func() {
+		jobs := []v1alpha1.JobStatus{
+			// Fabric already succeeded for v1 -> Skip (zero RequeueAfter).
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric,
+				State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		specs := []TargetSpec{
+			{Target: v1alpha1.JobTargetFabric, Provider: &mockProvider{}, CheckAPIServer: func() bool { return false }},
+			{Target: v1alpha1.JobTargetK8s, Provider: newTriggerProvider("k8s-job"), CheckAPIServer: func() bool { return false }},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+		Expect(err).NotTo(HaveOccurred())
+		// Fabric contributes a zero-value Result (Skip); k8s contributes pollInterval — soonest non-zero wins.
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+	})
+
+	ginkgo.It("combines two distinct non-zero RequeueAfter durations, smallest wins", func() {
+		jobs := []v1alpha1.JobStatus{}
+		rateLimitedProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return nil, &RateLimitError{RetryAfter: 5 * time.Second}
+			},
+		}
+		specs := []TargetSpec{
+			// Fabric is rate-limited with a short retry that must beat pollInterval.
+			{Target: v1alpha1.JobTargetFabric, Provider: rateLimitedProvider, CheckAPIServer: func() bool { return false }},
+			// K8s triggers normally and polls at the full pollInterval (30s).
+			{Target: v1alpha1.JobTargetK8s, Provider: newTriggerProvider("k8s-job"), CheckAPIServer: func() bool { return false }},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, &v1alpha1.Subnet{}, &jobs, "v1", specs, maxHistory, pollInterval, nil)
+		Expect(err).NotTo(HaveOccurred())
+		// Both sides are non-zero (5s vs pollInterval=30s) — exercises the min-of-two-non-zero
+		// comparison in combineResults, not just the zero-vs-non-zero branch.
+		Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+	})
+})
+
+var _ = ginkgo.Describe("AllTargetsApplied", func() {
+	ginkgo.It("reports Ready only once every target has succeeded", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric,
+				State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now().UTC())},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetK8s,
+				State: v1alpha1.JobStateRunning, ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		targets := []v1alpha1.JobTarget{v1alpha1.JobTargetFabric, v1alpha1.JobTargetK8s}
+		Expect(AllTargetsApplied(&jobs, "v1", targets)).To(BeFalse(), "k8s target still running")
+
+		// k8s job completes.
+		k8sJob := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, v1alpha1.JobTargetK8s)
+		k8sJob.State = v1alpha1.JobStateSucceeded
+		Expect(AllTargetsApplied(&jobs, "v1", targets)).To(BeTrue())
+	})
+
+	ginkgo.It("returns false for an empty target list instead of vacuously true", func() {
+		jobs := []v1alpha1.JobStatus{}
+		Expect(AllTargetsApplied(&jobs, "v1", nil)).To(BeFalse())
+	})
+})
+
+var _ = ginkgo.Describe("ComputeBackoffFromJobsForTarget", func() {
+	ginkgo.It("computes backoff independently per target", func() {
+		now := time.Now().UTC()
+		jobs := []v1alpha1.JobStatus{
+			{Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric, State: v1alpha1.JobStateFailed,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-10 * time.Minute))},
+			{Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetFabric, State: v1alpha1.JobStateFailed,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+			// A single, more recent k8s failure shouldn't affect the fabric backoff calculation.
+			{Type: v1alpha1.JobTypeProvision, Target: v1alpha1.JobTargetK8s, State: v1alpha1.JobStateFailed,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-1 * time.Minute))},
+		}
+
+		fabricBackoff := ComputeBackoffFromJobsForTarget(jobs, "v1", v1alpha1.JobTargetFabric)
+		// Two fabric failures 5 minutes apart -> next backoff is double the gap (10m), clamped to [Base, Max].
+		Expect(fabricBackoff).To(Equal(10 * time.Minute))
+
+		k8sBackoff := ComputeBackoffFromJobsForTarget(jobs, "v1", v1alpha1.JobTargetK8s)
+		// Only one k8s failure recorded -> falls back to BackoffBaseDelay.
+		Expect(k8sBackoff).To(Equal(BackoffBaseDelay))
 	})
 })
 

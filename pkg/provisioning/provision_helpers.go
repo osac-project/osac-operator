@@ -63,7 +63,7 @@ const (
 // If elapsed, it calls triggerFn to retry. Otherwise, it returns a RequeueAfter with the remaining delay.
 func HandleBackoff(ctx context.Context, provState *State, latestJob *v1alpha1.JobStatus, triggerFn func() (ctrl.Result, error)) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-	backoff := ComputeBackoffFromJobs(*provState.Jobs, provState.DesiredConfigVersion)
+	backoff := ComputeBackoffFromJobsForTarget(*provState.Jobs, provState.DesiredConfigVersion, provState.Target)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
 		log.Info("backoff elapsed, retrying provision", "jobID", latestJob.JobID, "backoff", backoff, "elapsed", elapsed)
@@ -120,6 +120,17 @@ func computeBackoffFromFailedJobs(jobs []v1alpha1.JobStatus, match func(*v1alpha
 func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) time.Duration {
 	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
 		return j.Type == v1alpha1.JobTypeProvision && j.ConfigVersion == configVersion
+	})
+}
+
+// ComputeBackoffFromJobsForTarget is the target-scoped counterpart of
+// ComputeBackoffFromJobs, for resources dispatched to more than one manager. Scoping by
+// target prevents a failed job on one target from skewing backoff timing computed for
+// another target's independent retry schedule.
+func ComputeBackoffFromJobsForTarget(jobs []v1alpha1.JobStatus, configVersion string, target v1alpha1.JobTarget) time.Duration {
+	want := normalizeTarget(target)
+	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
+		return j.Type == v1alpha1.JobTypeProvision && j.ConfigVersion == configVersion && normalizeTarget(j.Target) == want
 	})
 }
 

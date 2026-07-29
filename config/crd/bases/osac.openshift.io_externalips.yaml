@@ -188,6 +188,15 @@ spec:
                       - Canceled
                       - Unknown
                       type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        provisioned through more than one manager (e.g. Subnet: fabric + k8s). Empty
+                        for single-target resources.
+                      enum:
+                      - fabric
+                      - k8s
+                      type: string
                     timestamp:
                       description: Timestamp when this job was created/triggered
                       format: date-time

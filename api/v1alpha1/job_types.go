@@ -52,6 +52,21 @@ const (
 	JobStateUnknown JobState = "Unknown"
 )
 
+// JobTarget identifies which manager a job was dispatched to, for resources that
+// provision through more than one manager (e.g. Subnet: fabric + k8s segment/overlay
+// creation). Left empty for single-target resources, which don't need to distinguish
+// between manager tracks. An empty Target is treated as JobTargetFabric when matched
+// against fabric-scoped lookups
+// +kubebuilder:validation:Enum=fabric;k8s
+type JobTarget string
+
+const (
+	// JobTargetFabric indicates the job was dispatched to the fabric manager.
+	JobTargetFabric JobTarget = "fabric"
+	// JobTargetK8s indicates the job was dispatched to the k8s manager.
+	JobTargetK8s JobTarget = "k8s"
+)
+
 // IsTerminal returns true if the job state is terminal (will not change)
 func (s JobState) IsTerminal() bool {
 	return s == JobStateSucceeded || s == JobStateFailed || s == JobStateCanceled
@@ -72,6 +87,12 @@ type JobStatus struct {
 	// Type indicates the operation type
 	// +kubebuilder:validation:Required
 	Type JobType `json:"type"`
+
+	// Target identifies which manager this job was dispatched to, for resources
+	// provisioned through more than one manager (e.g. Subnet: fabric + k8s). Empty
+	// for single-target resources.
+	// +kubebuilder:validation:Optional
+	Target JobTarget `json:"target,omitempty"`
 
 	// Timestamp when this job was created/triggered
 	// +kubebuilder:validation:Required

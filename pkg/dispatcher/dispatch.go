@@ -17,6 +17,7 @@ limitations under the License.
 package dispatcher
 
 import (
+	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/pkg/networkmanager"
 )
 
@@ -30,6 +31,26 @@ const (
 	// ManagerRoleK8s targets the k8s manager for overlay-to-fabric bridging.
 	ManagerRoleK8s ManagerRole = "k8s"
 )
+
+// JobTarget converts a ManagerRole into the v1alpha1.JobTarget used to tag persisted
+// job history (JobStatus.Target). ManagerRole and v1alpha1.JobTarget represent the same
+// "which manager handles this work" concept in two unrelated types — one for dispatch
+// resolution, one for job-history persistence — that happen to share string values
+// today with no compiler-enforced link between them. This is the single place callers
+// (e.g. building pkg/provisioning.TargetSpec from a DispatchTarget) should do the
+// conversion, so a role/target added to one enum but not the other fails here instead
+// of drifting silently. Unknown roles fall back to JobTargetFabric, matching
+// v1alpha1.JobTarget's own empty-value default.
+func (r ManagerRole) JobTarget() v1alpha1.JobTarget {
+	switch r {
+	case ManagerRoleFabric:
+		return v1alpha1.JobTargetFabric
+	case ManagerRoleK8s:
+		return v1alpha1.JobTargetK8s
+	default:
+		return v1alpha1.JobTargetFabric
+	}
+}
 
 // DispatchTarget pairs a manager role with its resolved manager details.
 type DispatchTarget struct {

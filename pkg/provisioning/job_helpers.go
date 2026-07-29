@@ -26,13 +26,40 @@ func UpdateJob(jobs []v1alpha1.JobStatus, updatedJob v1alpha1.JobStatus) bool {
 	return true
 }
 
-// AppendJob adds a new job to the jobs array and trims to maxHistory.
+// AppendJob adds a new job to the jobs array and trims history to maxHistory entries
+// per target group (see normalizeTarget) rather than across the whole slice. Without
+// this scoping, a target that retries repeatedly (e.g. failing backoff) could evict
+// another target's sole tracked job out of history entirely, making
+// FindLatestJobByTypeAndTarget see "no job" for it and trigger a duplicate. Provision
+// and Deprovision jobs for the same target still share one budget, matching
+// pre-existing single-target behavior — single-target resources never set Target, so
+// all their jobs normalize to one group and this is equivalent to the old
+// whole-slice trim.
 func AppendJob(jobs []v1alpha1.JobStatus, newJob v1alpha1.JobStatus, maxHistory int) []v1alpha1.JobStatus {
 	jobs = append(jobs, newJob)
-	if len(jobs) > maxHistory {
-		jobs = jobs[len(jobs)-maxHistory:]
+
+	want := normalizeTarget(newJob.Target)
+	matchCount := 0
+	for i := range jobs {
+		if normalizeTarget(jobs[i].Target) == want {
+			matchCount++
+		}
 	}
-	return jobs
+	if matchCount <= maxHistory {
+		return jobs
+	}
+
+	toDrop := matchCount - maxHistory
+	trimmed := make([]v1alpha1.JobStatus, 0, len(jobs)-toDrop)
+	dropped := 0
+	for i := range jobs {
+		if dropped < toDrop && normalizeTarget(jobs[i].Target) == want {
+			dropped++
+			continue
+		}
+		trimmed = append(trimmed, jobs[i])
+	}
+	return trimmed
 }
 
 // NeedsProvisionJob determines if a new provision job should be triggered.
@@ -64,6 +91,34 @@ func FindLatestJobByType(jobs []v1alpha1.JobStatus, jobType v1alpha1.JobType) *v
 			if latest == nil || jobs[i].Timestamp.After(latest.Timestamp.Time) {
 				latest = &jobs[i]
 			}
+		}
+	}
+	return latest
+}
+
+// normalizeTarget maps an empty JobTarget to JobTargetFabric. Fabric was the only
+// manager that existed before multi-target dispatch was introduced, so jobs persisted
+// before this feature shipped (and single-target resources, which never set Target at
+// all) are treated as fabric jobs for matching purposes.
+func normalizeTarget(target v1alpha1.JobTarget) v1alpha1.JobTarget {
+	if target == "" {
+		return v1alpha1.JobTargetFabric
+	}
+	return target
+}
+
+// FindLatestJobByTypeAndTarget finds the most recent job of the specified type and
+// target by timestamp. Returns nil if no matching job exists. See normalizeTarget for
+// how empty Target values (legacy jobs and single-target resources) are matched.
+func FindLatestJobByTypeAndTarget(jobs []v1alpha1.JobStatus, jobType v1alpha1.JobType, target v1alpha1.JobTarget) *v1alpha1.JobStatus {
+	want := normalizeTarget(target)
+	var latest *v1alpha1.JobStatus
+	for i := range jobs {
+		if jobs[i].Type != jobType || normalizeTarget(jobs[i].Target) != want {
+			continue
+		}
+		if latest == nil || jobs[i].Timestamp.After(latest.Timestamp.Time) {
+			latest = &jobs[i]
 		}
 	}
 	return latest
