@@ -988,6 +988,7 @@ type tenantSpecificStorageClasses struct {
 	duplicateMessages []string
 	ambiguousTiers    []string
 }
+
 // resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
 // given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
 // AAP is configured and the controller should not fall back to shared defaults.
