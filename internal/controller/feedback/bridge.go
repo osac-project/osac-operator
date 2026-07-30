@@ -66,9 +66,11 @@ type Bridge[O clnt.Object, R proto.Message] struct {
 	// PostSaveOnDelete is an optional callback invoked after Save completes
 	// on the delete path, before finalizer removal. Use it for cross-resource
 	// side effects that must happen after this resource's state is persisted
-	// (e.g. clearing a parent resource's "attached" flag).
+	// (e.g. clearing a parent resource's "attached" flag). The remote record
+	// is provided for callbacks that need to reference it (e.g. reading a
+	// parent resource ID from the proto spec).
 	// If nil, this step is skipped.
-	PostSaveOnDelete func(ctx context.Context, obj O) error
+	PostSaveOnDelete func(ctx context.Context, obj O, remote R) error
 
 	// IsNotFound determines whether a Fetch error means the remote record
 	// does not exist. If nil, defaults to gRPC codes.NotFound.
@@ -153,7 +155,7 @@ func (b *Bridge[O, R]) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 
 	// Run post-save side effects on the delete path (e.g. cross-resource cleanup).
 	if !object.GetDeletionTimestamp().IsZero() && b.PostSaveOnDelete != nil {
-		if err := b.PostSaveOnDelete(ctx, object); err != nil {
+		if err := b.PostSaveOnDelete(ctx, object, remote); err != nil {
 			return result, err
 		}
 	}

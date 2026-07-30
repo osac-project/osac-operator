@@ -20,7 +20,6 @@ import (
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -300,12 +299,4 @@ func findClusterCondition(remote *privatev1.Cluster, kind privatev1.ClusterCondi
 	}
 	remote.Status.Conditions = append(remote.Status.Conditions, condition)
 	return condition
-}
-
-func clone[M proto.Message](message M) M {
-	return proto.Clone(message).(M)
-}
-
-func equal[M proto.Message](x, y M) bool {
-	return proto.Equal(x, y)
 }

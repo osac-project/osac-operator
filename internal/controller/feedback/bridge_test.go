@@ -405,8 +405,10 @@ var _ = Describe("Bridge", func() {
 			postSaveCalled := false
 			k8sClient := newFakeClient(cr)
 			bridge := newBridge(k8sClient, trk)
-			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet) error {
+			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet, remote *privatev1.Subnet) error {
 				Expect(trk.saveCalls).To(Equal(1))
+				Expect(remote).NotTo(BeNil())
+				Expect(remote.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_DELETING))
 				inHook := &v1alpha1.Subnet{}
 				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testName, Namespace: testNamespace}, inHook)).To(Succeed())
 				Expect(controllerutil.ContainsFinalizer(inHook, testFinalizer)).To(BeTrue())
@@ -434,7 +436,7 @@ var _ = Describe("Bridge", func() {
 			trk := newTracker()
 			k8sClient := newFakeClient(cr)
 			bridge := newBridge(k8sClient, trk)
-			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet) error {
+			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet, _ *privatev1.Subnet) error {
 				return errors.New("cross-resource cleanup failed")
 			}
 
@@ -457,7 +459,7 @@ var _ = Describe("Bridge", func() {
 			trk := newTracker()
 			k8sClient := newFakeClient(cr)
 			bridge := newBridge(k8sClient, trk)
-			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet) error {
+			bridge.PostSaveOnDelete = func(_ context.Context, _ *v1alpha1.Subnet, _ *privatev1.Subnet) error {
 				Fail("PostSaveOnDelete should not be called on update path")
 				return nil
 			}
