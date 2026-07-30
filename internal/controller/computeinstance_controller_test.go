@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +36,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
 )
 
@@ -1367,6 +1369,187 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Entry("empty string is not operational", kubevirtv1.VirtualMachinePrintableStatus(""), false),
 			Entry("unknown future status is not operational", kubevirtv1.VirtualMachinePrintableStatus("SomeFutureStatus"), false),
 		)
+	})
+
+	Context("Tier definitions in AAP extra_vars context (JIT storage)", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+		}
+
+		tierDefsTiersClient := func() *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("fast", "backend-1")},
+					}.Build(), nil
+				},
+			}
+		}
+		tierDefsBackendsClient := func() *mockStorageBackendsClient {
+			return &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("vast"), nil
+				},
+			}
+		}
+
+		createCIAndReconcile := func(name, tenantName string, provider *mockProvisioningProvider, configure func(*ComputeInstanceReconciler)) {
+			createReadyTenant(ctx, namespaceName, tenantName)
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			if configure != nil {
+				configure(reconciler)
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("should inject storage_tier_definitions into context before triggering provisioning", func() {
+			const resourceName = "test-tier-ctx-provision"
+			const tenantName = "tenant-tier-ctx-provision"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = tierDefsTiersClient()
+				r.BackendsClient = tierDefsBackendsClient()
+			})
+
+			Expect(sawTiers).To(BeTrue())
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+		})
+
+		It("should inject storage_backend_connections into context alongside storage_tier_definitions", func() {
+			const resourceName = "test-backend-conn-ctx-provision"
+			const tenantName = "tenant-backend-conn-ctx-provision"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			var gotConns map[string]provisioning.BackendConnection
+			var sawConns bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					sawConns = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = tierDefsTiersClient()
+				r.BackendsClient = tierDefsBackendsClient()
+			})
+
+			Expect(sawConns).To(BeTrue())
+			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
+			}))
+		})
+
+		It("should skip tier/backend injection gracefully when TiersClient and BackendsClient are not configured", func() {
+			const resourceName = "test-tier-ctx-unconfigured"
+			const tenantName = "tenant-tier-ctx-unconfigured"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			// No TiersClient/BackendsClient configured — matches the default zero
+			// value used by every other test in this file.
+			createCIAndReconcile(resourceName, tenantName, provider, nil)
+
+			Expect(sawTiers).To(BeTrue())
+			Expect(gotTiers).To(BeEmpty())
+		})
+
+		It("should proceed without tier data when tier resolution fails (non-fatal)", func() {
+			const resourceName = "test-tier-ctx-resolve-error"
+			const tenantName = "tenant-tier-ctx-resolve-error"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			var gotTiers []provisioning.TierDefinition
+			var sawTiers bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					sawTiers = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = &mockStorageTiersLister{
+					listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+						return nil, fmt.Errorf("tier API unavailable")
+					},
+				}
+				r.BackendsClient = tierDefsBackendsClient()
+			})
+
+			Expect(sawTiers).To(BeTrue())
+			Expect(gotTiers).To(BeEmpty())
+		})
 	})
 
 	Context("handleKubeVirtVM", func() {

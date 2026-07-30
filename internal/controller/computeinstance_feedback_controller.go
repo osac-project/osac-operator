@@ -15,45 +15,33 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-operator/internal/controller/feedback"
 )
 
 // ComputeInstanceFeedbackReconciler sends updates to the fulfillment service.
 type ComputeInstanceFeedbackReconciler struct {
-	hubClient                clnt.Client
-	computeInstancesClient   privatev1.ComputeInstancesClient
+	bridge                   *feedback.Bridge[*ckv1alpha1.ComputeInstance, *privatev1.ComputeInstance]
 	computeInstanceNamespace string
-}
-
-// computeInstanceFeedbackReconcilerTask contains data that is used for the reconciliation of a specific compute instance, so there is less
-// need to pass around as function parameters that and other related objects.
-type computeInstanceFeedbackReconcilerTask struct {
-	r      *ComputeInstanceFeedbackReconciler
-	object *ckv1alpha1.ComputeInstance
-	ci     *privatev1.ComputeInstance
 }
 
 // NewComputeInstanceFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about compute instances.
 func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, computeInstanceNamespace string) *ComputeInstanceFeedbackReconciler {
 	return &ComputeInstanceFeedbackReconciler{
-		hubClient:                hubClient,
-		computeInstancesClient:   privatev1.NewComputeInstancesClient(grpcConn),
+		bridge:                   newComputeInstanceFeedbackBridge(hubClient, privatev1.NewComputeInstancesClient(grpcConn)),
 		computeInstanceNamespace: computeInstanceNamespace,
 	}
 }
@@ -71,260 +59,91 @@ func (r *ComputeInstanceFeedbackReconciler) SetupWithManager(mgr mcmanager.Manag
 		Complete(r)
 }
 
-// Reconcile is the implementation of the reconciler interface.
-func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
-	log := ctrllog.FromContext(ctx)
+// Reconcile delegates to the shared feedback Bridge.
+func (r *ComputeInstanceFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+	return r.bridge.Reconcile(ctx, request)
+}
 
-	// Step 1: Fetch the CR from the hub cluster.
-	object := &ckv1alpha1.ComputeInstance{}
-	err = r.hubClient.Get(ctx, request.NamespacedName, object)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			return result, err
-		}
-		// CR is gone. With the finalizer this shouldn't normally happen, but
-		// handle gracefully (e.g. finalizer was removed externally).
-		log.Info("CR not found, nothing to do")
-		err = nil
-		return result, err
-	}
-
-	// Step 2: Get the compute instance ID from labels. CRs without this label
-	// weren't created by the fulfillment service, so we ignore them.
-	ciID, ok := object.Labels[osacComputeInstanceIDLabel]
-	if !ok {
-		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
-		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
-			log.Info("CR without CI ID label is being deleted, removing feedback finalizer")
-			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
+// newComputeInstanceFeedbackBridge creates a Bridge wired to the given client. Exported for testing.
+func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.ComputeInstancesClient) *feedback.Bridge[*ckv1alpha1.ComputeInstance, *privatev1.ComputeInstance] {
+	return &feedback.Bridge[*ckv1alpha1.ComputeInstance, *privatev1.ComputeInstance]{
+		Client:    hubClient,
+		Finalizer: osacComputeInstanceFeedbackFinalizer,
+		IDLabel:   osacComputeInstanceIDLabel,
+		Kind:      "ComputeInstance",
+		IDKey:     "ciID",
+		NewObject: func() *ckv1alpha1.ComputeInstance { return &ckv1alpha1.ComputeInstance{} },
+		Fetch: func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
+			response, err := ciClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return nil, err
 			}
-			return result, err
-		}
-		log.Info(
-			"There is no label containing the compute instance identifier, will ignore it",
-			"label", osacComputeInstanceIDLabel,
-		)
-		return result, err
-	}
-
-	// Step 3: Fetch the compute instance record from the fulfillment service
-	// so we can compare before/after and only push changes.
-	ci, err := r.fetchComputeInstance(ctx, ciID)
-	if err != nil {
-		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
-			log.Info("Compute instance record not found during deletion, removing feedback finalizer", "ciID", ciID)
-			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
-				return result, r.hubClient.Update(ctx, object)
+			ci := response.GetObject()
+			if ci == nil {
+				return nil, errors.New("compute instance response contained nil object")
 			}
-			return result, nil
-		}
-		return result, err
-	}
-
-	t := &computeInstanceFeedbackReconcilerTask{
-		r:      r,
-		object: object,
-		ci:     clone(ci),
-	}
-
-	// Step 4: Sync CR state to the fulfillment service record.
-	// handleUpdate also adds our finalizer; handleDelete only syncs state
-	// (e.g. DELETING phase).
-	if object.DeletionTimestamp.IsZero() {
-		err = t.handleUpdate(ctx)
-	} else {
-		t.handleDelete(ctx)
-	}
-	if err != nil {
-		return result, err
-	}
-
-	// Step 5: Persist synced state to the fulfillment service.
-	err = r.saveComputeInstance(ctx, ci, t.ci)
-	if err != nil {
-		return result, err
-	}
-
-	// Step 6: Handle finalizer removal and signal for deletions. This must
-	// happen after step 5 so the DELETING state is persisted before the CR
-	// is garbage collected.
-	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
-		if len(object.GetFinalizers()) == 1 {
-			// We're the last finalizer. Remove it to trigger CR garbage
-			// collection, then signal the fulfillment service to immediately
-			// re-reconcile. Finalizer is removed first so the CR is gone
-			// before the fulfillment controller checks — avoiding a race
-			// where it sees the CR still exists and skips archival.
-			log.Info(
-				"Feedback finalizer is last remaining, removing finalizer and signaling",
-				"ciID", ciID,
-			)
-			if controllerutil.RemoveFinalizer(object, osacComputeInstanceFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
-				if err != nil {
-					return result, err
-				}
+			if !ci.HasSpec() {
+				ci.SetSpec(&privatev1.ComputeInstanceSpec{})
 			}
-			_, signalErr := r.computeInstancesClient.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{
-				Id: ciID,
+			if !ci.HasStatus() {
+				ci.SetStatus(&privatev1.ComputeInstanceStatus{})
+			}
+			return ci, nil
+		},
+		Save: func(ctx context.Context, remote *privatev1.ComputeInstance) error {
+			_, err := ciClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: remote,
 			}.Build())
-			if signalErr != nil {
-				log.Error(
-					signalErr,
-					"Failed to signal fulfillment service, periodic sync will handle cleanup",
-					"ciID", ciID,
-				)
-			}
-		} else {
-			// Other finalizers still present — another controller hasn't
-			// finished cleanup yet. When it removes its finalizer, the
-			// Update event will trigger a new reconcile.
-			log.Info(
-				"Other finalizers still present, waiting",
-				"finalizers", object.GetFinalizers(),
-			)
-		}
-	}
-
-	return result, err
-}
-
-// fetchComputeInstance retrieves a compute instance record from the fulfillment
-// service by its ID, ensuring spec and status are initialized.
-func (r *ComputeInstanceFeedbackReconciler) fetchComputeInstance(ctx context.Context, id string) (vm *privatev1.ComputeInstance, err error) {
-	response, err := r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
-		Id: id,
-	}.Build())
-	if err != nil {
-		return
-	}
-	vm = response.GetObject()
-	if !vm.HasSpec() {
-		vm.SetSpec(&privatev1.ComputeInstanceSpec{})
-	}
-	if !vm.HasStatus() {
-		vm.SetStatus(&privatev1.ComputeInstanceStatus{})
-	}
-	return
-}
-
-// saveComputeInstance sends an update to the fulfillment service if the compute
-// instance record has changed.
-func (r *ComputeInstanceFeedbackReconciler) saveComputeInstance(ctx context.Context, before, after *privatev1.ComputeInstance) error {
-	log := ctrllog.FromContext(ctx)
-
-	if !equal(after, before) {
-		log.Info(
-			"Updating compute instance",
-			"before", before,
-			"after", after,
-		)
-		_, err := r.computeInstancesClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-			Object: after,
-		}.Build())
-		if err != nil {
 			return err
-		}
+		},
+		Signal: func(ctx context.Context, id string) error {
+			_, err := ciClient.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{
+				Id: id,
+			}.Build())
+			return err
+		},
+		SyncUpdate: syncComputeInstanceUpdate,
+		SyncDelete: syncComputeInstanceDelete,
 	}
+}
+
+func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) error {
+	syncCIConditions(obj, remote)
+	syncCIPhase(ctx, obj, remote)
+	syncCIIPAddresses(obj, remote)
+	syncCILastRestartedAt(obj, remote)
 	return nil
 }
 
-// handleUpdate ensures our finalizer is present and syncs the CR state to the
-// fulfillment service. Called when the CR is not being deleted.
-func (t *computeInstanceFeedbackReconcilerTask) handleUpdate(ctx context.Context) error {
-	if controllerutil.AddFinalizer(t.object, osacComputeInstanceFeedbackFinalizer) {
-		if err := t.r.hubClient.Update(ctx, t.object); err != nil {
-			return err
+func syncComputeInstanceDelete(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) error {
+	return syncComputeInstanceUpdate(ctx, obj, remote)
+}
+
+func syncCIConditions(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	conditionMappings := []struct {
+		crType ckv1alpha1.ComputeInstanceConditionType
+		vmType privatev1.ComputeInstanceConditionType
+	}{
+		{ckv1alpha1.ComputeInstanceConditionConfigurationApplied, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED},
+		{ckv1alpha1.ComputeInstanceConditionReady, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY},
+		{ckv1alpha1.ComputeInstanceConditionRestartInProgress, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS},
+		{ckv1alpha1.ComputeInstanceConditionRestartFailed, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED},
+		{ckv1alpha1.ComputeInstanceConditionProvisioned, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED},
+		{ckv1alpha1.ComputeInstanceConditionRestartRequired, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED},
+	}
+	for _, m := range conditionMappings {
+		crCondition := obj.GetStatusCondition(m.crType)
+		if crCondition == nil {
+			continue
 		}
+		syncCIConditionFromCR(remote, m.vmType, crCondition)
 	}
-	t.syncState(ctx)
-	return nil
 }
 
-// handleDelete syncs the CR state (including the DELETING phase) to the
-// fulfillment service. Called when the CR is being deleted.
-func (t *computeInstanceFeedbackReconcilerTask) handleDelete(ctx context.Context) {
-	t.syncState(ctx)
-}
-
-// syncState synchronizes the CR's conditions, phase, IP addresses, and last
-// restarted time to the fulfillment service's compute instance record.
-func (t *computeInstanceFeedbackReconcilerTask) syncState(ctx context.Context) {
-	t.syncConditions(ctx)
-	t.syncPhase(ctx)
-	t.syncIPAddresses()
-	t.syncLastRestartedAt()
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncConditions(ctx context.Context) {
-	t.syncConfigurationApplied(ctx)
-	t.syncReady(ctx)
-	t.syncRestartInProgress(ctx)
-	t.syncRestartFailed(ctx)
-	t.syncProvisioned(ctx)
-	t.syncRestartRequired(ctx)
-}
-
-// syncConfigurationApplied synchronizes the CONFIGURATION_APPLIED VM condition from the ConfigurationApplied CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncConfigurationApplied(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionConfigurationApplied)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED, crCondition)
-}
-
-// syncReady synchronizes the READY VM condition from the Ready CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncReady(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionReady)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY, crCondition)
-}
-
-// syncRestartInProgress synchronizes the RESTART_IN_PROGRESS VM condition from the RestartInProgress CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncRestartInProgress(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartInProgress)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS, crCondition)
-}
-
-// syncRestartFailed synchronizes the RESTART_FAILED VM condition from the RestartFailed CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncRestartFailed(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartFailed)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED, crCondition)
-}
-
-// syncProvisioned synchronizes the PROVISIONED VM condition from the Provisioned CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncProvisioned(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionProvisioned)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED, crCondition)
-}
-
-// syncRestartRequired synchronizes the RESTART_REQUIRED VM condition from the RestartRequired CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncRestartRequired(ctx context.Context) {
-	crCondition := t.object.GetStatusCondition(ckv1alpha1.ComputeInstanceConditionRestartRequired)
-	if crCondition == nil {
-		return
-	}
-	t.syncVMConditionFromCR(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED, crCondition)
-}
-
-// syncVMConditionFromCR synchronizes a VM condition from a CR condition.
-func (t *computeInstanceFeedbackReconcilerTask) syncVMConditionFromCR(vmConditionType privatev1.ComputeInstanceConditionType, crCondition *metav1.Condition) {
-	vmCondition := t.findComputeInstanceCondition(vmConditionType)
+func syncCIConditionFromCR(remote *privatev1.ComputeInstance, vmConditionType privatev1.ComputeInstanceConditionType, crCondition *metav1.Condition) {
+	vmCondition := findComputeInstanceCondition(remote, vmConditionType)
 	oldStatus := vmCondition.GetStatus()
-	newStatus := t.mapConditionStatus(crCondition.Status)
+	newStatus := mapCIConditionStatus(crCondition.Status)
 	vmCondition.SetStatus(newStatus)
 	vmCondition.SetReason(crCondition.Reason)
 	vmCondition.SetMessage(crCondition.Message)
@@ -333,7 +152,7 @@ func (t *computeInstanceFeedbackReconcilerTask) syncVMConditionFromCR(vmConditio
 	}
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) mapConditionStatus(status metav1.ConditionStatus) privatev1.ConditionStatus {
+func mapCIConditionStatus(status metav1.ConditionStatus) privatev1.ConditionStatus {
 	switch status {
 	case metav1.ConditionFalse:
 		return privatev1.ConditionStatus_CONDITION_STATUS_FALSE
@@ -344,85 +163,49 @@ func (t *computeInstanceFeedbackReconcilerTask) mapConditionStatus(status metav1
 	}
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncPhase(ctx context.Context) {
-	switch t.object.Status.Phase {
+func syncCIPhase(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	switch obj.Status.Phase {
 	case ckv1alpha1.ComputeInstancePhaseStarting:
-		t.syncPhaseStarting()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
 	case ckv1alpha1.ComputeInstancePhaseFailed:
-		t.syncPhaseFailed()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
 	case ckv1alpha1.ComputeInstancePhaseRunning:
-		t.syncPhaseRunning()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
 	case ckv1alpha1.ComputeInstancePhaseDeleting:
-		t.syncPhaseDeleting()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
 	case ckv1alpha1.ComputeInstancePhaseStopping:
-		t.syncPhaseStopping()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING)
 	case ckv1alpha1.ComputeInstancePhaseStopped:
-		t.syncPhaseStopped()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
 	case ckv1alpha1.ComputeInstancePhasePaused:
-		t.syncPhasePaused()
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED)
 	default:
 		log := ctrllog.FromContext(ctx)
-		log.Info(
-			"Unknown phase, will ignore it",
-			"phase", t.object.Status.Phase,
-		)
+		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
 	}
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStarting() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseFailed() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseRunning() {
-	ciStatus := t.ci.GetStatus()
-	ciStatus.SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseDeleting() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStopping() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhaseStopped() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) syncPhasePaused() {
-	t.ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED)
-}
-
-func (t *computeInstanceFeedbackReconcilerTask) findComputeInstanceCondition(kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {
-	var condition *privatev1.ComputeInstanceCondition
-	for _, current := range t.ci.Status.Conditions {
+func findComputeInstanceCondition(remote *privatev1.ComputeInstance, kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {
+	for _, current := range remote.Status.Conditions {
 		if current.Type == kind {
-			condition = current
-			break
+			return current
 		}
 	}
-	if condition == nil {
-		condition = &privatev1.ComputeInstanceCondition{
-			Type:   kind,
-			Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-		}
-		t.ci.Status.Conditions = append(t.ci.Status.Conditions, condition)
+	condition := &privatev1.ComputeInstanceCondition{
+		Type:   kind,
+		Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 	}
+	remote.Status.Conditions = append(remote.Status.Conditions, condition)
 	return condition
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncIPAddresses() {
-	t.ci.GetStatus().SetExternalIpAddress(t.object.Status.ExternalIPAddress)
-	t.ci.GetStatus().SetInternalIpAddress(t.object.Status.IPAddress)
+func syncCIIPAddresses(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	remote.GetStatus().SetExternalIpAddress(obj.Status.ExternalIPAddress)
+	remote.GetStatus().SetInternalIpAddress(obj.Status.IPAddress)
 }
 
-func (t *computeInstanceFeedbackReconcilerTask) syncLastRestartedAt() {
-	if t.object.Status.LastRestartedAt != nil {
-		t.ci.GetStatus().SetLastRestartedAt(timestamppb.New(t.object.Status.LastRestartedAt.Time))
+func syncCILastRestartedAt(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	if obj.Status.LastRestartedAt != nil {
+		remote.GetStatus().SetLastRestartedAt(timestamppb.New(obj.Status.LastRestartedAt.Time))
 	}
 }

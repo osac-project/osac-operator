@@ -281,21 +281,21 @@ func (t *externalIPAttachmentFeedbackReconcilerTask) syncAttachedOnParentExterna
 		return err
 	}
 
-	publicIP := response.GetObject()
-	if publicIP == nil {
-		return nil
+	externalIP := response.GetObject()
+	if externalIP == nil {
+		return fmt.Errorf("parent ExternalIP %s: response contained nil object", externalIPID)
 	}
-	if !publicIP.HasStatus() {
-		publicIP.SetStatus(&privatev1.ExternalIPStatus{})
-	}
-
-	if publicIP.GetStatus().GetAttached() == attached {
-		return nil
+	if !externalIP.HasStatus() {
+		externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
 
-	publicIP.GetStatus().SetAttached(attached)
+	if externalIP.GetStatus().GetAttached() == attached {
+		return nil
+	}
+
+	externalIP.GetStatus().SetAttached(attached)
 	_, err = t.r.externalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-		Object: publicIP,
+		Object: externalIP,
 	}.Build())
 	return err
 }

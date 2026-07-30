@@ -139,9 +139,11 @@ func (r *ExternalIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcil
 	return res, err
 }
 
-// handleUpdate processes a non-deleted ExternalIPPool: adds finalizer, reads the
-// implementation strategy from the pool's own spec, and runs provisioning.
+// handleUpdate processes a non-deleted ExternalIPPool: adds finalizer, stamps the
+// implementation-strategy annotation, and then runs provisioning.
 func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
 	// Add finalizer if not present
 	if controllerutil.AddFinalizer(pool, osacExternalIPPoolFinalizer) {
 		if err := r.Update(ctx, pool); err != nil {
@@ -162,6 +164,21 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 	implementationStrategy := pool.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
 		implementationStrategy = defaultExternalIPPoolImplementationStrategy
+	}
+
+	// Stamp the implementation-strategy annotation so AAP playbooks can read it
+	// without having to look up a parent resource. Return early so the next
+	// reconciliation triggers AAP with the annotation already present on the CR.
+	if pool.Annotations == nil {
+		pool.Annotations = make(map[string]string)
+	}
+	if pool.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
+		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
+		pool.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
+		if err := r.Update(ctx, pool); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Compute desired config version from spec and implementation strategy
@@ -234,8 +251,14 @@ func (r *ExternalIPPoolReconciler) handleProvisioning(ctx context.Context, pool 
 		&provisioning.State{Jobs: &pool.Status.ProvisioningJobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady },
+			OnFailed: func(message string) {
+				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseFailed
+				setReadyConditionFailed(&pool.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady
+				setReadyConditionTrue(&pool.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(

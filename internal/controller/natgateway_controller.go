@@ -258,8 +258,14 @@ func (r *NATGatewayReconciler) handleProvisioning(ctx context.Context, natgw *v1
 		&provisioning.State{Jobs: &natgw.Status.ProvisioningJobs, DesiredConfigVersion: natgw.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { natgw.Status.Phase = v1alpha1.NATGatewayPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady },
+			OnFailed: func(message string) {
+				natgw.Status.Phase = v1alpha1.NATGatewayPhaseFailed
+				setReadyConditionFailed(&natgw.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady
+				setReadyConditionTrue(&natgw.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(natgw), &v1alpha1.NATGateway{}, func(obj client.Object) []v1alpha1.JobStatus {

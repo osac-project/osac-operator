@@ -15,44 +15,72 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-operator/internal/controller/feedback"
 )
 
 // SubnetFeedbackReconciler sends updates to the fulfillment service.
 type SubnetFeedbackReconciler struct {
-	hubClient           clnt.Client
-	subnetsClient       privatev1.SubnetsClient
+	bridge              *feedback.Bridge[*v1alpha1.Subnet, *privatev1.Subnet]
 	networkingNamespace string
-}
-
-// subnetFeedbackReconcilerTask contains data that is used for the reconciliation of a specific subnet, so there is less
-// need to pass around as function parameters that and other related objects.
-type subnetFeedbackReconcilerTask struct {
-	r      *SubnetFeedbackReconciler
-	object *v1alpha1.Subnet
-	subnet *privatev1.Subnet
 }
 
 // NewSubnetFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about subnets.
 func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *SubnetFeedbackReconciler {
-	return &SubnetFeedbackReconciler{
-		hubClient:           hubClient,
-		subnetsClient:       privatev1.NewSubnetsClient(grpcConn),
-		networkingNamespace: networkingNamespace,
+	subnetsClient := privatev1.NewSubnetsClient(grpcConn)
+	r := &SubnetFeedbackReconciler{networkingNamespace: networkingNamespace}
+	r.bridge = &feedback.Bridge[*v1alpha1.Subnet, *privatev1.Subnet]{
+		Client:    hubClient,
+		Finalizer: osacSubnetFeedbackFinalizer,
+		IDLabel:   osacSubnetIDLabel,
+		Kind:      "Subnet",
+		IDKey:     "subnetID",
+		NewObject: func() *v1alpha1.Subnet { return &v1alpha1.Subnet{} },
+		Fetch: func(ctx context.Context, id string) (*privatev1.Subnet, error) {
+			response, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return nil, err
+			}
+			subnet := response.GetObject()
+			if subnet == nil {
+				return nil, errors.New("subnet response contained nil object")
+			}
+			if !subnet.HasSpec() {
+				subnet.SetSpec(&privatev1.SubnetSpec{})
+			}
+			if !subnet.HasStatus() {
+				subnet.SetStatus(&privatev1.SubnetStatus{})
+			}
+			return subnet, nil
+		},
+		Save: func(ctx context.Context, remote *privatev1.Subnet) error {
+			_, err := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+				Object: remote,
+			}.Build())
+			return err
+		},
+		Signal: func(ctx context.Context, id string) error {
+			_, err := subnetsClient.Signal(ctx, privatev1.SubnetsSignalRequest_builder{
+				Id: id,
+			}.Build())
+			return err
+		},
+		SyncUpdate: syncSubnetUpdate,
+		SyncDelete: syncSubnetDelete,
 	}
+	return r
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
@@ -68,211 +96,44 @@ func (r *SubnetFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error
 		Complete(r)
 }
 
-// Reconcile is the implementation of the reconciler interface.
-func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, err error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Step 1: Fetch the object to reconcile, and do nothing if it no longer exists:
-	object := &v1alpha1.Subnet{}
-	err = r.hubClient.Get(ctx, request.NamespacedName, object)
-	if err != nil {
-		err = clnt.IgnoreNotFound(err)
-		return //nolint:nakedret
-	}
-
-	// Step 2: Get the identifier of the subnet from the labels. If this isn't present it means that the object
-	// wasn't created by the fulfillment service, so we ignore it.
-	subnetID, ok := object.Labels[osacSubnetIDLabel]
-	if !ok {
-		// If being deleted and somehow has our finalizer, remove it to unblock deletion.
-		if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacSubnetFeedbackFinalizer) {
-			log.Info("CR without subnet ID label is being deleted, removing feedback finalizer")
-			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
-			}
-			return result, err
-		}
-		log.Info(
-			"There is no label containing the subnet identifier, will ignore it",
-			"label", osacSubnetIDLabel,
-		)
-		return result, err
-	}
-
-	// Step 3: Fetch the subnet from the fulfillment service so we can compare before/after.
-	subnet, err := r.fetchSubnet(ctx, subnetID)
-	if err != nil {
-		if !object.DeletionTimestamp.IsZero() && status.Code(err) == codes.NotFound {
-			log.Info("Subnet record not found during deletion, removing feedback finalizer", "subnetID", subnetID)
-			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
-				return result, r.hubClient.Update(ctx, object)
-			}
-			return result, nil
-		}
-		return result, err
-	}
-
-	// Create a task to do the rest of the job, but using copies of the objects, so that we can later compare the
-	// before and after values and save only the objects that have changed.
-	t := &subnetFeedbackReconcilerTask{
-		r:      r,
-		object: object,
-		subnet: clone(subnet),
-	}
-
-	// Step 4: Sync CR state to the fulfillment service record.
-	// handleUpdate also adds our finalizer; handleDelete syncs state (e.g. DELETING phase).
-	if object.DeletionTimestamp.IsZero() {
-		err = t.handleUpdate(ctx)
-	} else {
-		t.handleDelete()
-	}
-	if err != nil {
-		return result, err
-	}
-
-	// Step 5: Persist synced state to the fulfillment service.
-	err = r.saveSubnet(ctx, subnet, t.subnet)
-	if err != nil {
-		return result, err
-	}
-
-	// Step 6: Handle finalizer removal and signal for deletions. This must happen after step 5 so the
-	// DELETING state is persisted before the CR is garbage collected.
-	if !object.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(object, osacSubnetFeedbackFinalizer) {
-		if len(object.GetFinalizers()) == 1 {
-			// We're the last finalizer. Remove it to trigger CR garbage collection, then signal the
-			// fulfillment service to immediately re-reconcile.
-			log.Info(
-				"Feedback finalizer is last remaining, removing finalizer and signaling",
-				"subnetID", subnetID,
-			)
-			if controllerutil.RemoveFinalizer(object, osacSubnetFeedbackFinalizer) {
-				err = r.hubClient.Update(ctx, object)
-				if err != nil {
-					return result, err
-				}
-			}
-			_, signalErr := r.subnetsClient.Signal(ctx, privatev1.SubnetsSignalRequest_builder{
-				Id: subnetID,
-			}.Build())
-			if signalErr != nil {
-				log.Error(
-					signalErr,
-					"Failed to signal fulfillment service, periodic sync will handle cleanup",
-					"subnetID", subnetID,
-				)
-			}
-		} else {
-			// Other finalizers still present — another controller hasn't finished cleanup yet.
-			log.Info(
-				"Other finalizers still present, waiting",
-				"finalizers", object.GetFinalizers(),
-			)
-		}
-	}
-
-	return result, err
+// Reconcile delegates to the shared feedback Bridge.
+func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+	return r.bridge.Reconcile(ctx, request)
 }
 
-func (r *SubnetFeedbackReconciler) fetchSubnet(ctx context.Context, id string) (subnet *privatev1.Subnet, err error) {
-	response, err := r.subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{
-		Id: id,
-	}.Build())
-	if err != nil {
-		return
-	}
-	subnet = response.GetObject()
-	if !subnet.HasSpec() {
-		subnet.SetSpec(&privatev1.SubnetSpec{})
-	}
-	if !subnet.HasStatus() {
-		subnet.SetStatus(&privatev1.SubnetStatus{})
-	}
-	return
-}
-
-func (r *SubnetFeedbackReconciler) saveSubnet(ctx context.Context, before, after *privatev1.Subnet) error {
-	log := ctrllog.FromContext(ctx)
-
-	if !equal(after, before) {
-		log.Info(
-			"Updating subnet",
-			"before", before,
-			"after", after,
-		)
-		_, err := r.subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-			Object: after,
-		}.Build())
-		if err != nil {
-			return err
-		}
-	}
+func syncSubnetUpdate(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+	syncSubnetPhase(ctx, obj, remote)
+	syncSubnetBackendNetworkID(obj, remote)
 	return nil
 }
 
-// handleUpdate ensures our finalizer is present and syncs the CR state to the
-// fulfillment service. Called when the CR is not being deleted.
-func (t *subnetFeedbackReconcilerTask) handleUpdate(ctx context.Context) error {
-	if controllerutil.AddFinalizer(t.object, osacSubnetFeedbackFinalizer) {
-		if err := t.r.hubClient.Update(ctx, t.object); err != nil {
-			return err
-		}
+func syncSubnetDelete(_ context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+	if obj.Status.Phase == v1alpha1.SubnetPhaseFailed {
+		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETE_FAILED)
+		return nil
 	}
-	t.syncPhase(ctx)
-	t.syncBackendNetworkID()
+	remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
 	return nil
 }
 
-// handleDelete syncs the deletion phase to the fulfillment service.
-// Only the phase is synced during deletion (not backend network ID),
-// because we only need to communicate DELETING/DELETE_FAILED state.
-func (t *subnetFeedbackReconcilerTask) handleDelete() {
-	if t.object.Status.Phase == v1alpha1.SubnetPhaseFailed {
-		t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETE_FAILED)
-		return
-	}
-	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
-}
-
-func (t *subnetFeedbackReconcilerTask) syncPhase(ctx context.Context) {
-	switch t.object.Status.Phase {
+func syncSubnetPhase(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) {
+	switch obj.Status.Phase {
 	case v1alpha1.SubnetPhaseProgressing:
-		t.syncPhaseProgressing()
+		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
 	case v1alpha1.SubnetPhaseFailed:
-		t.syncPhaseFailed()
+		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
 	case v1alpha1.SubnetPhaseReady:
-		t.syncPhaseReady()
+		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
 	case v1alpha1.SubnetPhaseDeleting:
-		t.syncPhaseDeleting()
+		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
 	default:
 		log := ctrllog.FromContext(ctx)
-		log.Info(
-			"Unknown phase, will ignore it",
-			"phase", t.object.Status.Phase,
-		)
+		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
 	}
 }
 
-func (t *subnetFeedbackReconcilerTask) syncPhaseProgressing() {
-	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
-}
-
-func (t *subnetFeedbackReconcilerTask) syncPhaseFailed() {
-	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
-}
-
-func (t *subnetFeedbackReconcilerTask) syncPhaseReady() {
-	subnetStatus := t.subnet.GetStatus()
-	subnetStatus.SetState(privatev1.SubnetState_SUBNET_STATE_READY)
-}
-
-func (t *subnetFeedbackReconcilerTask) syncPhaseDeleting() {
-	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
-}
-
-func (t *subnetFeedbackReconcilerTask) syncBackendNetworkID() {
-	if t.object.Status.BackendNetworkID != "" {
-		t.subnet.GetStatus().SetMessage(t.object.Status.BackendNetworkID)
+func syncSubnetBackendNetworkID(obj *v1alpha1.Subnet, remote *privatev1.Subnet) {
+	if obj.Status.BackendNetworkID != "" {
+		remote.GetStatus().SetMessage(obj.Status.BackendNetworkID)
 	}
 }

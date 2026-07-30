@@ -357,12 +357,70 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		event["admin_kubeconfig"] = kc
 	}
 
+	if tiers := StorageTierDefinitionsFromContext(ctx); len(tiers) > 0 {
+		event["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
+	}
+
+	if conns := StorageBackendConnectionsFromContext(ctx); len(conns) > 0 {
+		event["storage_backend_connections"] = backendConnectionsToExtraVars(conns)
+	}
+
 	// Wrap in ansible_eda.event structure for AAP template compatibility.
 	return map[string]any{
 		"ansible_eda": map[string]any{
 			"event": event,
 		},
 	}, nil
+}
+
+// bytesPerGiB converts a gibibyte count to bytes (1 GiB = 2^30 bytes).
+const bytesPerGiB = 1 << 30
+
+// tierDefinitionsToExtraVars converts tier definitions to the AAP-schema-shaped map
+// format osac-aap's storage_provider role expects (storage_provider/meta/
+// argument_specs.yaml). Field names are a deliberate departure from the Go/proto
+// field names: quota_bytes (not QuotaGiB) carries tier.QuotaGiB converted to bytes
+// — the pre-existing static STORAGE_TIERS path already documents its own "quota"
+// field as bytes (see config/base/configmap-storage-operations-ig-example.yaml in
+// osac-aap), so this key is named quota_bytes rather than reusing "quota" to keep
+// the unit unambiguous; a follow-on osac-aap change (OSAC-1992's AC 4/5) is
+// required to read it. max_reads_bw_mbps/max_writes_bw_mbps match the role's
+// documented example, not the Go struct's MaxReadBandwidthMBs/MaxWriteBandwidthMBs.
+// No qos_policy key — osac-aap derives "<name>-qos" from the tier name it already
+// receives.
+func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
+	result := make([]map[string]any, len(tiers))
+	for i, tier := range tiers {
+		result[i] = map[string]any{
+			"name":       tier.Name,
+			"protocol":   tier.Protocol,
+			"provider":   tier.Provider,
+			"backend_id": tier.BackendID,
+			"qos_limits": map[string]any{
+				"static_limits": map[string]any{
+					"max_reads_bw_mbps":  tier.QosLimits.MaxReadBandwidthMBs,
+					"max_writes_bw_mbps": tier.QosLimits.MaxWriteBandwidthMBs,
+				},
+			},
+			"quota_bytes": tier.QuotaGiB * bytesPerGiB,
+		}
+	}
+	return result
+}
+
+// backendConnectionsToExtraVars converts backend connection details to the
+// AAP-schema-shaped map format, keyed by backend_id, one entry per unique backend
+// (never repeated per tier — see BackendConnection's doc comment).
+func backendConnectionsToExtraVars(conns map[string]BackendConnection) map[string]map[string]any {
+	result := make(map[string]map[string]any, len(conns))
+	for backendID, conn := range conns {
+		result[backendID] = map[string]any{
+			"endpoint": conn.Endpoint,
+			"username": conn.Username,
+			"password": conn.Password,
+		}
+	}
+	return result
 }
 
 // serializeResource converts a Kubernetes resource to a map using JSON marshaling.

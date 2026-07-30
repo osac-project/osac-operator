@@ -114,8 +114,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		}
 		mockClient = &mockComputeInstancesClient{}
 		reconciler = &ComputeInstanceFeedbackReconciler{
-			hubClient:                k8sClient,
-			computeInstancesClient:   mockClient,
+			bridge:                   newComputeInstanceFeedbackBridge(k8sClient, mockClient),
 			computeInstanceNamespace: computeInstanceNS,
 		}
 

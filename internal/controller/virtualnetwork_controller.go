@@ -199,8 +199,14 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady },
+			OnFailed: func(message string) {
+				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
+				setReadyConditionFailed(&vnet.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
+				setReadyConditionTrue(&vnet.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{}, func(obj client.Object) []v1alpha1.JobStatus {

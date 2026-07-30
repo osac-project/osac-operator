@@ -551,8 +551,20 @@ func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder)
 
 func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.ClusterOrder) *provisioning.PollCallbacks {
 	return &provisioning.PollCallbacks{
-		OnFailed:  func(_ string) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed },
-		OnSuccess: func(_ provisioning.ProvisionStatus) { instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady },
+		OnFailed: func(message string) {
+			// Only set Failed if the HostedCluster was never created. When the HC already
+			// exists, the provisioning lifecycle will keep retrying via backoff — Phase
+			// stays Progressing and the failed job is visible in status.provisioningJobs.
+			if instance.Status.ClusterReference == nil ||
+				instance.Status.ClusterReference.HostedClusterName == "" {
+				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
+				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
+			}
+		},
+		OnSuccess: func(_ provisioning.ProvisionStatus) {
+			instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+			instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+		},
 	}
 }
 

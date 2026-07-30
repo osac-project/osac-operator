@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -146,9 +147,9 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			// Simulate feedback controller: during TriggerProvision, modify
 			// the resource's metadata (add feedback finalizer) so the
 			// resourceVersion changes before the status flush runs.
-			// Set mock before any reconcile because ExternalIPPool triggers
-			// provisioning in the same pass as adding the finalizer.
+			provisionCalled := false
 			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
 				fresh := &osacv1alpha1.ExternalIPPool{}
 				Expect(fakeClient.Get(ctx, key, fresh)).To(Succeed())
 				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/externalippool-feedback")
@@ -161,11 +162,18 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 				}, nil
 			}
 
-			// Reconcile adds finalizer and triggers provisioning in one pass.
-			// The concurrent modification must not prevent the job from
-			// being recorded in status.
+			// Pass 1: adds finalizer and stamps implementation-strategy annotation,
+			// returns early before triggering provisioning.
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalled).To(BeFalse(), "AAP provisioning must not be triggered before annotation is stamped")
+
+			// Pass 2: annotation already set, triggers provisioning.
+			// The concurrent modification must not prevent the job from
+			// being recorded in status.
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalled).To(BeTrue(), "AAP provisioning must be triggered after annotation is stamped")
 
 			// Verify the job was persisted
 			updated := &osacv1alpha1.ExternalIPPool{}
@@ -173,6 +181,64 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			latestJob := provisioning.FindLatestJobByType(updated.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
+		It("should stamp implementation-strategy annotation before triggering AAP provisioning", func() {
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+
+			provisionCalled := false
+			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{
+					JobID:        "aap-job-1",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Pass 1: adds finalizer and stamps the annotation, returns early.
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalled).To(BeFalse(), "AAP provisioning must not be triggered before annotation is stamped")
+
+			annotated := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, annotated)).To(Succeed())
+			Expect(annotated.Annotations).To(HaveKeyWithValue(
+				osacImplementationStrategyAnnotation, "metallb-l2",
+			))
+
+			// Pass 2: annotation is already set, provisioning is triggered.
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalled).To(BeTrue(), "AAP provisioning must be triggered after annotation is stamped")
+		})
+
+		It("should stamp default metallb-l2 annotation when spec.implementationStrategy is empty", func() {
+			// Create a pool that omits ImplementationStrategy (relies on the default).
+			poolNoStrategy := &osacv1alpha1.ExternalIPPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pool-no-strategy",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.ExternalIPPoolSpec{
+					CIDRs:    []string{"10.10.0.0/24"},
+					IPFamily: "IPv4",
+					// ImplementationStrategy intentionally omitted
+				},
+			}
+			Expect(fakeClient.Create(testCtx, poolNoStrategy)).To(Succeed())
+
+			key := types.NamespacedName{Name: poolNoStrategy.Name, Namespace: poolNoStrategy.Namespace}
+
+			// Pass 1: finalizer + annotation with defaultExternalIPPoolImplementationStrategy.
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			annotated := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, annotated)).To(Succeed())
+			Expect(annotated.Annotations).To(HaveKeyWithValue(
+				osacImplementationStrategyAnnotation, defaultExternalIPPoolImplementationStrategy,
+			))
 		})
 
 		It("should set ConfigurationApplied condition to True", func() {
@@ -442,6 +508,99 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			// Verify no finalizer was added (controller skipped it)
 			Expect(updated.Finalizers).To(BeEmpty())
 			Expect(updated.Status.Phase).To(BeEmpty())
+		})
+	})
+
+	Context("provisioning condition updates", func() {
+		It("should set Ready=False condition with error message when job fails", func() {
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "failed-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateFailed,
+					Message: "Ansible traceback: role xyz failed",
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, pool)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(pool.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("Ansible traceback"))
+		})
+
+		It("should set Ready=True condition when job succeeds", func() {
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "success-job-cond",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, pool)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(pool.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+		})
+
+		It("should clear stale Ready=False condition on provisioning recovery", func() {
+			pool.Status.Conditions = []metav1.Condition{
+				{
+					Type:               osacv1alpha1.ConditionReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             osacv1alpha1.ReasonProvisioningFailed,
+					Message:            "previous failure",
+					LastTransitionTime: metav1.Now(),
+				},
+			}
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "recovery-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, pool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(pool.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPoolPhaseReady))
+			cond := apimeta.FindStatusCondition(pool.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+			Expect(cond.Message).To(BeEmpty())
 		})
 	})
 

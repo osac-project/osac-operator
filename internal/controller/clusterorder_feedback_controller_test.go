@@ -117,9 +117,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		}
 		mockClient = &mockClustersClient{}
 		reconciler = &FeedbackReconciler{
-			logger:                GinkgoLogr,
-			hubClient:             k8sClient,
-			clustersClient:        mockClient,
+			bridge:                newClusterOrderFeedbackBridge(k8sClient, mockClient),
 			clusterOrderNamespace: clusterOrderNS,
 		}
 

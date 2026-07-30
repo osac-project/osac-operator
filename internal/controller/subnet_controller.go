@@ -271,8 +271,14 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { subnet.Status.Phase = v1alpha1.SubnetPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { subnet.Status.Phase = v1alpha1.SubnetPhaseReady },
+			OnFailed: func(message string) {
+				subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
+				setReadyConditionFailed(&subnet.Status.Conditions, message)
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				subnet.Status.Phase = v1alpha1.SubnetPhaseReady
+				setReadyConditionTrue(&subnet.Status.Conditions)
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.Subnet).Status.ProvisioningJobs })

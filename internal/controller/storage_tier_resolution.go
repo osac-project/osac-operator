@@ -35,6 +35,10 @@ type tierResolutionResult struct {
 	resolvedMessages  []string
 	errorMessages     []string
 	duplicateMessages []string
+	// ambiguousTiers holds the name of every tier excluded from resolved because
+	// multiple StorageClasses matched it (tenant-specific or Default) — a distinct,
+	// separately-reported problem from a tier having no StorageClass at all.
+	ambiguousTiers []string
 }
 
 func (r *tierResolutionResult) conditionMessage() string {
@@ -124,6 +128,7 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
 			result.errorMessages = append(result.errorMessages, msg)
 			result.duplicateMessages = append(result.duplicateMessages, msg)
+			result.ambiguousTiers = append(result.ambiguousTiers, tier)
 			continue
 		}
 
@@ -144,6 +149,7 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
 			result.errorMessages = append(result.errorMessages, msg)
 			result.duplicateMessages = append(result.duplicateMessages, msg)
+			result.ambiguousTiers = append(result.ambiguousTiers, tier)
 		}
 	}
 
