@@ -379,11 +379,10 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses
-		// using the full tier resolution logic: tenant-specific SCs take
-		// priority, with shared default SCs (labeled tenant=Default) as
-		// fallback. This serves environments running OSAC without AAP/VAST
-		// where an admin or prepare-tenant.sh has labeled existing
-		// StorageClasses manually.
+		// labeled osac.openshift.io/tenant=<tenantName>. This serves
+		// environments running OSAC without AAP where an admin has
+		// pre-provisioned tenant-specific StorageClasses manually.
+		// Note: the shared tenant=Default fallback was removed in OSAC-3011.
 		result, err := getTenantStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
 			return ctrl.Result{}, err
