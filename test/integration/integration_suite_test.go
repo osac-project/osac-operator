@@ -17,6 +17,7 @@ limitations under the License.
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -35,16 +36,16 @@ const (
 )
 
 var _ = BeforeSuite(func() {
-	By("installing cert-manager")
-	Expect(utils.InstallCertManager()).To(Succeed())
-
-	By("installing CRDs")
-	cmd := exec.Command("make", "install")
+	By("installing CRDs via Helm")
+	cmd := exec.Command("helm", "upgrade", "--install", "osac-operator-crds",
+		"charts/operator-crds/", "--wait")
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	By("installing prometheus operator")
-	Expect(utils.InstallPrometheusOperator()).To(Succeed())
+	By("installing fake CRDs")
+	cmd = exec.Command("kubectl", "apply", "--server-side", "-f", "config/crd/fakes/")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
 
 	By("building the operator image")
 	cmd = exec.Command("make", "image-build", fmt.Sprintf("IMG=%s", operatorImage))
@@ -55,67 +56,85 @@ var _ = BeforeSuite(func() {
 	err = utils.LoadImageToKindClusterWithName(operatorImage)
 	Expect(err).NotTo(HaveOccurred())
 
-	By("creating manager namespace")
-	cmd = exec.Command("kubectl", "create", "ns", operatorNamespace)
-	_, err = utils.Run(cmd)
-	if err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
-		Fail(fmt.Sprintf("failed to create namespace %s: %v", operatorNamespace, err))
-	}
-
-	By("deploying the controller-manager")
-	cmd = exec.Command("kubectl", "apply", "-k", "config/testing/default")
+	By("deploying the operator via Helm")
+	cmd = exec.Command("helm", "upgrade", "--install", "osac-operator",
+		"charts/operator/",
+		"--namespace", operatorNamespace,
+		"--create-namespace",
+		"--set", "image.repository=localhost/osac-operator",
+		"--set", "image.tag=latest",
+		"--set", "image.pullPolicy=Never",
+		"--wait", "--timeout", "5m")
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	By("waiting for controller-manager to be ready")
-	verifyControllerUp := func() error {
-		cmd := exec.Command("kubectl", "get",
-			"pods", "-l", "control-plane=controller-manager",
-			"-o", "go-template={{ range .items }}"+
-				"{{ if not .metadata.deletionTimestamp }}"+
-				"{{ .metadata.name }}"+
-				"{{ \"\\n\" }}{{ end }}{{ end }}",
+	By("waiting for controller-manager pod to be ready with zero restarts")
+	// pod.status.phase stays "Running" even during CrashLoopBackOff — only
+	// container status reveals the real state. Check that all containers are
+	// ready AND have zero restarts to detect crash-looping controllers early.
+	Eventually(func() error {
+		cmd := exec.Command("kubectl", "get", "pods",
+			"-l", "control-plane=controller-manager",
 			"-n", operatorNamespace,
-		)
-		podOutput, err := utils.Run(cmd)
+			"-o", "json")
+		output, err := utils.Run(cmd)
 		if err != nil {
 			return err
-		}
-		podNames := utils.GetNonEmptyLines(string(podOutput))
-		if len(podNames) != 1 {
-			return fmt.Errorf("expect 1 controller pod running, but got %d", len(podNames))
 		}
 
-		cmd = exec.Command("kubectl", "get",
-			"pods", podNames[0], "-o", "jsonpath={.status.phase}",
-			"-n", operatorNamespace,
-		)
-		status, err := utils.Run(cmd)
-		if err != nil {
-			return err
+		var podList struct {
+			Items []struct {
+				Metadata struct {
+					Name              string     `json:"name"`
+					DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+				} `json:"metadata"`
+				Status struct {
+					Phase            string `json:"phase"`
+					ContainerStatuses []struct {
+						Ready        bool  `json:"ready"`
+						RestartCount int64 `json:"restartCount"`
+					} `json:"containerStatuses"`
+				} `json:"status"`
+			} `json:"items"`
 		}
-		if string(status) != "Running" {
-			return fmt.Errorf("controller pod in %s status", status)
+		if err := json.Unmarshal(output, &podList); err != nil {
+			return fmt.Errorf("failed to parse pod list: %w", err)
+		}
+
+		var running int
+		for _, pod := range podList.Items {
+			if pod.Metadata.DeletionTimestamp != nil {
+				continue
+			}
+			if pod.Status.Phase != "Running" {
+				return fmt.Errorf("pod %s in %s phase", pod.Metadata.Name, pod.Status.Phase)
+			}
+			for _, cs := range pod.Status.ContainerStatuses {
+				if !cs.Ready {
+					return fmt.Errorf("pod %s has unready container", pod.Metadata.Name)
+				}
+				if cs.RestartCount > 0 {
+					return fmt.Errorf("pod %s has %d restarts (crash-looping)", pod.Metadata.Name, cs.RestartCount)
+				}
+			}
+			running++
+		}
+		if running == 0 {
+			return fmt.Errorf("no running controller-manager pods found")
 		}
 		return nil
-	}
-	Eventually(verifyControllerUp, 2*time.Minute, time.Second).Should(Succeed())
+	}, 5*time.Minute, 5*time.Second).Should(Succeed())
 })
 
 var _ = AfterSuite(func() {
-	By("undeploying the controller-manager")
-	cmd := exec.Command("kubectl", "delete", "-k", "config/testing/default", "--ignore-not-found")
+	By("undeploying the operator")
+	cmd := exec.Command("helm", "uninstall", "osac-operator",
+		"--namespace", operatorNamespace, "--ignore-not-found")
 	_, _ = utils.Run(cmd)
 
-	By("removing manager namespace")
-	cmd = exec.Command("kubectl", "delete", "ns", operatorNamespace)
+	By("uninstalling CRDs")
+	cmd = exec.Command("helm", "uninstall", "osac-operator-crds", "--ignore-not-found")
 	_, _ = utils.Run(cmd)
-
-	By("uninstalling the Prometheus manager bundle")
-	utils.UninstallPrometheusOperator()
-
-	By("uninstalling cert-manager")
-	utils.UninstallCertManager()
 })
 
 func TestIntegration(t *testing.T) {

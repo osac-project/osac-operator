@@ -28,12 +28,40 @@ import (
 	"github.com/osac-project/osac-operator/test/utils"
 )
 
+// removeFinalizers patches away all finalizers from the named resource so that
+// deletion can proceed without waiting for the controller to complete
+// deprovisioning (which requires a real AAP backend).
+func removeFinalizers(kind, name, namespace string) {
+	cmd := exec.Command("kubectl", "patch", kind, name,
+		"-n", namespace, "--type=merge",
+		"-p", `{"metadata":{"finalizers":[]}}`)
+	_, _ = utils.Run(cmd)
+}
+
+// removeAllFinalizers patches away finalizers from all resources of the given
+// kind in the namespace.
+func removeAllFinalizers(kind, namespace string) {
+	cmd := exec.Command("kubectl", "get", kind, "-n", namespace,
+		"-o", "jsonpath={.items[*].metadata.name}")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return
+	}
+	for name := range strings.SplitSeq(string(output), " ") {
+		if name != "" {
+			removeFinalizers(kind, name, namespace)
+		}
+	}
+}
+
 var _ = Describe("Networking Resources", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up test resources")
+		removeAllFinalizers("subnet", operatorNamespace)
 		cmd := exec.Command("kubectl", "delete", "subnet", "--all", "-n", operatorNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
+		removeAllFinalizers("virtualnetwork", operatorNamespace)
 		cmd = exec.Command("kubectl", "delete", "virtualnetwork", "--all", "-n", operatorNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 	})
@@ -106,7 +134,6 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		})
 
 		It("should have a finalizer added by controller", func() {
-			Skip("Skipping finalizer test - requires controller to be running")
 			By("checking for finalizer")
 			verifyFinalizer := func() error {
 				cmd := exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
@@ -178,7 +205,6 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		})
 
 		It("should have a finalizer added by controller", func() {
-			Skip("Skipping finalizer test - requires controller to be running")
 			By("checking for finalizer")
 			verifyFinalizer := func() error {
 				cmd := exec.Command("kubectl", "get", "subnet", subnetName,
@@ -197,15 +223,23 @@ var _ = Describe("Networking Resources", Ordered, func() {
 	})
 
 	Context("Resource Deletion", func() {
+		// Deletion requires removing finalizers because the controller adds them on
+		// reconciliation, and deprovision (which removes them) needs a real AAP backend.
+		// The correct order is: initiate deletion first (sets DeletionTimestamp so the
+		// controller calls handleDelete instead of handleUpdate and won't re-add the
+		// finalizer), then patch away finalizers so Kubernetes can garbage-collect.
 		It("should delete Subnet successfully", func() {
-			By("deleting the Subnet")
+			By("initiating deletion (non-blocking)")
 			cmd := exec.Command("kubectl", "delete", "subnet", "test-subnet",
-				"-n", operatorNamespace, "--timeout=60s")
+				"-n", operatorNamespace, "--wait=false")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
+			By("removing finalizers so deletion can complete without AAP")
+			removeFinalizers("subnet", "test-subnet", operatorNamespace)
+
 			By("verifying Subnet is deleted")
-			verifyDeleted := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "subnet", "test-subnet",
 					"-n", operatorNamespace)
 				_, err := utils.Run(cmd)
@@ -213,19 +247,21 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("Subnet still exists")
 				}
 				return nil
-			}
-			Eventually(verifyDeleted, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("should delete VirtualNetwork successfully", func() {
-			By("deleting the VirtualNetwork")
+			By("initiating deletion (non-blocking)")
 			cmd := exec.Command("kubectl", "delete", "virtualnetwork", "test-vnet",
-				"-n", operatorNamespace, "--timeout=60s")
+				"-n", operatorNamespace, "--wait=false")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
+			By("removing finalizers so deletion can complete without AAP")
+			removeFinalizers("virtualnetwork", "test-vnet", operatorNamespace)
+
 			By("verifying VirtualNetwork is deleted")
-			verifyDeleted := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "virtualnetwork", "test-vnet",
 					"-n", operatorNamespace)
 				_, err := utils.Run(cmd)
@@ -233,8 +269,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("VirtualNetwork still exists")
 				}
 				return nil
-			}
-			Eventually(verifyDeleted, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
 
 	})
