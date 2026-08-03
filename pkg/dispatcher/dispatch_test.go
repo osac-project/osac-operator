@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac-operator/pkg/networkmanager"
@@ -135,6 +136,17 @@ var _ = Describe("DispatchPlan", func() {
 			},
 		}
 		Expect(plan.K8sTarget()).To(BeNil())
+	})
+})
+
+var _ = Describe("ManagerRole.JobTarget", func() {
+	It("converts every known ManagerRole to its v1alpha1.JobTarget counterpart", func() {
+		Expect(dispatcher.ManagerRoleFabric.JobTarget()).To(Equal(v1alpha1.JobTargetFabric))
+		Expect(dispatcher.ManagerRoleK8s.JobTarget()).To(Equal(v1alpha1.JobTargetK8s))
+	})
+
+	It("falls back to JobTargetFabric for an unrecognized role", func() {
+		Expect(dispatcher.ManagerRole("bogus").JobTarget()).To(Equal(v1alpha1.JobTargetFabric))
 	})
 })
 
