@@ -70,6 +70,38 @@ spec:
                     pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
                     type: string
                 type: object
+              networkAttachments:
+                description: |-
+                  NetworkAttachments defines the tenant subnets to connect cluster worker nodes to.
+                  Each entry references a Subnet and optionally one or more SecurityGroups.
+                items:
+                  description: 'NetworkAttachment defines one NIC: a Subnet CR on
+                    the hub plus optional SecurityGroup CR names.'
+                  properties:
+                    securityGroupRefs:
+                      description: |-
+                        SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
+                        Mutable - can be changed to add/remove security groups without recreating the VM.
+                      items:
+                        type: string
+                      type: array
+                    subnetRef:
+                      description: SubnetRef is the name of the Subnet CR in the same
+                        namespace as the ComputeInstance.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: subnetRef is immutable
+                        rule: self == oldSelf
+                  required:
+                  - subnetRef
+                  type: object
+                maxItems: 8
+                type: array
+                x-kubernetes-list-map-keys:
+                - subnetRef
+                x-kubernetes-list-type: map
               nodeRequests:
                 description: |-
                   NodeRequests defines the types of nodes and number of each type of node that will be used
