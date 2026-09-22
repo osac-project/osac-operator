@@ -28,7 +28,7 @@ jobs:
     name: Check generated code
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v7.0.1
     - uses: bufbuild/buf-action@v1
       with:
         version: '1.50.0'
